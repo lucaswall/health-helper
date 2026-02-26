@@ -107,7 +107,8 @@ Example arguments:
    - Existing issues → Check Linear for related issues or context
 6. **Generate plan** - Create TDD tasks with test-first approach
 7. **Write PLANS.md** - Overwrite with new plan
-8. **Create Linear issues** - Create issues in Todo state for each task
+8. **Validate plan against CLAUDE.md** - Re-read CLAUDE.md and cross-check each task: domain layer has no Android imports, all dependencies in version catalog, external calls have timeout specs, intents have exception handling, coroutines have cancellation guards. Fix violations before proceeding.
+9. **Create Linear issues** - Create issues in Todo state for each task
 
 ## Codebase Exploration Guidelines
 
@@ -216,6 +217,13 @@ Each task must be:
 - **Specific** - What to test, what to implement
 - **Ordered** - Dependencies resolved by task order
 - **Context-aware** - Reference patterns and files discovered during exploration
+- **Defensively specified** - Include error paths, edge cases, timeouts, and permission checks:
+  - External/IPC calls (Health Connect, network) → specify timeout values and timeout handling
+  - `startActivity()` calls → specify `ActivityNotFoundException` catch + fallback
+  - Coroutines triggered by user actions → specify cancellation of in-flight work
+  - Permission-gated operations → specify denial handling and state reset on `SecurityException`
+  - Error-path tests are mandatory alongside happy-path tests in the RED phase
+- **CLAUDE.md compliant** - Domain layer must be pure Kotlin (no Android imports). All deps in `libs.versions.toml`. Follow project conventions for logging, DI, state management.
 
 Good task example:
 ```markdown

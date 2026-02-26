@@ -66,6 +66,13 @@ List anything that must be true before starting implementation:
    - Extract [shared logic] if needed
    - Ensure naming follows project conventions
 
+**Defensive Requirements:**
+- [What exceptions can this code throw? How should they be handled?]
+- [What external calls need timeouts? Specify timeout values.]
+- [What edge cases must be tested? (empty data, null, concurrent access)]
+- [What permissions/state must be checked before the operation?]
+- [Omit this section only for pure config/cleanup tasks with no runtime behavior]
+
 **Notes:**
 - Use [specific pattern] from existing codebase
 - Reference: `app/src/main/kotlin/com/healthhelper/app/domain/usecase/ExistingExample.kt`

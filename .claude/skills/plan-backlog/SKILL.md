@@ -259,6 +259,20 @@ For each issue:
 
 Write the plan to `PLANS.md` at the project root using the structure template in [references/plans-template.md](references/plans-template.md).
 
+#### 4.4 Validate Plan Against CLAUDE.md
+
+After writing the plan but before committing, re-read CLAUDE.md and cross-check each task for violations:
+
+| Check | What to look for | Example violation |
+|-------|-----------------|-------------------|
+| **Layer purity** | Domain tasks must not reference Android libraries (Timber, Context, etc.) | Plan says "add Timber.d() to use case" — domain must be pure Kotlin |
+| **Dependency management** | All new dependencies must go in `libs.versions.toml` | Plan says "add testRuntimeOnly('org.junit...')" — hardcoded string |
+| **Error handling** | Each task touching external APIs has error/timeout specs | Plan says "call readRecords()" with no timeout or catch spec |
+| **Conventions** | Naming, DI patterns, state management match CLAUDE.md | Plan has ViewModel using LiveData when CLAUDE.md says StateFlow |
+| **Defensive completeness** | Each intent/activity launch has exception handling spec | Plan says "startActivity(intent)" with no try/catch for ActivityNotFoundException |
+
+Fix any violations found before proceeding. This step prevents the plan itself from introducing bugs.
+
 ---
 
 ## Task Writing Guidelines
@@ -273,12 +287,20 @@ When writing tasks in the plan:
 6. **Include file paths**: Always specify the full file path for every file created or modified.
 7. **Include commands**: Provide the exact terminal commands to run tests, linters, etc.
 8. **Note dependencies**: If a task depends on a previous task, say so explicitly.
+9. **Specify defensive requirements**: For each task, think about what can go wrong and include it in the TDD steps. Specifically:
+   - **Error paths**: What exceptions can the code throw? Specify how they should be caught, logged, or propagated. Include error-path tests in the RED phase.
+   - **Edge cases**: Empty data, null values, concurrent access, partial results. Include edge-case tests.
+   - **Timeouts**: Any external call (Health Connect, network, IPC) MUST specify a timeout value and what happens on timeout.
+   - **Permission/auth checks**: Any operation that requires permissions must check them first and handle denial.
+   - **Cancellation**: Coroutines that can be triggered multiple times (e.g., on resume) must specify cancellation of in-flight work.
+   - **State consistency**: If an operation can fail mid-way, specify how the state is cleaned up or rolled back.
+10. **Cross-check CLAUDE.md constraints**: Before including any Android/framework dependency in a domain-layer task, verify CLAUDE.md allows it. Domain must be pure Kotlin — no Android imports. Verify all dependency additions go in `libs.versions.toml`. Verify logging follows the project's patterns.
 
 ### TDD Pattern
 
 Every implementation task MUST follow the Red-Green-Refactor cycle:
 
-- **RED**: Write a failing test first. Specify what the test asserts and what error message is expected.
+- **RED**: Write a failing test first. Specify what the test asserts and what error message is expected. **Include at least one error-path or edge-case test** for any task that touches external APIs, coroutines, or state management.
 - **GREEN**: Write the minimum code to make the test pass. Do not over-engineer.
 - **REFACTOR**: Clean up the code while keeping tests green. Extract shared logic, improve naming, etc.
 
