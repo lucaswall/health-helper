@@ -42,6 +42,18 @@ RULES:
 - Do NOT update Linear issues — the lead handles all state transitions.
 - NEVER hand-write generated files (Room schemas, code-gen output). Report as blocker.
 
+DEFENSIVE CODING (from CLAUDE.md — follow strictly):
+- Domain layer (`domain/`) must be PURE KOTLIN — no Android imports (no Timber, Context, R, etc.)
+- ALL new dependencies go in `gradle/libs.versions.toml` — never use hardcoded string literals in build.gradle.kts
+- ALL external/IPC calls (Health Connect, network) MUST have `withTimeout()` — no unbounded waits
+- ALL `startActivity()` calls MUST catch `ActivityNotFoundException` with a fallback
+- ALL coroutines launched from user actions MUST cancel previous in-flight work (store Job, cancel before re-launch)
+- `SecurityException` catch blocks MUST reset permission state to trigger re-grant UI
+- Error-path tests are MANDATORY — every try/catch must have a corresponding test that triggers the catch
+- StateFlow in ViewModels, collectAsStateWithLifecycle in Compose — never collectAsState
+- Trailing commas on all multi-line parameter lists
+- Log external API call durations with Timber (measure start/end, include in success log)
+
 WHEN ALL TASKS DONE:
 1. ./gradlew assembleDebug — fix any build errors
 2. Commit:
