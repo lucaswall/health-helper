@@ -11,9 +11,11 @@ import com.healthhelper.app.domain.model.HealthRecord
 import com.healthhelper.app.domain.model.HealthRecordType
 import com.healthhelper.app.domain.repository.HealthConnectRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.withTimeout
 import timber.log.Timber
 import java.time.Instant
 import javax.inject.Inject
+import kotlin.time.measureTimedValue
 
 class HealthConnectRepositoryImpl @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -27,13 +29,17 @@ class HealthConnectRepositoryImpl @Inject constructor(
         }
         val client = HealthConnectClient.getOrCreate(context)
         Timber.d("Reading steps from %s to %s", start, end)
-        val response = client.readRecords(
-            ReadRecordsRequest(
-                recordType = StepsRecord::class,
-                timeRangeFilter = TimeRangeFilter.between(start, end),
-            )
-        )
-        Timber.d("Loaded %d step records", response.records.size)
+        val (response, duration) = measureTimedValue {
+            withTimeout(30_000L) {
+                client.readRecords(
+                    ReadRecordsRequest(
+                        recordType = StepsRecord::class,
+                        timeRangeFilter = TimeRangeFilter.between(start, end),
+                    )
+                )
+            }
+        }
+        Timber.d("Loaded %d step records in %s", response.records.size, duration)
         return response.records.map { record ->
             HealthRecord(
                 id = record.metadata.id,

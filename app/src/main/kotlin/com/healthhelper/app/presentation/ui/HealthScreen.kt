@@ -35,8 +35,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.health.connect.client.PermissionController
-import androidx.health.connect.client.permission.HealthPermission
-import androidx.health.connect.client.records.StepsRecord
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -48,10 +46,6 @@ import com.healthhelper.app.domain.model.PermissionStatus
 import com.healthhelper.app.presentation.viewmodel.HealthViewModel
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-
-private val REQUIRED_PERMISSIONS = setOf(
-    HealthPermission.getReadPermission(StepsRecord::class),
-)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -128,7 +122,7 @@ fun HealthScreen(
                     message = "Health Helper needs access to your step data from Health Connect to display your activity.",
                 ) {
                     Button(onClick = {
-                        permissionLauncher.launch(REQUIRED_PERMISSIONS)
+                        permissionLauncher.launch(HealthViewModel.REQUIRED_PERMISSIONS)
                     }) {
                         Text("Grant Permissions")
                     }
@@ -141,7 +135,7 @@ fun HealthScreen(
                     message = "Health Helper cannot read your step data without permission. You can grant access in Health Connect settings.",
                 ) {
                     Button(onClick = {
-                        permissionLauncher.launch(REQUIRED_PERMISSIONS)
+                        permissionLauncher.launch(HealthViewModel.REQUIRED_PERMISSIONS)
                     }) {
                         Text("Try Again")
                     }
@@ -149,7 +143,11 @@ fun HealthScreen(
                     OutlinedButton(onClick = {
                         val intent = Intent("androidx.health.ACTION_MANAGE_HEALTH_PERMISSIONS")
                             .putExtra(Intent.EXTRA_PACKAGE_NAME, context.packageName)
-                        context.startActivity(intent)
+                        try {
+                            context.startActivity(intent)
+                        } catch (_: ActivityNotFoundException) {
+                            openHealthConnectPlayStore(context)
+                        }
                     }) {
                         Text("Open Settings")
                     }

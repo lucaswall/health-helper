@@ -858,3 +858,49 @@ Summary: 8 issue(s) found (Team: security, reliability, quality reviewers)
 1. Add `junit-platform-launcher` version and library entry to `gradle/libs.versions.toml`
 2. Replace hardcoded string in `app/build.gradle.kts:70` with `testRuntimeOnly(libs.junit.platform.launcher)`
 3. Run `./gradlew test` to verify
+
+---
+
+## Iteration 2
+
+**Implemented:** 2026-02-26
+**Method:** Single-agent (low effort score — 10 points across 2 units)
+
+### Tasks Completed This Iteration
+- Fix 1: startActivity crash on manage health permissions intent (HEA-15) — wrapped in try/catch with PlayStore fallback
+- Fix 2: Permission grant check uses containsAll() instead of isNotEmpty() (HEA-16) — moved REQUIRED_PERMISSIONS to ViewModel companion, updated HealthScreen
+- Fix 3: permissionStatus reset to Denied on SecurityException (HEA-17) — added permissionStatus update in catch branch
+- Fix 4: Job cancellation guard in loadSteps() (HEA-18) — added loadStepsJob field, cancel before re-launch, rethrow CancellationException
+- Fix 5: withTimeout on readRecords() (HEA-19) — 30s timeout, dedicated TimeoutCancellationException handler with user-friendly message
+- Fix 6: Remove Timber from domain layer (HEA-20) — removed import and log call from CheckHealthConnectStatusUseCase
+- Fix 7: Duration logging for readRecords (HEA-21) — measureTimedValue wrapping withTimeout block
+- Fix 8: junit-platform-launcher to version catalog (HEA-22) — added to libs.versions.toml, replaced hardcoded string
+
+### Files Modified
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/HealthViewModel.kt` — containsAll() check, SecurityException permission reset, Job cancellation, TimeoutCancellationException handler, REQUIRED_PERMISSIONS companion object, import ordering
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/HealthScreen.kt` — startActivity try/catch, reference HealthViewModel.REQUIRED_PERMISSIONS, removed local REQUIRED_PERMISSIONS
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectRepositoryImpl.kt` — withTimeout(30s), measureTimedValue duration logging
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/CheckHealthConnectStatusUseCase.kt` — removed Timber import and log call
+- `gradle/libs.versions.toml` — added junitPlatformLauncher version and library entry
+- `app/build.gradle.kts` — replaced hardcoded junit-platform-launcher with catalog reference
+- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/HealthViewModelTest.kt` — added 3 new tests (timeout, SecurityException reset, partial grant), replaced hardcoded permission strings with REQUIRED_PERMISSIONS
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/ReadStepsUseCaseTest.kt` — added timeout propagation test
+
+### Linear Updates
+- HEA-15: Todo → In Progress → Review
+- HEA-16: Todo → In Progress → Review
+- HEA-17: Todo → In Progress → Review
+- HEA-18: Todo → In Progress → Review
+- HEA-19: Todo → In Progress → Review
+- HEA-20: Todo → In Progress → Review
+- HEA-21: Todo → In Progress → Review
+- HEA-22: Todo → In Progress → Review
+
+### Pre-commit Verification
+- bug-hunter: Found 2 issues, both fixed before commit
+  - MEDIUM: Hardcoded permission strings in tests diverge from production constant — replaced with HealthViewModel.REQUIRED_PERMISSIONS
+  - LOW: Import ordering violation in HealthViewModel — reordered to standard Kotlin/Android convention
+- verifier: All tests pass, build succeeds, zero warnings
+
+### Continuation Status
+All tasks completed.

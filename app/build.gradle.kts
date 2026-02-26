@@ -67,7 +67,7 @@ dependencies {
     testImplementation(libs.junit5.params)
     testImplementation(libs.mockk)
     testImplementation(libs.coroutines.test)
-    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+    testRuntimeOnly(libs.junit.platform.launcher)
 }
 
 tasks.withType<Test> {

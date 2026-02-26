@@ -7,6 +7,8 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -88,6 +90,23 @@ class ReadStepsUseCaseTest {
         coEvery { repository.readSteps(expectedStart, now) } throws SecurityException("Permission denied")
 
         kotlin.test.assertFailsWith<SecurityException> {
+            useCase(now = now)
+        }
+    }
+
+    @Test
+    @DisplayName("propagates TimeoutCancellationException from repository")
+    fun propagatesTimeout() = runTest {
+        val now = Instant.parse("2026-02-20T12:00:00Z")
+        val expectedStart = now.minus(7, ChronoUnit.DAYS)
+        coEvery { repository.readSteps(expectedStart, now) } coAnswers {
+            withTimeout(1) {
+                kotlinx.coroutines.delay(1000)
+                emptyList()
+            }
+        }
+
+        kotlin.test.assertFailsWith<TimeoutCancellationException> {
             useCase(now = now)
         }
     }
