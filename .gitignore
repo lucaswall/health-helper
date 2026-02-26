@@ -42,3 +42,6 @@ google-services.json
 
 # Secrets
 *.env
+
+# Claude Code local settings (user-specific)
+.claude/settings.local.json
