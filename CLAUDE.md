@@ -89,3 +89,40 @@ Run tests before every commit: `./gradlew test`
 | `app/build.gradle.kts` | App module plugins, SDK config, dependencies |
 | `gradle.properties` | `android.disallowKotlinSourceSets=false` needed for KSP + AGP 9 |
 | `local.properties` | `sdk.dir` pointing to Android SDK (not committed to VCS) |
+
+## Linear Integration
+
+| Field | Value |
+|---|---|
+| Team | HealthHelper |
+| Issue prefix | HEA-xxx |
+
+## Skills
+
+Invoke with `/<skill-name>`. All skills live in `.claude/skills/<name>/SKILL.md`.
+
+| Skill | Description |
+|---|---|
+| `plan-inline` | Create implementation plan inline from a Linear issue or description |
+| `plan-fix` | Create a fix plan from a bug report or failing test |
+| `plan-backlog` | Plan a batch of Backlog issues into an implementation plan |
+| `add-to-backlog` | Quick-add an issue to Linear Backlog |
+| `backlog-refine` | Refine and prioritize the Linear Backlog |
+| `pull-from-roadmap` | Pull issues from Roadmap into the current sprint |
+| `plan-implement` | Implement the current plan (TDD workflow) |
+| `plan-review-implementation` | QA review of completed implementation (3 specialized reviewers) |
+| `code-audit` | Full codebase security and quality audit |
+| `deep-review` | Deep analysis of a single screen or feature |
+| `frontend-review` | Compose UI review (accessibility, design, performance) |
+| `investigate` | Research and investigate a topic or bug |
+| `tools-improve` | Create or improve Claude Code skills, agents, and CLAUDE.md |
+
+## Agents
+
+Subagents live in `.claude/agents/<name>.md`. Spawned by skills or directly via the Task tool.
+
+| Agent | Description |
+|---|---|
+| `verifier` | Runs tests (`./gradlew test`), lint, and build; reports results |
+| `bug-hunter` | Finds bugs in uncommitted git changes (security, logic, coroutines) |
+| `pr-creator` | Creates GitHub PRs with branch, commit, push, and Linear integration |
