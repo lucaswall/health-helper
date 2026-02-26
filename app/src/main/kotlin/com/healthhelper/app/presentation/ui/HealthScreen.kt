@@ -179,8 +179,8 @@ fun HealthScreen(
             // Empty state
             uiState.records.isEmpty() -> {
                 PullToRefreshBox(
-                    isRefreshing = false,
-                    onRefresh = { viewModel.loadSteps() },
+                    isRefreshing = uiState.isRefreshing,
+                    onRefresh = { viewModel.refreshSteps() },
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(padding),
@@ -194,8 +194,8 @@ fun HealthScreen(
             // Data state
             else -> {
                 PullToRefreshBox(
-                    isRefreshing = uiState.isLoading,
-                    onRefresh = { viewModel.loadSteps() },
+                    isRefreshing = uiState.isRefreshing,
+                    onRefresh = { viewModel.refreshSteps() },
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(padding),

@@ -7,21 +7,22 @@ import androidx.lifecycle.viewModelScope
 import com.healthhelper.app.domain.model.HealthConnectStatus
 import com.healthhelper.app.domain.model.HealthRecord
 import com.healthhelper.app.domain.model.PermissionStatus
+import com.healthhelper.app.domain.model.StepsErrorType
+import com.healthhelper.app.domain.model.StepsResult
 import com.healthhelper.app.domain.usecase.CheckHealthConnectStatusUseCase
 import com.healthhelper.app.domain.usecase.ReadStepsUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import timber.log.Timber
-import kotlin.coroutines.cancellation.CancellationException
 import javax.inject.Inject
 
 data class HealthUiState(
     val isLoading: Boolean = false,
+    val isRefreshing: Boolean = false,
     val records: List<HealthRecord> = emptyList(),
     val errorMessage: String? = null,
     val healthConnectStatus: HealthConnectStatus? = null,
@@ -43,10 +44,6 @@ class HealthViewModel @Inject constructor(
     private var loadStepsJob: Job? = null
     private val _uiState = MutableStateFlow(HealthUiState())
     val uiState: StateFlow<HealthUiState> = _uiState.asStateFlow()
-
-    init {
-        checkAndLoad()
-    }
 
     fun checkAndLoad() {
         val status = checkHealthConnectStatusUseCase()
@@ -74,42 +71,45 @@ class HealthViewModel @Inject constructor(
     }
 
     fun loadSteps() {
+        doLoadSteps(isRefresh = false)
+    }
+
+    fun refreshSteps() {
+        doLoadSteps(isRefresh = true)
+    }
+
+    private fun doLoadSteps(isRefresh: Boolean) {
         loadStepsJob?.cancel()
         loadStepsJob = viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
-            Timber.d("Loading steps")
-            try {
-                val records = readStepsUseCase()
-                Timber.d("Steps loaded: %d records", records.size)
-                _uiState.value = _uiState.value.copy(
-                    isLoading = false,
-                    records = records,
-                )
-            } catch (e: TimeoutCancellationException) {
-                Timber.e(e, "Failed to load steps")
-                _uiState.value = _uiState.value.copy(
-                    isLoading = false,
-                    errorMessage = "Request timed out. Please try again.",
-                )
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Timber.e(e, "Failed to load steps")
-                val message = when (e) {
-                    is SecurityException -> "Permission denied"
-                    is java.io.IOException -> "Service temporarily unavailable"
-                    else -> "Failed to load steps"
+            _uiState.value = _uiState.value.copy(
+                isLoading = !isRefresh,
+                isRefreshing = isRefresh,
+                errorMessage = null,
+            )
+            Timber.d(if (isRefresh) "Refreshing steps" else "Loading steps")
+            when (val result = readStepsUseCase()) {
+                is StepsResult.Success -> {
+                    Timber.d("Steps loaded: %d records", result.records.size)
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        isRefreshing = false,
+                        records = result.records,
+                    )
                 }
-                val permissionReset = if (e is SecurityException) {
-                    PermissionStatus.Denied
-                } else {
-                    _uiState.value.permissionStatus
+                is StepsResult.Error -> {
+                    Timber.e("Failed to load steps: %s", result.message)
+                    val permissionReset = if (result.type == StepsErrorType.PermissionDenied) {
+                        PermissionStatus.Denied
+                    } else {
+                        _uiState.value.permissionStatus
+                    }
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        isRefreshing = false,
+                        errorMessage = result.message,
+                        permissionStatus = permissionReset,
+                    )
                 }
-                _uiState.value = _uiState.value.copy(
-                    isLoading = false,
-                    errorMessage = message,
-                    permissionStatus = permissionReset,
-                )
             }
         }
     }

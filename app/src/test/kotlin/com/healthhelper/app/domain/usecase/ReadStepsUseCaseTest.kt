@@ -1,14 +1,14 @@
 package com.healthhelper.app.domain.usecase
 
-import com.healthhelper.app.domain.repository.HealthConnectRepository
 import com.healthhelper.app.domain.model.HealthRecord
 import com.healthhelper.app.domain.model.HealthRecordType
+import com.healthhelper.app.domain.model.StepsErrorType
+import com.healthhelper.app.domain.model.StepsResult
+import com.healthhelper.app.domain.repository.HealthConnectRepository
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
-import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -33,7 +33,7 @@ class ReadStepsUseCaseTest {
     fun defaultTimeRange() = runTest {
         val now = Instant.parse("2026-02-20T12:00:00Z")
         val expectedStart = now.minus(7, ChronoUnit.DAYS)
-        coEvery { repository.readSteps(expectedStart, now) } returns emptyList()
+        coEvery { repository.readSteps(expectedStart, now) } returns StepsResult.Success(emptyList())
 
         useCase(now = now)
 
@@ -45,7 +45,7 @@ class ReadStepsUseCaseTest {
     fun customDaysBack() = runTest {
         val now = Instant.parse("2026-02-20T12:00:00Z")
         val expectedStart = now.minus(14, ChronoUnit.DAYS)
-        coEvery { repository.readSteps(expectedStart, now) } returns emptyList()
+        coEvery { repository.readSteps(expectedStart, now) } returns StepsResult.Success(emptyList())
 
         useCase(now = now, daysBack = 14)
 
@@ -73,42 +73,32 @@ class ReadStepsUseCaseTest {
                 endTime = Instant.parse("2026-02-18T11:00:00Z"),
             ),
         )
-        coEvery { repository.readSteps(expectedStart, now) } returns records
+        coEvery { repository.readSteps(expectedStart, now) } returns StepsResult.Success(records)
 
         val result = useCase(now = now)
 
-        assertEquals(2, result.size)
-        assertEquals(5000.0, result[0].value)
-        assertEquals(3000.0, result[1].value)
+        assertTrue(result is StepsResult.Success)
+        val success = result as StepsResult.Success
+        assertEquals(2, success.records.size)
+        assertEquals(5000.0, success.records[0].value)
+        assertEquals(3000.0, success.records[1].value)
     }
 
     @Test
-    @DisplayName("propagates exceptions from repository")
-    fun propagatesExceptions() = runTest {
+    @DisplayName("propagates error results from repository")
+    fun propagatesErrors() = runTest {
         val now = Instant.parse("2026-02-20T12:00:00Z")
         val expectedStart = now.minus(7, ChronoUnit.DAYS)
-        coEvery { repository.readSteps(expectedStart, now) } throws SecurityException("Permission denied")
+        val error = StepsResult.Error(
+            StepsErrorType.PermissionDenied,
+            "Permission denied",
+        )
+        coEvery { repository.readSteps(expectedStart, now) } returns error
 
-        kotlin.test.assertFailsWith<SecurityException> {
-            useCase(now = now)
-        }
-    }
+        val result = useCase(now = now)
 
-    @Test
-    @DisplayName("propagates TimeoutCancellationException from repository")
-    fun propagatesTimeout() = runTest {
-        val now = Instant.parse("2026-02-20T12:00:00Z")
-        val expectedStart = now.minus(7, ChronoUnit.DAYS)
-        coEvery { repository.readSteps(expectedStart, now) } coAnswers {
-            withTimeout(1) {
-                kotlinx.coroutines.delay(1000)
-                emptyList()
-            }
-        }
-
-        kotlin.test.assertFailsWith<TimeoutCancellationException> {
-            useCase(now = now)
-        }
+        assertTrue(result is StepsResult.Error)
+        assertEquals(error, result)
     }
 
     @Test
@@ -116,10 +106,27 @@ class ReadStepsUseCaseTest {
     fun emptyResults() = runTest {
         val now = Instant.parse("2026-02-20T12:00:00Z")
         val expectedStart = now.minus(7, ChronoUnit.DAYS)
-        coEvery { repository.readSteps(expectedStart, now) } returns emptyList()
+        coEvery { repository.readSteps(expectedStart, now) } returns StepsResult.Success(emptyList())
 
         val result = useCase(now = now)
 
-        assertTrue(result.isEmpty())
+        assertTrue(result is StepsResult.Success)
+        assertTrue((result as StepsResult.Success).records.isEmpty())
+    }
+
+    @Test
+    @DisplayName("throws IllegalArgumentException for daysBack = 0")
+    fun daysBackZero() = runTest {
+        kotlin.test.assertFailsWith<IllegalArgumentException> {
+            useCase(daysBack = 0)
+        }
+    }
+
+    @Test
+    @DisplayName("throws IllegalArgumentException for negative daysBack")
+    fun daysBackNegative() = runTest {
+        kotlin.test.assertFailsWith<IllegalArgumentException> {
+            useCase(daysBack = -1)
+        }
     }
 }

@@ -67,6 +67,7 @@ dependencies {
     testImplementation(libs.junit5.params)
     testImplementation(libs.mockk)
     testImplementation(libs.coroutines.test)
+    testImplementation(libs.turbine)
     testRuntimeOnly(libs.junit.platform.launcher)
 }
 
