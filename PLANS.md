@@ -1,6 +1,6 @@
 # Implementation Plan
 
-**Status:** COMPLETE
+**Status:** IN_PROGRESS
 **Branch:** feat/HEA-1-backlog-sweep
 **Issues:** HEA-1, HEA-2, HEA-3, HEA-4, HEA-5, HEA-6, HEA-7, HEA-8, HEA-9, HEA-10, HEA-11, HEA-12, HEA-13, HEA-14
 **Created:** 2026-02-26
@@ -761,5 +761,100 @@ Before starting implementation:
   - LOW: Domain use case imported HC constants — moved mapping to data layer provider
 - verifier: All 18 tests pass, build succeeds, zero warnings
 
-### Continuation Status
-All tasks completed.
+### Review Findings
+
+Summary: 8 issue(s) found (Team: security, reliability, quality reviewers)
+- FIX: 8 issue(s) — Linear issues created (HEA-15 through HEA-22)
+- DISCARDED: 4 finding(s) — false positives / not applicable
+
+**Issues requiring fix:**
+- [HIGH] BUG: startActivity crash on manage health permissions intent (`app/src/main/kotlin/com/healthhelper/app/presentation/ui/HealthScreen.kt:149-152`) — No ActivityNotFoundException handler; crashes on devices where ACTION_MANAGE_HEALTH_PERMISSIONS is not resolved (HEA-15)
+- [MEDIUM] BUG: Permission grant check uses isNotEmpty() instead of containsAll() (`app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/HealthViewModel.kt:56`) — Partial grant incorrectly sets Granted if additional permissions added (HEA-16)
+- [MEDIUM] BUG: permissionStatus not reset to Denied on SecurityException (`app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/HealthViewModel.kt:75-86`) — User gets stuck in error-retry loop after mid-session permission revocation (HEA-17)
+- [MEDIUM] COROUTINE: No in-flight cancellation guard in loadSteps() (`app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/HealthViewModel.kt:64`) — Race between onPermissionsResult and ON_RESUME both calling loadSteps() (HEA-18)
+- [MEDIUM] TIMEOUT: No timeout on readRecords() (`app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectRepositoryImpl.kt:30-35`) — Health Connect IPC can hang indefinitely (HEA-19)
+- [MEDIUM] CONVENTION: Timber in domain layer + double-logging (`app/src/main/kotlin/com/healthhelper/app/domain/usecase/CheckHealthConnectStatusUseCase.kt:5,13`) — Domain must be pure Kotlin per CLAUDE.md; same status logged in use case and ViewModel (HEA-20)
+- [LOW] LOGGING: Missing duration logging for readRecords API call (`app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectRepositoryImpl.kt:30`) — Review checklist requires duration on external API calls (HEA-21)
+- [LOW] CONVENTION: junit-platform-launcher not in version catalog (`app/build.gradle.kts:70`) — Hardcoded string literal violates CLAUDE.md rule (HEA-22)
+
+**Discarded findings (not bugs):**
+- [DISCARDED] SECURITY: isMinifyEnabled = false for release (`app/build.gradle.kts:22`) — Standard boilerplate for apps in active development. Enabling R8 without proguard rules could introduce runtime crashes. Release readiness concern, not a correctness bug.
+- [DISCARDED] TYPE: Force unwrap `!!` on errorMessage (`HealthScreen.kt:174`) — Safe due to `when` branch guard at line 170 (`uiState.errorMessage != null`). Smart cast doesn't apply across property accessor chains; `!!` is justified by the null check in the same branch.
+- [DISCARDED] CONVENTION: DisposableEffect used as fully-qualified name (`HealthScreen.kt:71`) — Pure cosmetic preference not enforced by CLAUDE.md. Zero correctness impact.
+- [DISCARDED] EDGE CASE: daysBack ≤ 0 guard in ReadStepsUseCase (`ReadStepsUseCase.kt:16`) — Only called from one location with safe default value of 7. Not a system boundary; adding a guard would be over-engineering per CLAUDE.md conventions.
+
+### Linear Updates
+- HEA-1 through HEA-14: Review → Merge (original tasks completed)
+- HEA-15: Created in Todo (Fix: startActivity crash)
+- HEA-16: Created in Todo (Fix: permission grant check)
+- HEA-17: Created in Todo (Fix: permissionStatus not reset)
+- HEA-18: Created in Todo (Fix: loadSteps race condition)
+- HEA-19: Created in Todo (Fix: readRecords timeout)
+- HEA-20: Created in Todo (Fix: Timber in domain layer)
+- HEA-21: Created in Todo (Fix: missing duration logging)
+- HEA-22: Created in Todo (Fix: junit-platform-launcher catalog)
+
+<!-- REVIEW COMPLETE -->
+
+---
+
+## Fix Plan
+
+**Source:** Review findings from Iteration 1
+**Linear Issues:** [HEA-15](https://linear.app/lw-claude/issue/HEA-15), [HEA-16](https://linear.app/lw-claude/issue/HEA-16), [HEA-17](https://linear.app/lw-claude/issue/HEA-17), [HEA-18](https://linear.app/lw-claude/issue/HEA-18), [HEA-19](https://linear.app/lw-claude/issue/HEA-19), [HEA-20](https://linear.app/lw-claude/issue/HEA-20), [HEA-21](https://linear.app/lw-claude/issue/HEA-21), [HEA-22](https://linear.app/lw-claude/issue/HEA-22)
+
+### Fix 1: startActivity crash on manage health permissions intent (HEA-15)
+**Linear Issue:** [HEA-15](https://linear.app/lw-claude/issue/HEA-15)
+
+1. Write test: launch Settings intent in HealthScreen when no activity resolves — verify no crash (UI test or verify pattern consistency)
+2. Wrap `context.startActivity(intent)` at `HealthScreen.kt:152` in try/catch for `ActivityNotFoundException`, with fallback to `openHealthConnectPlayStore(context)` — same pattern as line 229
+
+### Fix 2: Permission grant check uses isNotEmpty() instead of containsAll() (HEA-16)
+**Linear Issue:** [HEA-16](https://linear.app/lw-claude/issue/HEA-16)
+
+1. Write test in `HealthViewModelTest.kt`: call `onPermissionsResult(setOf("wrong.permission"))` → assert `permissionStatus == Denied`
+2. Move `REQUIRED_PERMISSIONS` to a companion object in `HealthViewModel` (shared source of truth)
+3. Change `granted.isNotEmpty()` to `granted.containsAll(REQUIRED_PERMISSIONS)` in `HealthViewModel.kt:56`
+4. Update `HealthScreen.kt` to reference `HealthViewModel.REQUIRED_PERMISSIONS`
+
+### Fix 3: permissionStatus not reset to Denied on SecurityException (HEA-17)
+**Linear Issue:** [HEA-17](https://linear.app/lw-claude/issue/HEA-17)
+
+1. Write test in `HealthViewModelTest.kt`: set permissionStatus to Granted, mock use case to throw `SecurityException` → call `loadSteps()` → assert `permissionStatus == Denied`
+2. In `HealthViewModel.kt:82-85`, add `permissionStatus = PermissionStatus.Denied` to the state copy in the `SecurityException` catch branch
+
+### Fix 4: No in-flight cancellation guard in loadSteps() (HEA-18)
+**Linear Issue:** [HEA-18](https://linear.app/lw-claude/issue/HEA-18)
+
+1. Write test in `HealthViewModelTest.kt`: call `loadSteps()` twice rapidly → assert only one loading cycle completes (no duplicate records)
+2. Add `private var loadStepsJob: Job? = null` field to `HealthViewModel`
+3. In `loadSteps()`, cancel existing job before launching: `loadStepsJob?.cancel(); loadStepsJob = viewModelScope.launch { ... }`
+4. Ensure `CancellationException` is not caught by the generic `catch (e: Exception)` — add `if (e is CancellationException) throw e` or use `ensureActive()`
+
+### Fix 5: No timeout on readRecords() (HEA-19)
+**Linear Issue:** [HEA-19](https://linear.app/lw-claude/issue/HEA-19)
+
+1. Write test in `ReadStepsUseCaseTest.kt`: mock repository to delay indefinitely → call with timeout → verify `TimeoutCancellationException` propagates
+2. Wrap `client.readRecords()` in `withTimeout(30_000L)` at `HealthConnectRepositoryImpl.kt:30`
+3. Add timeout-specific error message in `HealthViewModel.kt` catch block: `is kotlinx.coroutines.TimeoutCancellationException -> "Request timed out. Please try again."`
+
+### Fix 6: Timber in domain layer + double-logging (HEA-20)
+**Linear Issue:** [HEA-20](https://linear.app/lw-claude/issue/HEA-20)
+
+1. Remove `import timber.log.Timber` from `CheckHealthConnectStatusUseCase.kt:5`
+2. Remove `Timber.d("Health Connect status: %s", status)` from `CheckHealthConnectStatusUseCase.kt:13`
+3. Run `./gradlew test` to verify no breakage
+4. Verify domain layer has zero Android imports: grep for `android\.|timber\.` in `domain/` package
+
+### Fix 7: Missing duration logging for readRecords (HEA-21)
+**Linear Issue:** [HEA-21](https://linear.app/lw-claude/issue/HEA-21)
+
+1. Use `kotlin.time.measureTimedValue` around `client.readRecords()` call at `HealthConnectRepositoryImpl.kt:30-35`
+2. Update success log to include duration: `Timber.d("Loaded %d step records in %s", response.records.size, duration)`
+
+### Fix 8: junit-platform-launcher not in version catalog (HEA-22)
+**Linear Issue:** [HEA-22](https://linear.app/lw-claude/issue/HEA-22)
+
+1. Add `junit-platform-launcher` version and library entry to `gradle/libs.versions.toml`
+2. Replace hardcoded string in `app/build.gradle.kts:70` with `testRuntimeOnly(libs.junit.platform.launcher)`
+3. Run `./gradlew test` to verify
