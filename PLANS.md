@@ -1,6 +1,6 @@
 # Implementation Plan
 
-**Status:** IN_PROGRESS
+**Status:** COMPLETE
 **Branch:** feat/HEA-1-backlog-sweep
 **Issues:** HEA-1, HEA-2, HEA-3, HEA-4, HEA-5, HEA-6, HEA-7, HEA-8, HEA-9, HEA-10, HEA-11, HEA-12, HEA-13, HEA-14
 **Created:** 2026-02-26
@@ -689,3 +689,77 @@ Before starting implementation:
 - Compose UI tests / instrumented tests (unit tests only in this plan)
 - Health Connect data write operations
 - Any features not mentioned in the 14 issues
+
+---
+
+## Iteration 1
+
+**Implemented:** 2026-02-26
+**Method:** Single-agent (sequential dependencies across all tasks)
+
+### Tasks Completed This Iteration
+- Task 1: Move repository interface to domain layer (HEA-8)
+- Task 2: Replace HealthRecord.type with enum (HEA-11)
+- Task 3: Add stable ID to HealthRecord (HEA-10)
+- Task 4: Modernize test patterns — runBlocking → runTest (HEA-12 partial)
+- Task 5: Repository error propagation + ViewModel error/retry tests (HEA-3, HEA-12)
+- Task 6: Add Timber logging framework and instrument all layers (HEA-14)
+- Task 7: Health Connect availability check with provider pattern (HEA-2)
+- Task 8: Expand HealthUiState with availability and permission states (HEA-4)
+- Task 9: Implement permission request flow with HC permission contract (HEA-1)
+- Task 10: Error and empty states with retry, guidance, and pull-to-refresh (HEA-5)
+- Task 11: Use collectAsStateWithLifecycle (HEA-7)
+- Task 12: Manifest cleanup — remove READ_HEART_RATE, disable backup, remove navigation-compose (HEA-6, HEA-9, HEA-13)
+- Task 13: Full verification
+
+### Files Modified
+- `gradle/libs.versions.toml` — Added timber, lifecycle-runtime-compose; removed navigation-compose
+- `app/build.gradle.kts` — Added timber, lifecycle-runtime-compose, kotlin-test; removed navigation-compose; enabled buildConfig
+- `app/src/main/AndroidManifest.xml` — Removed READ_HEART_RATE, set allowBackup=false, added data extraction rules
+- `app/src/main/res/xml/backup_rules.xml` — Created (exclude all backup data)
+- `app/src/main/res/xml/data_extraction_rules.xml` — Created (exclude all cloud backup/device transfer)
+- `app/src/main/kotlin/com/healthhelper/app/HealthHelperApp.kt` — Plant Timber.DebugTree in debug builds
+- `app/src/main/kotlin/com/healthhelper/app/domain/repository/HealthConnectRepository.kt` — Created (interface moved from data layer)
+- `app/src/main/kotlin/com/healthhelper/app/domain/model/HealthRecord.kt` — Added id field, changed type to HealthRecordType enum
+- `app/src/main/kotlin/com/healthhelper/app/domain/model/HealthRecordType.kt` — Created (Steps enum)
+- `app/src/main/kotlin/com/healthhelper/app/domain/model/HealthConnectStatus.kt` — Created (Available, NotInstalled, NeedsUpdate)
+- `app/src/main/kotlin/com/healthhelper/app/domain/model/PermissionStatus.kt` — Created (NotRequested, Granted, Denied)
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/ReadStepsUseCase.kt` — Updated import to domain.repository
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/CheckHealthConnectStatusUseCase.kt` — Created (delegates to provider)
+- `app/src/main/kotlin/com/healthhelper/app/data/HealthConnectStatusProvider.kt` — Created (wraps SDK status check, maps to domain enum)
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectRepositoryImpl.kt` — Renamed from HealthConnectRepository.kt; removed catch-all; lazy client creation; added Timber logging
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectRepository.kt` — Deleted (interface moved to domain)
+- `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt` — Simplified to provide StatusProvider and Repository only; removed direct HealthConnectClient singleton
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/HealthViewModel.kt` — Expanded HealthUiState with healthConnectStatus and permissionStatus; added checkAndLoad(), onPermissionsResult(); exception-specific error messages; Timber logging
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/HealthScreen.kt` — Full rewrite: availability states, permission states, retry, guidance, pull-to-refresh, lifecycle-aware collection, safe Play Store intent
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/ReadStepsUseCaseTest.kt` — Updated imports, enum types, id field, runTest, added exception propagation test
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/CheckHealthConnectStatusUseCaseTest.kt` — Created (3 tests for provider delegation)
+- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/HealthViewModelTest.kt` — Expanded from 2 to 8 tests covering error, retry, availability, and permission states
+
+### Linear Updates
+- HEA-8: Todo → In Progress → Review
+- HEA-11: Todo → In Progress → Review
+- HEA-10: Todo → In Progress → Review
+- HEA-12: Todo → In Progress → Review
+- HEA-3: Todo → In Progress → Review
+- HEA-14: Todo → In Progress → Review
+- HEA-2: Todo → In Progress → Review
+- HEA-4: Todo → In Progress → Review
+- HEA-1: Todo → In Progress → Review
+- HEA-5: Todo → In Progress → Review
+- HEA-7: Todo → In Progress → Review
+- HEA-6: Todo → In Progress → Review
+- HEA-9: Todo → In Progress → Review
+- HEA-13: Todo → In Progress → Review
+
+### Pre-commit Verification
+- bug-hunter: Found 4 bugs + 1 convention issue, all fixed before commit
+  - HIGH: startActivity crash on non-GMS devices — added try/catch with HTTPS fallback
+  - HIGH: Broken nested runTest in propagatesExceptions — rewrote with assertFailsWith
+  - MEDIUM: Singleton HealthConnectClient never refreshes — refactored to lazy creation in repository
+  - MEDIUM: Null healthConnectStatus falls through to permission UI — added explicit null → loading branch
+  - LOW: Domain use case imported HC constants — moved mapping to data layer provider
+- verifier: All 18 tests pass, build succeeds, zero warnings
+
+### Continuation Status
+All tasks completed.

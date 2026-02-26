@@ -1,6 +1,6 @@
 package com.healthhelper.app.domain.usecase
 
-import com.healthhelper.app.data.repository.HealthConnectRepository
+import com.healthhelper.app.domain.repository.HealthConnectRepository
 import com.healthhelper.app.domain.model.HealthRecord
 import java.time.Instant
 import java.time.temporal.ChronoUnit

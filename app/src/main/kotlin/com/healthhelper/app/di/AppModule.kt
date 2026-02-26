@@ -1,9 +1,10 @@
 package com.healthhelper.app.di
 
 import android.content.Context
-import androidx.health.connect.client.HealthConnectClient
-import com.healthhelper.app.data.repository.HealthConnectRepository
+import com.healthhelper.app.data.HealthConnectStatusProvider
+import com.healthhelper.app.data.HealthConnectStatusProviderImpl
 import com.healthhelper.app.data.repository.HealthConnectRepositoryImpl
+import com.healthhelper.app.domain.repository.HealthConnectRepository
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -17,17 +18,18 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideHealthConnectClient(
+    fun provideHealthConnectStatusProvider(
         @ApplicationContext context: Context,
-    ): HealthConnectClient {
-        return HealthConnectClient.getOrCreate(context)
+    ): HealthConnectStatusProvider {
+        return HealthConnectStatusProviderImpl(context)
     }
 
     @Provides
     @Singleton
     fun provideHealthConnectRepository(
-        client: HealthConnectClient,
+        @ApplicationContext context: Context,
+        statusProvider: HealthConnectStatusProvider,
     ): HealthConnectRepository {
-        return HealthConnectRepositoryImpl(client)
+        return HealthConnectRepositoryImpl(context, statusProvider)
     }
 }
