@@ -902,5 +902,98 @@ Summary: 8 issue(s) found (Team: security, reliability, quality reviewers)
   - LOW: Import ordering violation in HealthViewModel — reordered to standard Kotlin/Android convention
 - verifier: All tests pass, build succeeds, zero warnings
 
+### Review Findings
+
+Summary: 11 finding(s) found (Team: security, reliability, quality reviewers)
+- FIX: 6 issue(s) — Linear issues created (HEA-23 through HEA-28)
+- DISCARDED: 5 finding(s) — false positives / not applicable
+
+**Issues requiring fix:**
+- [MEDIUM] BUG: Pull-to-refresh shows full-screen spinner instead of in-list indicator (`app/src/main/kotlin/com/healthhelper/app/presentation/ui/HealthScreen.kt:157,195-197`) — HEA-23
+- [LOW] BUG: Double checkAndLoad() on screen creation causes redundant Health Connect call (`app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/HealthViewModel.kt:47-48`) — HEA-24
+- [MEDIUM] CONVENTION: Repository missing try-catch at data layer boundary; IOException leaks to presentation (`app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectRepositoryImpl.kt:25` + `HealthViewModel.kt:100`) — HEA-25
+- [MEDIUM] CONVENTION: Turbine missing from test dependencies; ViewModel intermediate states untested (`app/build.gradle.kts` + `HealthViewModelTest.kt`) — HEA-26
+- [LOW] TEST: No edge case coverage for invalid daysBack values (`app/src/test/kotlin/com/healthhelper/app/domain/usecase/ReadStepsUseCaseTest.kt`) — HEA-27
+- [LOW] TEST: loadsStepsOnInit doesn't exercise pre-granted permissions path (`app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/HealthViewModelTest.kt:56`) — HEA-28
+
+**Discarded findings (not bugs):**
+- [DISCARDED] SECURITY: `isMinifyEnabled = false` in release build (`app/build.gradle.kts:23`) — Development phase configuration; minification is a pre-release hardening step, not a correctness bug
+- [DISCARDED] SECURITY: Health Connect permissions logged to Logcat (`HealthViewModel.kt:67`) — Timber is correctly gated to debug builds only; standard debug logging practice
+- [DISCARDED] COROUTINE: `HealthConnectClient.getOrCreate(context)` runs on Main thread (`HealthConnectRepositoryImpl.kt:30`) — Lightweight synchronous factory returning cached singleton; standard Health Connect SDK usage pattern
+- [DISCARDED] TYPE: Force unwrap `!!` in HealthScreen.kt:172 — Safe within `errorMessage != null` when-branch; Compose snapshot guarantees value stability within recomposition
+- [DISCARDED] CONVENTION: IOException reference in HealthViewModel.kt:100 — Merged into HEA-25 (same root cause as missing data layer try-catch)
+
+### Linear Updates
+- HEA-15: Review → Merge
+- HEA-16: Review → Merge
+- HEA-17: Review → Merge
+- HEA-18: Review → Merge
+- HEA-19: Review → Merge
+- HEA-20: Review → Merge
+- HEA-21: Review → Merge
+- HEA-22: Review → Merge
+- HEA-23: Created in Todo (Fix: pull-to-refresh broken)
+- HEA-24: Created in Todo (Fix: double checkAndLoad)
+- HEA-25: Created in Todo (Fix: data layer error handling)
+- HEA-26: Created in Todo (Fix: Turbine missing)
+- HEA-27: Created in Todo (Fix: daysBack edge cases)
+- HEA-28: Created in Todo (Fix: test init path)
+
+<!-- REVIEW COMPLETE -->
+
 ### Continuation Status
 All tasks completed.
+
+---
+
+## Fix Plan
+
+**Source:** Review findings from Iteration 2
+**Linear Issues:** [HEA-23](https://linear.app/lw-claude/issue/HEA-23), [HEA-24](https://linear.app/lw-claude/issue/HEA-24), [HEA-25](https://linear.app/lw-claude/issue/HEA-25), [HEA-26](https://linear.app/lw-claude/issue/HEA-26), [HEA-27](https://linear.app/lw-claude/issue/HEA-27), [HEA-28](https://linear.app/lw-claude/issue/HEA-28)
+
+### Fix 1: Pull-to-refresh shows full-screen spinner (HEA-23)
+**Linear Issue:** [HEA-23](https://linear.app/lw-claude/issue/HEA-23)
+
+1. Add `isRefreshing` field to `HealthUiState` (separate from `isLoading`)
+2. Write test in `HealthViewModelTest.kt` verifying `isRefreshing = true` during pull-to-refresh and `isLoading = false`
+3. Add `refreshSteps()` method in `HealthViewModel` that sets `isRefreshing` instead of `isLoading`
+4. Update `HealthScreen.kt` `when` block: route to full-screen spinner only on `isLoading`, not `isRefreshing`
+5. Wire `PullToRefreshBox` to use `refreshSteps()` and `isRefreshing` state
+
+### Fix 2: Double checkAndLoad() on init (HEA-24)
+**Linear Issue:** [HEA-24](https://linear.app/lw-claude/issue/HEA-24)
+
+1. Write test verifying single `loadSteps()` invocation on ViewModel creation + first resume
+2. Remove `init { checkAndLoad() }` from `HealthViewModel`
+3. Verify `ON_RESUME` lifecycle observer handles the first load
+
+### Fix 3: Repository missing try-catch at data layer boundary (HEA-25)
+**Linear Issue:** [HEA-25](https://linear.app/lw-claude/issue/HEA-25)
+
+1. Create domain `StepsResult` sealed class (Success/Error variants) in domain layer
+2. Write test in `HealthConnectRepositoryImplTest.kt` for exception translation (SecurityException, IOException, TimeoutCancellationException → domain errors)
+3. Add try-catch in `HealthConnectRepositoryImpl.readSteps()` wrapping Health Connect calls
+4. Update `HealthRepository` interface to return `StepsResult`
+5. Update `ReadStepsUseCase` to propagate domain results
+6. Update `HealthViewModel` to handle `StepsResult` instead of catching raw exceptions
+7. Remove `java.io.IOException` import from ViewModel
+
+### Fix 4: Turbine missing from test dependencies (HEA-26)
+**Linear Issue:** [HEA-26](https://linear.app/lw-claude/issue/HEA-26)
+
+1. Add Turbine version and library entry to `gradle/libs.versions.toml`
+2. Add `testImplementation(libs.turbine)` to `app/build.gradle.kts`
+3. Add intermediate state assertions to `loadSteps` test using Turbine's `test {}` block (verify `isLoading = true` → `isLoading = false` transition)
+
+### Fix 5: ReadStepsUseCase missing daysBack validation (HEA-27)
+**Linear Issue:** [HEA-27](https://linear.app/lw-claude/issue/HEA-27)
+
+1. Write tests in `ReadStepsUseCaseTest.kt` for `daysBack = 0` and `daysBack = -1`
+2. Add `require(daysBack >= 1)` validation in `ReadStepsUseCase.invoke()`
+
+### Fix 6: Test doesn't exercise pre-granted permissions path (HEA-28)
+**Linear Issue:** [HEA-28](https://linear.app/lw-claude/issue/HEA-28)
+
+1. Add test that mocks `PermissionController` to return granted permissions
+2. Simulate lifecycle resume triggering `checkAndLoad()`
+3. Verify `loadSteps()` is called without requiring explicit `onPermissionsResult()`
