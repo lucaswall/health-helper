@@ -1,0 +1,691 @@
+# Implementation Plan
+
+**Status:** IN_PROGRESS
+**Branch:** feat/HEA-1-backlog-sweep
+**Issues:** HEA-1, HEA-2, HEA-3, HEA-4, HEA-5, HEA-6, HEA-7, HEA-8, HEA-9, HEA-10, HEA-11, HEA-12, HEA-13, HEA-14
+**Created:** 2026-02-26
+**Last Updated:** 2026-02-26
+
+## Summary
+
+Comprehensive backlog sweep addressing all 14 Backlog issues. This plan transforms the app from a non-functional state (crashes without Health Connect, never requests permissions, swallows all errors) into a robust foundation with proper error handling, permission management, logging, and clean architecture compliance.
+
+Key themes:
+- **Critical fixes**: Health Connect availability check (HEA-2), permission request flow (HEA-1), error propagation (HEA-3)
+- **Architecture**: Move repo interface to domain (HEA-8), type-safe domain model (HEA-11), stable IDs (HEA-10)
+- **Observability**: Timber logging across all layers (HEA-14)
+- **UI**: Permission/availability states (HEA-4), retry + guidance (HEA-5), lifecycle-aware collection (HEA-7)
+- **Cleanup**: Remove unused permission (HEA-6), disable backup (HEA-9), remove unused dependency (HEA-13), fix tests (HEA-12)
+
+## Issues
+
+### HEA-1: App never requests Health Connect permissions
+
+**Priority:** Urgent
+**Labels:** Bug
+**Description:** The app declares Health Connect permissions in the manifest but never requests them at runtime. `readRecords()` throws `SecurityException`, the repository swallows it, and the user sees "No step records found" with no way to grant permissions. The app is functionally broken.
+
+**Acceptance Criteria:**
+- [ ] Use `PermissionController.createRequestPermissionResultContract()` to request Health Connect permissions
+- [ ] Check permission status before attempting to read data
+- [ ] Show a clear permission rationale screen when permissions not granted
+- [ ] Handle permission denial gracefully (show explanation, link to Settings)
+- [ ] Re-check permissions on app resume (user may grant in Settings)
+
+### HEA-2: App crashes if Health Connect is not installed
+
+**Priority:** Urgent
+**Labels:** Bug
+**Description:** `HealthConnectClient.getOrCreate(context)` is called unconditionally in `AppModule.kt:22-23`. If Health Connect is not installed or unavailable, this throws during DI, crashing on launch.
+
+**Acceptance Criteria:**
+- [ ] Check `HealthConnectClient.getSdkStatus(context)` before creating the client
+- [ ] Handle `SDK_UNAVAILABLE` — show message directing user to install Health Connect
+- [ ] Handle `SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED` — prompt user to update
+- [ ] Make `HealthConnectClient` nullable or wrap in a provider that handles unavailability
+- [ ] App does not crash when Health Connect is absent
+
+### HEA-3: Repository silently swallows all exceptions as empty list
+
+**Priority:** High
+**Labels:** Bug
+**Description:** `HealthConnectRepositoryImpl.readSteps()` catches all exceptions and returns `emptyList()`. Impossible to distinguish "no data" from "error" (permission denied, service unavailable, IO failure). The ViewModel's catch block at line 41 is dead code.
+
+**Acceptance Criteria:**
+- [ ] Repository propagates exceptions instead of swallowing them (remove catch-all)
+- [ ] ViewModel catches exceptions and maps to meaningful error states
+- [ ] ViewModel error test added: when use case throws, uiState has errorMessage and isLoading=false
+- [ ] ViewModel retry test added: loadSteps() can be called again after error
+
+### HEA-4: HealthUiState has no permission or availability states
+
+**Priority:** High
+**Labels:** Bug
+**Description:** `HealthUiState` only models `isLoading`, `records`, and `errorMessage`. No representation for Health Connect availability or permission state, making it impossible to show appropriate UI.
+
+**Acceptance Criteria:**
+- [ ] UiState models Health Connect availability (Available, NotInstalled, NeedsUpdate)
+- [ ] UiState models permission status (NotRequested, Denied, Granted)
+- [ ] UI renders distinct screens/messages for each state with appropriate CTAs
+- [ ] ViewModel checks availability and permission status on init and on resume
+
+### HEA-5: Error and empty states have no actionable guidance or retry
+
+**Priority:** High
+**Labels:** Improvement
+**Description:** Error state shows static "Failed to load steps" with no retry. Empty state shows "No step records found" with no guidance. Users cannot recover from errors.
+
+**Acceptance Criteria:**
+- [ ] Error state includes a Retry button that calls `viewModel.loadSteps()`
+- [ ] Empty state includes guidance (e.g., "Make sure Health Connect is tracking your steps")
+- [ ] Error messages are specific when possible
+- [ ] Pull-to-refresh as alternative refresh mechanism
+
+### HEA-6: Manifest declares unused READ_HEART_RATE permission
+
+**Priority:** Medium
+**Labels:** Convention
+**Description:** `AndroidManifest.xml:6` declares `READ_HEART_RATE` but no heart rate reading code exists. Over-requesting permissions reduces user trust.
+
+**Acceptance Criteria:**
+- [ ] Remove `READ_HEART_RATE` permission from manifest
+- [ ] Only declare permissions actively used by the app
+
+### HEA-7: Use collectAsStateWithLifecycle instead of collectAsState
+
+**Priority:** Medium
+**Labels:** Bug
+**Description:** `HealthScreen.kt:38` uses `collectAsState()` which continues collecting when backgrounded. Should use `collectAsStateWithLifecycle()`.
+
+**Acceptance Criteria:**
+- [ ] Add `androidx.lifecycle:lifecycle-runtime-compose` dependency
+- [ ] Replace `collectAsState()` with `collectAsStateWithLifecycle()` in HealthScreen
+- [ ] Import from `androidx.lifecycle.compose.collectAsStateWithLifecycle`
+
+### HEA-8: Repository interface lives in data layer, violating clean architecture
+
+**Priority:** Medium
+**Labels:** Convention
+**Description:** `HealthConnectRepository` interface is in `data/repository/` alongside its implementation. `ReadStepsUseCase` imports from `data.repository`, violating the clean architecture dependency rule.
+
+**Acceptance Criteria:**
+- [ ] Move `HealthConnectRepository` interface to `domain/repository/` package
+- [ ] Keep `HealthConnectRepositoryImpl` in `data/repository/`
+- [ ] Update imports in `ReadStepsUseCase` and `AppModule`
+- [ ] Domain layer should have zero imports from `data` package
+
+### HEA-9: android:allowBackup="true" exposes sensitive health data
+
+**Priority:** Medium
+**Labels:** Security
+**Description:** `AndroidManifest.xml:10` has `android:allowBackup="true"`. Health data could be exposed through cloud backups or ADB extraction.
+
+**Acceptance Criteria:**
+- [ ] Set `android:allowBackup="false"`
+- [ ] Add `android:dataExtractionRules` for API 31+ and `android:fullBackupContent` for pre-31 to explicitly exclude all data
+
+### HEA-10: LazyColumn items() missing key parameter
+
+**Priority:** Low
+**Labels:** Performance
+**Description:** `HealthScreen.kt:94` — `items(uiState.records)` without `key`. `HealthRecord` has no stable ID, so Compose recomposes the entire list on any change.
+
+**Acceptance Criteria:**
+- [ ] Add a stable `id` field to `HealthRecord` (map from Health Connect `Metadata.id`)
+- [ ] Provide `key = { it.id }` to `items()` in LazyColumn
+
+### HEA-11: HealthRecord.type is an untyped String
+
+**Priority:** Medium
+**Labels:** Improvement
+**Description:** `HealthRecord.type` is `String` (e.g., "Steps"). No compile-time safety — typos compile, `when` lacks exhaustiveness checks.
+
+**Acceptance Criteria:**
+- [ ] Replace `type: String` with an enum `HealthRecordType` (e.g., `Steps`, `HeartRate`)
+- [ ] Update repository mapping to use the enum
+- [ ] Update UI to handle the enum (when expressions get exhaustiveness checking)
+
+### HEA-12: Tests use runBlocking instead of runTest, missing error path coverage
+
+**Priority:** Low
+**Labels:** Convention
+**Description:** `ReadStepsUseCaseTest` uses `runBlocking` instead of `runTest`. `HealthViewModelTest` has no test for the exception case.
+
+**Acceptance Criteria:**
+- [ ] Replace `runBlocking` with `runTest` in ReadStepsUseCaseTest
+- [ ] Add ViewModel test: when use case throws, uiState has errorMessage and isLoading=false
+- [ ] Add ViewModel test: loadSteps() can be called again after error (retry works)
+
+### HEA-13: Unused navigation-compose dependency
+
+**Priority:** Low
+**Labels:** Technical Debt
+**Description:** `navigation-compose` is declared but no NavHost, NavController, or navigation graph exists. Single screen loaded directly in `setContent`.
+
+**Acceptance Criteria:**
+- [ ] Remove navigation-compose from `libs.versions.toml` and `build.gradle.kts`
+- [ ] Remove hilt-navigation-compose if solely pulled in for navigation
+
+### HEA-14: Add Timber logging framework and instrument all layers
+
+**Priority:** High
+**Labels:** Improvement
+**Description:** Zero logging anywhere. Exceptions swallowed silently, Health Connect operations produce no output, nothing visible in `adb logcat`.
+
+**Acceptance Criteria:**
+- [ ] Add Timber 5.0.1 dependency to `libs.versions.toml` and `build.gradle.kts`
+- [ ] Plant `Timber.DebugTree()` in `HealthHelperApp.onCreate()` for debug builds
+- [ ] Log repository operations: start, success with record count, failure with exception
+- [ ] Log ViewModel state transitions: loading, success, error
+- [ ] Log DI: Health Connect client creation and SDK status
+- [ ] No sensitive health data values logged (counts and types only, not raw values)
+
+## Prerequisites
+
+Before starting implementation:
+- [ ] Add Timber 5.0.1 to `gradle/libs.versions.toml` (version + library declaration)
+- [ ] Add `lifecycle-runtime-compose` to `gradle/libs.versions.toml` (version + library declaration)
+- [ ] Add both dependencies to `app/build.gradle.kts`
+- [ ] Verify build compiles: `./gradlew assembleDebug`
+- [ ] Verify existing tests pass: `./gradlew test`
+
+## Implementation Tasks
+
+### Task 1: Move repository interface to domain layer (HEA-8)
+
+**Issue:** HEA-8
+**Dependencies:** None (foundational, do first)
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/domain/repository/HealthConnectRepository.kt` (create)
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectRepository.kt` (modify — remove interface, keep impl only)
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectRepositoryImpl.kt` (rename from above after extracting interface)
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/ReadStepsUseCase.kt` (modify import)
+- `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt` (modify import)
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/ReadStepsUseCaseTest.kt` (modify import)
+
+**TDD Steps:**
+
+1. **RED** — Update `ReadStepsUseCaseTest` to import interface from `domain.repository` instead of `data.repository`. Test fails because the interface doesn't exist in the domain package yet.
+   - Run: `./gradlew test --tests "com.healthhelper.app.domain.usecase.ReadStepsUseCaseTest"`
+   - Expect: Compilation error — unresolved reference
+
+2. **GREEN** — Create `domain/repository/HealthConnectRepository.kt` with the interface (same signature, new package). Move the interface out of the data layer file, leaving only `HealthConnectRepositoryImpl` in `data/repository/`. Update all imports: `ReadStepsUseCase`, `AppModule`, `HealthConnectRepositoryImpl`.
+   - Run: `./gradlew test`
+   - Expect: All tests pass
+
+3. **REFACTOR** — Rename the data layer file from `HealthConnectRepository.kt` to `HealthConnectRepositoryImpl.kt` since it now only contains the implementation class. Verify `ReadStepsUseCase` has zero imports from `com.healthhelper.app.data`.
+   - Run: `./gradlew test && ./gradlew assembleDebug`
+   - Expect: All tests pass, build succeeds
+
+**Notes:**
+- The domain interface should only depend on domain types (`HealthRecord`, `Instant`)
+- Follow existing package naming: `com.healthhelper.app.domain.repository`
+- `HealthConnectRepositoryImpl` stays in `data/repository/` and imports the domain interface
+
+---
+
+### Task 2: Replace HealthRecord.type with enum (HEA-11)
+
+**Issue:** HEA-11
+**Dependencies:** Task 1 (repo interface is now in domain)
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/domain/model/HealthRecordType.kt` (create)
+- `app/src/main/kotlin/com/healthhelper/app/domain/model/HealthRecord.kt` (modify — change `type: String` to `type: HealthRecordType`)
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectRepositoryImpl.kt` (modify — use enum)
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/ReadStepsUseCaseTest.kt` (modify — use enum in test data)
+
+**TDD Steps:**
+
+1. **RED** — Update `ReadStepsUseCaseTest` to construct `HealthRecord` with `HealthRecordType.Steps` instead of `"Steps"` string. Test fails because enum doesn't exist.
+   - Run: `./gradlew test --tests "com.healthhelper.app.domain.usecase.ReadStepsUseCaseTest"`
+   - Expect: Compilation error
+
+2. **GREEN** — Create `HealthRecordType` enum in `domain/model/` with `Steps` entry. Change `HealthRecord.type` from `String` to `HealthRecordType`. Update `HealthConnectRepositoryImpl` to use `HealthRecordType.Steps`.
+   - Run: `./gradlew test`
+   - Expect: All tests pass
+
+3. **REFACTOR** — Verify no string-based type comparisons remain in the codebase. The UI currently doesn't branch on type (it only shows steps), so no UI changes needed yet.
+   - Run: `./gradlew assembleDebug`
+   - Expect: Build succeeds with no warnings
+
+**Notes:**
+- Enum should live in `domain/model/` alongside `HealthRecord`
+- Start with just `Steps` variant — `HeartRate` can be added when heart rate reading is implemented
+- The enum enables `when` exhaustiveness checking for future record type handling
+
+---
+
+### Task 3: Add stable ID to HealthRecord (HEA-10)
+
+**Issue:** HEA-10
+**Dependencies:** Task 2 (HealthRecord model already modified)
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/domain/model/HealthRecord.kt` (modify — add `id: String`)
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectRepositoryImpl.kt` (modify — map `record.metadata.id`)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/HealthScreen.kt` (modify — add `key` to `items()`)
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/ReadStepsUseCaseTest.kt` (modify — add id to test data)
+
+**TDD Steps:**
+
+1. **RED** — Update test records in `ReadStepsUseCaseTest` to include an `id` field. Test fails because `HealthRecord` doesn't have `id` parameter.
+   - Run: `./gradlew test --tests "com.healthhelper.app.domain.usecase.ReadStepsUseCaseTest"`
+   - Expect: Compilation error
+
+2. **GREEN** — Add `val id: String` to `HealthRecord` data class. Map `record.metadata.id` in `HealthConnectRepositoryImpl`. Add `key = { it.id }` to `items()` call in `HealthScreen.kt:94`.
+   - Run: `./gradlew test`
+   - Expect: All tests pass
+
+3. **REFACTOR** — Ensure `id` is the first parameter in `HealthRecord` (conventional for entity IDs).
+   - Run: `./gradlew assembleDebug`
+   - Expect: Build succeeds
+
+**Notes:**
+- Health Connect's `record.metadata.id` returns a stable string ID for each record
+- The `id` field makes `HealthRecord` a proper entity with identity
+- LazyColumn will now use this for stable item recomposition
+
+---
+
+### Task 4: Modernize test patterns (HEA-12 partial)
+
+**Issue:** HEA-12
+**Dependencies:** Tasks 1-3 (model changes complete, tests already updated for new model)
+**Files:**
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/ReadStepsUseCaseTest.kt` (modify — runBlocking → runTest)
+
+**TDD Steps:**
+
+1. **RED** — Replace all `runBlocking` calls with `runTest` in `ReadStepsUseCaseTest`. The tests should still pass since `ReadStepsUseCase` is a simple suspend function, but verify the import is correct (`kotlinx.coroutines.test.runTest`).
+   - Run: `./gradlew test --tests "com.healthhelper.app.domain.usecase.ReadStepsUseCaseTest"`
+   - Expect: All tests pass (this is a non-behavioral change)
+
+2. **GREEN** — N/A (no behavior change, just test infrastructure modernization)
+
+3. **REFACTOR** — Verify consistency: both test files now use `runTest`.
+   - Run: `./gradlew test`
+   - Expect: All tests pass
+
+**Notes:**
+- `runTest` is already used in `HealthViewModelTest` — follow the same pattern
+- The ViewModel error path tests (other part of HEA-12 acceptance criteria) will be added in Task 5 as part of HEA-3's TDD cycle
+- `runTest` provides virtual time control and proper coroutine scheduling, even though it's not strictly needed for these simple suspend functions
+
+---
+
+### Task 5: Repository error propagation (HEA-3 + HEA-12 completion)
+
+**Issue:** HEA-3, HEA-12
+**Dependencies:** Task 4 (test patterns modernized)
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectRepositoryImpl.kt` (modify — remove catch-all)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/HealthViewModel.kt` (modify — improve error handling in catch block)
+- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/HealthViewModelTest.kt` (modify — add error path and retry tests)
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/ReadStepsUseCaseTest.kt` (modify — add test for exception propagation)
+
+**TDD Steps:**
+
+1. **RED** — Write ViewModel error test: mock `ReadStepsUseCase` to throw `RuntimeException("Service unavailable")`. Assert `uiState.errorMessage` is non-null and `isLoading` is false. Test fails because current ViewModel catch block is dead code (repo swallows everything) — but structurally this test should still work since the mock throws directly.
+   - Run: `./gradlew test --tests "com.healthhelper.app.presentation.viewmodel.HealthViewModelTest"`
+   - Expect: Test passes (mock bypasses repository, throws directly into ViewModel). This validates the ViewModel's existing catch block works.
+
+2. **RED** — Write ViewModel retry test: after error state, call `loadSteps()` again with a successful mock response. Assert state transitions back to success with records.
+   - Run: `./gradlew test --tests "com.healthhelper.app.presentation.viewmodel.HealthViewModelTest"`
+   - Expect: Test passes (retry logic already exists via public `loadSteps()`)
+
+3. **RED** — Write UseCase exception propagation test: mock repository to throw `SecurityException`. Assert the use case propagates it (does not catch).
+   - Run: `./gradlew test --tests "com.healthhelper.app.domain.usecase.ReadStepsUseCaseTest"`
+   - Expect: Test fails — current repository mock doesn't throw (it returns emptyList), but this test mocks the repo to throw. The use case should propagate it.
+
+4. **GREEN** — Remove the `catch (e: Exception) { emptyList() }` block from `HealthConnectRepositoryImpl.readSteps()`. Let exceptions propagate through the use case to the ViewModel. The ViewModel's existing catch block will now actually handle real exceptions.
+   - Run: `./gradlew test`
+   - Expect: All tests pass
+
+5. **REFACTOR** — Improve the ViewModel's catch block to extract meaningful error messages from specific exception types (SecurityException → "Permission denied", IOException → "Service temporarily unavailable", else → "Failed to load steps"). Keep message strings simple and user-facing.
+   - Run: `./gradlew test`
+   - Expect: All tests pass
+
+**Notes:**
+- This task completes HEA-12's remaining acceptance criteria (ViewModel error + retry tests)
+- The repository becomes a thin mapping layer that either succeeds or propagates exceptions
+- The ViewModel is now the error boundary — it catches, logs (Task 6), and maps to UI state
+- Follow existing ViewModel pattern: `_uiState.value = _uiState.value.copy(...)` for state updates
+
+---
+
+### Task 6: Add Timber logging (HEA-14)
+
+**Issue:** HEA-14
+**Dependencies:** Task 5 (error propagation in place — logging now has errors to log), Prerequisites (Timber dependency added)
+**Files:**
+- `gradle/libs.versions.toml` (modify — add timber version + library)
+- `app/build.gradle.kts` (modify — add timber implementation dependency)
+- `app/src/main/kotlin/com/healthhelper/app/HealthHelperApp.kt` (modify — plant DebugTree)
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectRepositoryImpl.kt` (modify — add logging)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/HealthViewModel.kt` (modify — add logging)
+- `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt` (modify — add logging)
+
+**TDD Steps:**
+
+1. **RED** — Timber logging is not directly unit-testable in the traditional sense (it's observability, not behavior). Instead, verify the dependency setup: add Timber to version catalog and build file, then build.
+   - Run: `./gradlew assembleDebug`
+   - Expect: Build succeeds with Timber available
+
+2. **GREEN** — Plant `Timber.DebugTree()` in `HealthHelperApp.onCreate()` (guarded by `BuildConfig.DEBUG` check). Add `Timber.d()` calls in repository (before and after Health Connect calls, with record count on success), ViewModel (state transitions), and DI module (client creation). Add `Timber.e(exception)` in ViewModel catch block.
+   - Run: `./gradlew test && ./gradlew assembleDebug`
+   - Expect: All tests pass, build succeeds
+
+3. **REFACTOR** — Ensure no sensitive health data values are logged. Log record counts and types only (e.g., `Timber.d("Loaded %d step records", records.size)`), never raw step counts or personal data.
+   - Run: `./gradlew assembleDebug`
+   - Expect: Build succeeds
+
+**Notes:**
+- Timber 5.0.1 — latest Kotlin-rewritten version
+- `DebugTree` auto-tags with class name, zero config needed
+- Only plant tree in debug builds — no logging in release by default
+- A production crash-reporting tree (e.g., Firebase Crashlytics) can be added later as a separate issue
+- Keep log messages concise: operation name + outcome + count/duration
+
+---
+
+### Task 7: Health Connect availability check (HEA-2)
+
+**Issue:** HEA-2
+**Dependencies:** Task 6 (Timber available for logging SDK status)
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/domain/model/HealthConnectStatus.kt` (create — enum for SDK availability)
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/CheckHealthConnectStatusUseCase.kt` (create)
+- `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt` (modify — make HealthConnectClient provision conditional)
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/CheckHealthConnectStatusUseCaseTest.kt` (create)
+
+**TDD Steps:**
+
+1. **RED** — Create `CheckHealthConnectStatusUseCaseTest`. Test that when SDK status is `SDK_AVAILABLE`, use case returns `HealthConnectStatus.Available`. Test fails because the use case doesn't exist.
+   - Run: `./gradlew test --tests "com.healthhelper.app.domain.usecase.CheckHealthConnectStatusUseCaseTest"`
+   - Expect: Compilation error
+
+2. **GREEN** — Create `HealthConnectStatus` enum in domain layer with variants: `Available`, `NotInstalled`, `NeedsUpdate`. Create `CheckHealthConnectStatusUseCase` that wraps `HealthConnectClient.getSdkStatus(context)` and maps the SDK int constants to the domain enum. Inject `Context` via `@ApplicationContext`.
+   - Run: `./gradlew test --tests "com.healthhelper.app.domain.usecase.CheckHealthConnectStatusUseCaseTest"`
+   - Expect: Tests pass
+
+3. **RED** — Add tests for `NotInstalled` and `NeedsUpdate` status mapping.
+   - Run: `./gradlew test --tests "com.healthhelper.app.domain.usecase.CheckHealthConnectStatusUseCaseTest"`
+   - Expect: Tests pass (implementation already handles all cases)
+
+4. **GREEN** — Refactor `AppModule` to make `HealthConnectClient` optional. Instead of calling `getOrCreate()` eagerly, provide it only when SDK is available. The repository needs to handle the case where the client is null (throw a domain exception). Alternatively, wrap the client in a provider class.
+   - Run: `./gradlew test && ./gradlew assembleDebug`
+   - Expect: All tests pass, build succeeds
+
+5. **REFACTOR** — Add Timber logging in the availability check: log SDK status on every check.
+   - Run: `./gradlew test`
+   - Expect: All tests pass
+
+**Notes:**
+- `HealthConnectClient.getSdkStatus(context)` returns int constants: `SDK_AVAILABLE`, `SDK_UNAVAILABLE`, `SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED`
+- The DI module must NOT call `getOrCreate()` if SDK is unavailable — that's the crash from HEA-2
+- Consider providing `HealthConnectClient?` (nullable) or wrapping in a `HealthConnectClientProvider` that checks status first
+- The ViewModel will use this status in Task 8 to determine what to show
+
+---
+
+### Task 8: Expand HealthUiState with availability and permission states (HEA-4)
+
+**Issue:** HEA-4
+**Dependencies:** Task 7 (availability check use case exists)
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/domain/model/PermissionStatus.kt` (create — enum)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/HealthViewModel.kt` (modify — expand `HealthUiState`, add availability/permission checking)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/HealthScreen.kt` (modify — render new states)
+- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/HealthViewModelTest.kt` (modify — test new states)
+
+**TDD Steps:**
+
+1. **RED** — Write ViewModel test: when `CheckHealthConnectStatusUseCase` returns `NotInstalled`, uiState reflects `healthConnectStatus = HealthConnectStatus.NotInstalled` and `isLoading = false`. Test fails because HealthUiState doesn't have this field.
+   - Run: `./gradlew test --tests "com.healthhelper.app.presentation.viewmodel.HealthViewModelTest"`
+   - Expect: Compilation error
+
+2. **GREEN** — Expand `HealthUiState` with `healthConnectStatus: HealthConnectStatus?` field (null = not yet checked). Inject `CheckHealthConnectStatusUseCase` into ViewModel. In `init`, check availability FIRST — if not available, set status and don't attempt to load data.
+   - Run: `./gradlew test --tests "com.healthhelper.app.presentation.viewmodel.HealthViewModelTest"`
+   - Expect: New test passes
+
+3. **RED** — Write ViewModel test: when SDK is available but permissions not granted, uiState reflects `permissionStatus = PermissionStatus.NotGranted`. Test fails because field doesn't exist.
+   - Run: `./gradlew test --tests "com.healthhelper.app.presentation.viewmodel.HealthViewModelTest"`
+   - Expect: Compilation error
+
+4. **GREEN** — Create `PermissionStatus` enum (`NotRequested`, `Granted`, `Denied`) in domain model. Add `permissionStatus: PermissionStatus` to `HealthUiState`. ViewModel checks permission status after confirming availability. Add a `checkPermissionsAndLoad()` method that gates data loading on permission grant.
+   - Run: `./gradlew test`
+   - Expect: All tests pass
+
+5. **REFACTOR** — Update `HealthScreen.kt` to render distinct UI for each combination: not-installed (message + install CTA), needs-update (message + update CTA), not-permitted (rationale + request button), error (message + retry), empty (guidance), data (current list). Structure the `when` block by priority: availability → permissions → loading → error → empty → data.
+   - Run: `./gradlew assembleDebug`
+   - Expect: Build succeeds
+
+**Notes:**
+- The ViewModel's `init` block should check availability first, then permissions, then load data
+- Use a `checkAndLoad()` method that can be called on resume to re-check permissions
+- The `when` block in HealthScreen becomes the main state machine — order matters for priority
+- Create `PermissionStatus` in `domain/model/` alongside `HealthConnectStatus`
+- Keep UI composables focused: extract each state into a private composable for readability
+
+---
+
+### Task 9: Implement permission request flow (HEA-1)
+
+**Issue:** HEA-1
+**Dependencies:** Task 8 (UI state model supports permission states)
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/HealthViewModel.kt` (modify — add permission check/request coordination)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/HealthScreen.kt` (modify — wire up permission request launcher)
+- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/HealthViewModelTest.kt` (modify — permission state transitions)
+
+**TDD Steps:**
+
+1. **RED** — Write ViewModel test: call `onPermissionsResult(granted = setOf(READ_STEPS))` → uiState transitions to `permissionStatus = Granted` and triggers data load. Test fails because method doesn't exist.
+   - Run: `./gradlew test --tests "com.healthhelper.app.presentation.viewmodel.HealthViewModelTest"`
+   - Expect: Compilation error
+
+2. **GREEN** — Add `onPermissionsResult(granted: Set<String>)` to ViewModel. When required permissions are in the granted set, update status to `Granted` and call `loadSteps()`. When not granted, set to `Denied`.
+   - Run: `./gradlew test --tests "com.healthhelper.app.presentation.viewmodel.HealthViewModelTest"`
+   - Expect: Test passes
+
+3. **RED** — Write test: when permissions are denied, `permissionStatus = Denied`.
+   - Run: `./gradlew test --tests "com.healthhelper.app.presentation.viewmodel.HealthViewModelTest"`
+   - Expect: Test passes (already implemented in step 2)
+
+4. **GREEN** — Wire up `HealthScreen` with `rememberLauncherForActivityResult()` using `PermissionController.createRequestPermissionResultContract()`. The permission-not-granted UI state shows a "Grant Permissions" button that launches the request. The result callback calls `viewModel.onPermissionsResult()`.
+   - Run: `./gradlew assembleDebug`
+   - Expect: Build succeeds
+
+5. **REFACTOR** — Add a `getRequiredPermissions()` helper that returns the set of Health Connect permissions the app needs (`HealthPermission.getReadPermission(StepsRecord::class)`). This is the single source of truth for required permissions. Log permission request and result with Timber.
+   - Run: `./gradlew test && ./gradlew assembleDebug`
+   - Expect: All pass
+
+**Notes:**
+- Health Connect permissions use `PermissionController.createRequestPermissionResultContract()`, NOT standard Android runtime permissions
+- The permission contract returns `Set<String>` of granted permissions
+- Required permissions: `HealthPermission.getReadPermission(StepsRecord::class)` (only READ_STEPS since HEA-6 removes READ_HEART_RATE)
+- The denied state should show explanation text and a button that opens the Health Connect app settings
+- Re-check permissions in `onResume` (user may grant in Settings) — expose a `recheckPermissions()` method on ViewModel, call it from a `LifecycleEventObserver` in the composable
+
+---
+
+### Task 10: Error and empty states with retry and guidance (HEA-5)
+
+**Issue:** HEA-5
+**Dependencies:** Task 9 (permission flow complete, error states have meaningful messages from Task 5)
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/HealthScreen.kt` (modify — add retry button, guidance, pull-to-refresh)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/HealthViewModel.kt` (modify — expose refresh function)
+- `gradle/libs.versions.toml` (check if material3 pull-to-refresh is available in current Compose BOM)
+
+**TDD Steps:**
+
+1. **RED** — This task is primarily UI work. Write a ViewModel test: `refreshSteps()` method exists and behaves identically to `loadSteps()` (delegates to the same loading logic). Test fails because method doesn't exist.
+   - Run: `./gradlew test --tests "com.healthhelper.app.presentation.viewmodel.HealthViewModelTest"`
+   - Expect: Compilation error (or method not found)
+
+2. **GREEN** — If `loadSteps()` is already public, `refreshSteps()` can be an alias or `loadSteps()` can be used directly. The key ViewModel behavior is: calling load after an error clears the error and retries. This is already tested in Task 5.
+   - Run: `./gradlew test`
+   - Expect: All tests pass
+
+3. **REFACTOR** — Update HealthScreen error state: replace static `Text` with a `Column` containing the error message + a `Button("Retry") { viewModel.loadSteps() }`. Update empty state: add guidance text below "No step records found" (e.g., "Walk around with your phone to track steps, or check Health Connect settings"). Add pull-to-refresh wrapping the LazyColumn using Material 3's `PullToRefreshBox` or similar.
+   - Run: `./gradlew assembleDebug`
+   - Expect: Build succeeds
+
+**Notes:**
+- Material 3 pull-to-refresh: use `PullToRefreshBox` from `androidx.compose.material3` (available in Compose BOM 2025.12.00)
+- Keep error messages from Task 5's exception-specific mapping
+- The retry button should be prominent (filled button, not text button)
+- Empty state guidance should be helpful but not condescending
+- Pull-to-refresh should work on the data list AND the empty state
+
+---
+
+### Task 11: Use collectAsStateWithLifecycle (HEA-7)
+
+**Issue:** HEA-7
+**Dependencies:** Prerequisites (lifecycle-runtime-compose dependency added)
+**Files:**
+- `gradle/libs.versions.toml` (modify — add lifecycle-runtime-compose if not done in prerequisites)
+- `app/build.gradle.kts` (modify — add dependency if not done in prerequisites)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/HealthScreen.kt` (modify — swap import and function call)
+
+**TDD Steps:**
+
+1. **RED** — This is a dependency + one-line code change. No unit test needed (lifecycle behavior is a framework concern). Change the import and function call.
+   - Replace: `import androidx.compose.runtime.collectAsState`
+   - With: `import androidx.lifecycle.compose.collectAsStateWithLifecycle`
+   - Replace: `viewModel.uiState.collectAsState()`
+   - With: `viewModel.uiState.collectAsStateWithLifecycle()`
+
+2. **GREEN** — Verify build compiles with new import.
+   - Run: `./gradlew assembleDebug`
+   - Expect: Build succeeds
+
+3. **REFACTOR** — Remove unused `collectAsState` import if still present.
+   - Run: `./gradlew test && ./gradlew assembleDebug`
+   - Expect: All pass
+
+**Notes:**
+- `lifecycle-runtime-compose` provides `collectAsStateWithLifecycle` extension
+- This stops collection when the composable is below STARTED lifecycle state (backgrounded)
+- Functionally identical to `collectAsState` when in foreground — no behavior change visible in tests
+
+---
+
+### Task 12: Manifest and dependency cleanup (HEA-6, HEA-9, HEA-13)
+
+**Issue:** HEA-6, HEA-9, HEA-13
+**Dependencies:** Task 9 (permission flow uses only READ_STEPS, safe to remove READ_HEART_RATE)
+**Files:**
+- `app/src/main/AndroidManifest.xml` (modify — remove READ_HEART_RATE, set allowBackup=false, add dataExtractionRules)
+- `app/src/main/res/xml/backup_rules.xml` (create — empty exclude-all rules for API 31+)
+- `app/src/main/res/xml/data_extraction_rules.xml` (create — exclude all for API 31+)
+- `gradle/libs.versions.toml` (modify — remove navigation-compose entries)
+- `app/build.gradle.kts` (modify — remove navigation-compose and hilt-navigation-compose dependencies)
+
+**TDD Steps:**
+
+1. **HEA-6** — Remove `<uses-permission android:name="android.permission.health.READ_HEART_RATE" />` from `AndroidManifest.xml:6`. Verify the permission request flow from Task 9 only requests READ_STEPS.
+   - Run: `./gradlew assembleDebug`
+   - Expect: Build succeeds
+
+2. **HEA-9** — Change `android:allowBackup="true"` to `android:allowBackup="false"` in `AndroidManifest.xml:10`. Create backup rules XML files that exclude all data. Add `android:dataExtractionRules="@xml/data_extraction_rules"` and `android:fullBackupContent="@xml/backup_rules"` attributes.
+   - Run: `./gradlew assembleDebug`
+   - Expect: Build succeeds
+
+3. **HEA-13** — Remove `navigation-compose` version and library entries from `libs.versions.toml`. Remove `implementation(libs.navigation.compose)` from `build.gradle.kts`. Note: keep `hilt-navigation-compose` — it provides `hiltViewModel()` which is used in `HealthScreen`. Only remove the standalone `navigation-compose` if it's declared separately from hilt-navigation-compose.
+   - Run: `./gradlew test && ./gradlew assembleDebug`
+   - Expect: All pass
+
+**IMPORTANT for HEA-13:** Before removing `navigation-compose`, check if `hilt-navigation-compose` has a transitive dependency on it. If so, the explicit declaration may be redundant. If `hilt-navigation-compose` is the only dependency providing `hiltViewModel()`, it must stay. Only remove what is truly unused.
+
+**Notes:**
+- HEA-6: The permission is currently never requested at runtime (only declared), so removal has zero functional impact
+- HEA-9: `dataExtractionRules` is for API 31+ (cloud backup), `fullBackupContent` is for pre-31 (legacy backup). Both should exclude all data.
+- HEA-13: Be careful not to break `hiltViewModel()` — test by building after removal
+
+---
+
+### Task 13: Integration and verification
+
+**Issue:** All (HEA-1 through HEA-14)
+**Dependencies:** All previous tasks complete
+**Files:** None (verification only)
+
+**Steps:**
+
+1. Run full test suite:
+   - `./gradlew test`
+   - Expect: All tests pass, including new tests from Tasks 1-10
+
+2. Run lint:
+   - `./gradlew lint`
+   - Expect: No new warnings or errors introduced
+
+3. Build debug APK:
+   - `./gradlew assembleDebug`
+   - Expect: Clean build, no warnings
+
+4. Manual verification checklist:
+   - [ ] App launches without crash on device with Health Connect installed
+   - [ ] App shows availability error on device without Health Connect
+   - [ ] Permission request dialog appears when "Grant Permissions" is tapped
+   - [ ] After granting permissions, step data loads and displays
+   - [ ] After denying permissions, denial state shows with explanation
+   - [ ] Error state shows retry button that works
+   - [ ] Empty state shows helpful guidance text
+   - [ ] Pull-to-refresh works on data list
+   - [ ] `adb logcat -s HealthConnectRepositoryImpl:* HealthViewModel:*` shows Timber logs
+   - [ ] No sensitive health data values appear in logs (only counts)
+
+5. Verify architecture:
+   - [ ] `ReadStepsUseCase` has zero imports from `com.healthhelper.app.data`
+   - [ ] `HealthRecord.type` is `HealthRecordType` enum, not String
+   - [ ] `HealthRecord.id` field exists and is used as LazyColumn key
+   - [ ] No `runBlocking` in test files
+   - [ ] `READ_HEART_RATE` permission not in manifest
+   - [ ] `allowBackup="false"` in manifest
+   - [ ] `collectAsStateWithLifecycle` used instead of `collectAsState`
+
+## MCP Usage During Implementation
+
+| MCP Server | Tool | Purpose |
+|------------|------|---------|
+| Linear | `save_issue` | Move issues to "In Progress" when starting each task |
+| Linear | `save_issue` | Move issues to "Done" when task passes verification |
+| Linear | `create_comment` | Add implementation notes to issues if deviations from plan |
+
+## Error Handling
+
+| Error Scenario | Expected Behavior | Test Coverage |
+|---------------|-------------------|---------------|
+| Health Connect SDK not installed | Show "Not Installed" UI with install link | ViewModel test (Task 8) |
+| Health Connect needs update | Show "Update Required" UI with update link | ViewModel test (Task 8) |
+| Permissions not granted | Show rationale with "Grant Permissions" button | ViewModel test (Task 9) |
+| Permissions denied | Show explanation with Settings link | ViewModel test (Task 9) |
+| SecurityException from Health Connect | Show "Permission denied" error with retry | ViewModel test (Task 5) |
+| IOException from Health Connect | Show "Service unavailable" error with retry | ViewModel test (Task 5) |
+| Generic exception | Show "Failed to load steps" with retry | ViewModel test (Task 5) |
+| Empty data (no records) | Show guidance + pull-to-refresh | UI (Task 10) |
+
+## Risks & Open Questions
+
+- [ ] **Risk: HealthConnectClient nullable DI** — Making the client nullable in DI affects the repository injection chain. May need a wrapper/provider pattern to avoid null checks propagating through the codebase. Mitigation: encapsulate nullability in a `HealthConnectClientProvider` that throws a domain-specific exception when client is unavailable, caught by the ViewModel.
+- [ ] **Risk: hilt-navigation-compose depends on navigation-compose** — Removing `navigation-compose` (HEA-13) may break `hiltViewModel()` if it's not transitively available through `hilt-navigation-compose`. Mitigation: check dependency tree with `./gradlew dependencies` before removing.
+- [ ] **Risk: Permission re-check on resume** — Using `LifecycleEventObserver` in a composable to trigger permission re-check could cause unnecessary re-checks. Mitigation: debounce or flag to avoid redundant checks within the same session.
+- [ ] **Question: Pull-to-refresh API** — Material 3's pull-to-refresh API has changed across Compose BOM versions. Verify `PullToRefreshBox` or equivalent is available in `composeBom = 2025.12.00`. Fallback: use `SwipeRefresh` from accompanist if needed.
+
+## Scope Boundaries
+
+**In Scope:**
+- All 14 Backlog issues (HEA-1 through HEA-14)
+- Architecture fixes, error handling, permissions, availability, logging, UI states, cleanup
+- Tests for all new behavior (TDD)
+
+**Out of Scope:**
+- Heart rate reading feature (removed unused permission instead)
+- Multi-screen navigation (removed unused dependency instead)
+- Production crash reporting tree for Timber (can be a future issue)
+- Compose UI tests / instrumented tests (unit tests only in this plan)
+- Health Connect data write operations
+- Any features not mentioned in the 14 issues
