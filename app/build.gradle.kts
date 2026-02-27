@@ -49,6 +49,10 @@ dependencies {
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.compose.material3)
     debugImplementation(libs.compose.ui.tooling)
+    implementation(libs.compose.material.icons.extended)
+
+    // Navigation
+    implementation(libs.navigation.compose)
 
     // Hilt
     implementation(libs.hilt.android)
@@ -67,7 +71,7 @@ dependencies {
     implementation(libs.ktor.client.content.negotiation)
     implementation(libs.ktor.serialization.kotlinx.json)
 
-    // Kotlinx Serialization
+    // Kotlin Serialization
     implementation(libs.kotlinx.serialization.json)
 
     // DataStore
@@ -75,13 +79,8 @@ dependencies {
 
     // WorkManager
     implementation(libs.work.runtime.ktx)
-
-    // Hilt WorkManager integration
     implementation(libs.hilt.work)
-    ksp(libs.hilt.androidx.compiler)
-
-    // Navigation
-    implementation(libs.navigation.compose)
+    ksp(libs.androidx.hilt.compiler)
 
     // Testing
     testImplementation(kotlin("test"))
