@@ -1,8 +1,16 @@
 package com.healthhelper.app.data.repository
 
+import android.content.SharedPreferences
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
+import io.mockk.every
+import io.mockk.just
+import io.mockk.mockk
+import io.mockk.Runs
+import io.mockk.verify
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
@@ -15,6 +23,7 @@ import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -28,13 +37,92 @@ class DataStoreSettingsRepositoryTest {
     private lateinit var dataStore: DataStore<Preferences>
     private lateinit var repository: DataStoreSettingsRepository
 
+    // In-memory store for encrypted prefs mock
+    private val encryptedStore = mutableMapOf<String, String>()
+    private val encryptedPrefs = mockk<SharedPreferences>()
+    private val encryptedEditor = mockk<SharedPreferences.Editor>()
+
     @BeforeEach
     fun setUp() {
+        encryptedStore.clear()
+
+        every { encryptedPrefs.getString(any(), any<String>()) } answers {
+            encryptedStore[firstArg()] ?: (arg<String>(1))
+        }
+        every { encryptedPrefs.edit() } returns encryptedEditor
+        every { encryptedEditor.putString(any(), any()) } answers {
+            encryptedStore[firstArg()] = secondArg()
+            encryptedEditor
+        }
+        every { encryptedEditor.remove(any()) } answers {
+            encryptedStore.remove(firstArg())
+            encryptedEditor
+        }
+        every { encryptedEditor.apply() } just Runs
+        every { encryptedPrefs.registerOnSharedPreferenceChangeListener(any()) } just Runs
+        every { encryptedPrefs.unregisterOnSharedPreferenceChangeListener(any()) } just Runs
+
         dataStore = PreferenceDataStoreFactory.create(
             scope = testScope,
         ) { File(tempDir, "test_settings.preferences_pb") }
-        repository = DataStoreSettingsRepository(dataStore)
+        repository = DataStoreSettingsRepository(dataStore, encryptedPrefs)
     }
+
+    // --- apiKey (encrypted prefs) tests ---
+
+    @Test
+    @DisplayName("apiKeyFlow reads from encryptedPrefs not DataStore")
+    fun apiKeyFlowReadsFromEncryptedPrefs() = testScope.runTest {
+        encryptedStore["api_key"] = "encrypted_key"
+        assertEquals("encrypted_key", repository.apiKeyFlow.first())
+    }
+
+    @Test
+    @DisplayName("setApiKey writes to encryptedPrefs")
+    fun setApiKeyWritesToEncryptedPrefs() = testScope.runTest {
+        repository.setApiKey("fsk_abc123")
+        verify { encryptedEditor.putString("api_key", "fsk_abc123") }
+        verify { encryptedEditor.apply() }
+    }
+
+    @Test
+    @DisplayName("migration moves apiKey from DataStore to encryptedPrefs")
+    fun migrationMovesApiKeyFromDataStore() = testScope.runTest {
+        // Pre-populate DataStore with a legacy api_key
+        dataStore.edit { it[stringPreferencesKey("api_key")] = "legacy_key" }
+
+        // Create fresh repo with empty encryptedPrefs
+        val freshRepo = DataStoreSettingsRepository(dataStore, encryptedPrefs)
+
+        // Trigger migration by collecting apiKeyFlow
+        val key = freshRepo.apiKeyFlow.first()
+
+        // Migration should have moved the key
+        assertEquals("legacy_key", key)
+        assertEquals("legacy_key", encryptedStore["api_key"])
+
+        // DataStore should no longer have the api_key
+        val prefs = dataStore.data.first()
+        assertNull(prefs[stringPreferencesKey("api_key")])
+    }
+
+    @Test
+    @DisplayName("migration skips if encryptedPrefs already has the key")
+    fun migrationSkipsIfEncryptedPrefsAlreadyHasKey() = testScope.runTest {
+        // Pre-populate both DataStore and encryptedPrefs
+        dataStore.edit { it[stringPreferencesKey("api_key")] = "datastore_key" }
+        encryptedStore["api_key"] = "encrypted_key"
+
+        val freshRepo = DataStoreSettingsRepository(dataStore, encryptedPrefs)
+        val key = freshRepo.apiKeyFlow.first()
+
+        // Should use encryptedPrefs value, DataStore not touched
+        assertEquals("encrypted_key", key)
+        val prefs = dataStore.data.first()
+        assertEquals("datastore_key", prefs[stringPreferencesKey("api_key")])
+    }
+
+    // --- Existing tests (adapted for new constructor + behavior) ---
 
     @Test
     @DisplayName("default API key is empty string")
@@ -49,9 +137,9 @@ class DataStoreSettingsRepositoryTest {
     }
 
     @Test
-    @DisplayName("default sync interval is 10")
+    @DisplayName("default sync interval is 15")
     fun defaultSyncInterval() = testScope.runTest {
-        assertEquals(10, repository.syncIntervalFlow.first())
+        assertEquals(15, repository.syncIntervalFlow.first())
     }
 
     @Test
@@ -61,7 +149,7 @@ class DataStoreSettingsRepositoryTest {
     }
 
     @Test
-    @DisplayName("stores and retrieves API key")
+    @DisplayName("stores and retrieves API key via encryptedPrefs")
     fun storeAndRetrieveApiKey() = testScope.runTest {
         repository.setApiKey("fsk_abc123")
         assertEquals("fsk_abc123", repository.apiKeyFlow.first())

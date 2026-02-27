@@ -53,7 +53,7 @@ fun SyncScreen(
     }
 
     // Show permission message when HC is available but permission not yet granted
-    LaunchedEffect(uiState.healthConnectAvailable) {
+    LaunchedEffect(uiState.healthConnectAvailable, uiState.permissionGranted) {
         if (uiState.healthConnectAvailable && !uiState.permissionGranted) {
             permissionRequested = true
         }

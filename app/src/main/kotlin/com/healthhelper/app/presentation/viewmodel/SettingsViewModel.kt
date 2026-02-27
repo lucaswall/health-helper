@@ -36,7 +36,7 @@ class SettingsViewModel @Inject constructor(
             ) { apiKey, baseUrl, syncInterval ->
                 Triple(apiKey, baseUrl, syncInterval)
             }.collect { (apiKey, baseUrl, syncInterval) ->
-                val configured = settingsRepository.isConfigured()
+                val configured = apiKey.isNotEmpty() && baseUrl.isNotEmpty()
                 _uiState.update {
                     it.copy(
                         apiKey = apiKey,
