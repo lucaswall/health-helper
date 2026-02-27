@@ -8,8 +8,10 @@ import androidx.health.connect.client.HealthConnectClient
 import androidx.work.WorkManager
 import com.healthhelper.app.data.api.FoodScannerApiClient
 import com.healthhelper.app.data.repository.DataStoreSettingsRepository
+import com.healthhelper.app.data.repository.FoodScannerFoodLogRepository
 import com.healthhelper.app.data.repository.HealthConnectNutritionRepository
 import com.healthhelper.app.data.sync.SyncScheduler
+import com.healthhelper.app.domain.repository.FoodLogRepository
 import com.healthhelper.app.domain.repository.NutritionRepository
 import com.healthhelper.app.domain.repository.SettingsRepository
 import dagger.Module
@@ -68,6 +70,12 @@ object AppModule {
     @Singleton
     fun provideFoodScannerApiClient(httpClient: HttpClient): FoodScannerApiClient =
         FoodScannerApiClient(httpClient)
+
+    @Provides
+    @Singleton
+    fun provideFoodLogRepository(
+        apiClient: FoodScannerApiClient,
+    ): FoodLogRepository = FoodScannerFoodLogRepository(apiClient)
 
     @Provides
     @Singleton
