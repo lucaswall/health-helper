@@ -1,6 +1,7 @@
 package com.healthhelper.app.data.repository
 
 import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.response.InsertRecordsResponse
 import com.healthhelper.app.domain.model.FoodLogEntry
 import com.healthhelper.app.domain.model.MealType
 import io.mockk.coEvery
@@ -11,6 +12,7 @@ import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class HealthConnectNutritionRepositoryTest {
 
@@ -49,5 +51,49 @@ class HealthConnectNutritionRepositoryTest {
         assertFailsWith<CancellationException> {
             repository.writeNutritionRecords("2026-01-15", emptyList())
         }
+    }
+
+    @Test
+    @DisplayName("writeNutritionRecords returns false when insertRecords throws SecurityException")
+    fun securityExceptionReturnsFalse() = runTest {
+        val healthConnectClient = mockk<HealthConnectClient>()
+        coEvery { healthConnectClient.insertRecords(any()) } throws SecurityException("Permission denied")
+
+        val repository = HealthConnectNutritionRepository(healthConnectClient = healthConnectClient)
+        val result = repository.writeNutritionRecords("2026-01-15", listOf(testEntry))
+        assertFalse(result)
+    }
+
+    @Test
+    @DisplayName("writeNutritionRecords returns false when insertRecords throws general Exception")
+    fun generalExceptionReturnsFalse() = runTest {
+        val healthConnectClient = mockk<HealthConnectClient>()
+        coEvery { healthConnectClient.insertRecords(any()) } throws RuntimeException("Unexpected error")
+
+        val repository = HealthConnectNutritionRepository(healthConnectClient = healthConnectClient)
+        val result = repository.writeNutritionRecords("2026-01-15", listOf(testEntry))
+        assertFalse(result)
+    }
+
+    @Test
+    @DisplayName("writeNutritionRecords returns true on successful write")
+    fun successfulWriteReturnsTrue() = runTest {
+        val healthConnectClient = mockk<HealthConnectClient>()
+        coEvery { healthConnectClient.insertRecords(any()) } returns mockk<InsertRecordsResponse>()
+
+        val repository = HealthConnectNutritionRepository(healthConnectClient = healthConnectClient)
+        val result = repository.writeNutritionRecords("2026-01-15", listOf(testEntry))
+        assertTrue(result)
+    }
+
+    @Test
+    @DisplayName("writeNutritionRecords handles empty entries list")
+    fun emptyEntriesListReturnsTrue() = runTest {
+        val healthConnectClient = mockk<HealthConnectClient>()
+        coEvery { healthConnectClient.insertRecords(any()) } returns mockk<InsertRecordsResponse>()
+
+        val repository = HealthConnectNutritionRepository(healthConnectClient = healthConnectClient)
+        val result = repository.writeNutritionRecords("2026-01-15", emptyList())
+        assertTrue(result)
     }
 }

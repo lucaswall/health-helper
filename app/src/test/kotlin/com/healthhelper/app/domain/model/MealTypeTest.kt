@@ -1,6 +1,6 @@
 package com.healthhelper.app.domain.model
 
-import org.junit.jupiter.api.Assertions.assertEquals
+import kotlin.test.assertEquals
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 

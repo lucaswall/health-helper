@@ -159,7 +159,7 @@ class NutritionRecordMapperTest {
     @DisplayName("time parsing produces correct start and end times with 60s gap")
     fun timeParsing() {
         val record = mapToNutritionRecord(createEntry(time = "12:30:00"), "2026-01-15")
-        assertEquals(60, java.time.Duration.between(record.startTime, record.endTime).seconds)
+        assertEquals(60L, java.time.Duration.between(record.startTime, record.endTime).seconds)
     }
 
     @Test

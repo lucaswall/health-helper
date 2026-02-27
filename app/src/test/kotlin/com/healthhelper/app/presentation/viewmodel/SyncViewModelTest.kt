@@ -186,32 +186,6 @@ class SyncViewModelTest {
     }
 
     @Test
-    fun `cannot trigger sync while already syncing`() = runTest {
-        var callCount = 0
-        coEvery { syncNutritionUseCase.invoke(any()) } coAnswers {
-            callCount++
-            SyncResult.Success(1)
-        }
-        coEvery { settingsRepository.isConfigured() } returns true
-
-        viewModel = createViewModel()
-        advanceUntilIdle()
-
-        // Simulate already syncing
-        viewModel.triggerSync()
-        // Immediately try again — but since advanceUntilIdle not called,
-        // the first sync completes atomically in test dispatcher; just verify idempotency
-        advanceUntilIdle()
-
-        // Second trigger when not syncing: allowed
-        viewModel.triggerSync()
-        advanceUntilIdle()
-
-        // At least 2 total calls happened (both triggers succeeded since syncing completed)
-        assertTrue(callCount >= 1)
-    }
-
-    @Test
     fun `cannot trigger sync when isSyncing is true`() = runTest {
         // Test the guard: if isSyncing is true, triggerSync should not call use case again
         var callCount = 0
