@@ -1,8 +1,8 @@
 # Implementation Plan
 
-**Status:** COMPLETE
+**Status:** IN_PROGRESS
 **Branch:** feat/HEA-44-backlog-audit-fixes
-**Issues:** HEA-44, HEA-45, HEA-46, HEA-47, HEA-48, HEA-49, HEA-50, HEA-51, HEA-52, HEA-53, HEA-56, HEA-57, HEA-58, HEA-59, HEA-60, HEA-62, HEA-64, HEA-65, HEA-66, HEA-67, HEA-68, HEA-69, HEA-70, HEA-71
+**Issues:** HEA-44, HEA-45, HEA-46, HEA-47, HEA-48, HEA-49, HEA-50, HEA-51, HEA-52, HEA-53, HEA-56, HEA-57, HEA-58, HEA-59, HEA-60, HEA-62, HEA-64, HEA-65, HEA-66, HEA-67, HEA-68, HEA-69, HEA-70, HEA-71, HEA-72, HEA-73, HEA-74, HEA-75, HEA-76, HEA-77
 **Created:** 2026-02-27
 **Last Updated:** 2026-02-27
 
@@ -766,3 +766,94 @@ Comprehensive code audit fix plan addressing 23 backlog issues across security, 
 
 ### Continuation Status
 All tasks completed.
+
+### Review Findings
+
+Summary: 6 issue(s) found (Team: security, reliability, quality reviewers — 28 files reviewed)
+- FIX: 6 issue(s) — Linear issues created in Todo
+- DISCARDED: 12 finding(s) — false positives / not applicable
+
+**Issues requiring fix:**
+- [HIGH] TIMEOUT: No HttpTimeout plugin on Ktor HttpClient — sync can run indefinitely during backfill (`app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt:90`) — [HEA-72](https://linear.app/lw-claude/issue/HEA-72)
+- [MEDIUM] BUG: setApiKey uses apply() instead of commit() — async write not durable on process kill (`app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt:81-83`) — [HEA-73](https://linear.app/lw-claude/issue/HEA-73)
+- [MEDIUM] BUG: Migration verification failure silently swallowed — migrationComplete set true even when read-back fails, API key can be lost (`app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt:51-56`) — [HEA-74](https://linear.app/lw-claude/issue/HEA-74)
+- [MEDIUM] BUG: capturedProgress never asserted in SyncViewModelTest — dead code gives false test confidence (`app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt:165-185`) — [HEA-75](https://linear.app/lw-claude/issue/HEA-75)
+- [MEDIUM] ERROR: Bare launch in SettingsViewModel with no error handling — DataStore IOException silently dropped (`app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModel.kt:52-66`) — [HEA-76](https://linear.app/lw-claude/issue/HEA-76)
+- [MEDIUM] SECURITY: Raw exception/server messages exposed in user-visible UI — can leak hostnames and internal details (`app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt:109`, `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt:53-54`) — [HEA-77](https://linear.app/lw-claude/issue/HEA-77)
+
+**Discarded findings (not bugs):**
+- [DISCARDED] SECURITY: Silent fallback from EncryptedSharedPreferences to plain SharedPreferences (AppModule.kt:60-63) — Intentional design per plan requirements: Keystore fallback ensures app works on devices with broken Keystore. Timber.w warning present for diagnostics.
+- [DISCARDED] SECURITY: security-crypto 1.1.0-alpha06 is alpha (libs.versions.toml:24) — De-facto Android standard; Google has not released stable 1.1.0 despite years of production usage. The 1.0.0 "stable" has deprecated MasterKeys API replaced by MasterKey.Builder in 1.1.0-alpha.
+- [DISCARDED] SECURITY: Full API key in SettingsViewModel UI state (SettingsViewModel.kt:16,42) — Required for settings editing; HEA-54 was explicitly canceled for this reason.
+- [DISCARDED] SECURITY: dataExtractionRules may override allowBackup (AndroidManifest.xml:10-12) — EncryptedSharedPreferences uses device-bound Keystore keys; even if backed up, data cannot be decrypted on another device. Backup rules files outside review scope.
+- [DISCARDED] RESOURCE: apiKeyFlow cold callbackFlow creates multiple listeners (DataStoreSettingsRepository.kt:60-70) — Style-only; all listeners correctly register/unregister. Resource optimization, not correctness issue.
+- [DISCARDED] RESOURCE: HttpClient singleton never closed (AppModule.kt:90) — Standard Android singleton pattern; HEA-63 was explicitly canceled for this reason.
+- [DISCARDED] EDGE CASE: Implicit ISO_LOCAL_DATE format in NutritionRecordMapper (NutritionRecordMapper.kt:18) — All callers format with DateTimeFormatter.ISO_LOCAL_DATE; exception already caught by repository's catch block.
+- [DISCARDED] TYPE: Force unwrap !! in NutritionRecordMapperTest (NutritionRecordMapperTest.kt) — Tests correctly catch regressions; NPE still fails the test. Less clear failure message but zero correctness impact.
+- [DISCARDED] TYPE: Unsafe redundant cast after assertTrue in SyncNutritionUseCaseTest — Style-only; assertTrue check is correct, zero correctness impact.
+- [DISCARDED] TYPE: Unsafe cast via reflection in SyncSchedulerTest (SyncSchedulerTest.kt:76) — Style-only; reflection access is inherently fragile regardless of cast safety.
+- [DISCARDED] CONVENTION: Missing `operator` keyword on invoke (SyncNutritionUseCase.kt:20) — Style-only; all callers use explicit .invoke() which works correctly. Not enforced by CLAUDE.md.
+- [DISCARDED] CONVENTION: No Timber logging in SyncNutritionUseCase — Observability enhancement, not a bug. Adding operational logging is desirable but not a correctness issue.
+
+**MIGRATIONS.md check:** No MIGRATIONS.md exists. Implementation added EncryptedSharedPreferences migration logic in DataStoreSettingsRepository (auto-migrates on first run). Migration is handled in code; documentation file not required.
+
+### Linear Updates
+- HEA-44 through HEA-71: Review → Merge (all 24 original issues)
+- HEA-72: Created in Todo (Fix: HttpTimeout)
+- HEA-73: Created in Todo (Fix: setApiKey durability)
+- HEA-74: Created in Todo (Fix: migration verification)
+- HEA-75: Created in Todo (Fix: capturedProgress dead code)
+- HEA-76: Created in Todo (Fix: SettingsViewModel error handling)
+- HEA-77: Created in Todo (Fix: raw error messages in UI)
+
+<!-- REVIEW COMPLETE -->
+
+---
+
+## Fix Plan
+
+**Source:** Review findings from Iteration 1
+**Linear Issues:** [HEA-72](https://linear.app/lw-claude/issue/HEA-72), [HEA-73](https://linear.app/lw-claude/issue/HEA-73), [HEA-74](https://linear.app/lw-claude/issue/HEA-74), [HEA-75](https://linear.app/lw-claude/issue/HEA-75), [HEA-76](https://linear.app/lw-claude/issue/HEA-76), [HEA-77](https://linear.app/lw-claude/issue/HEA-77)
+
+### Fix 1: Add HttpTimeout to Ktor client
+**Linear Issue:** [HEA-72](https://linear.app/lw-claude/issue/HEA-72)
+
+1. Add `ktor-client-timeout` dependency if not already available (check `libs.versions.toml` — Ktor client-core likely bundles HttpTimeout)
+2. In `AppModule.kt`, add `install(HttpTimeout) { requestTimeoutMillis = 30_000L }` to the HttpClient builder block
+3. Verify: `./gradlew test` — existing tests pass
+4. Verify: `./gradlew assembleDebug` — build succeeds
+
+### Fix 2: setApiKey uses commit() for durability
+**Linear Issue:** [HEA-73](https://linear.app/lw-claude/issue/HEA-73)
+
+1. Write test in `DataStoreSettingsRepositoryTest.kt` verifying setApiKey persists durably (mock EncryptedSharedPreferences to verify `commit()` is called)
+2. In `DataStoreSettingsRepository.setApiKey()`, change `.apply()` to `withContext(Dispatchers.IO) { encryptedPrefs.edit().putString(ENCRYPTED_API_KEY, key).commit() }`
+3. Run: `./gradlew test --tests "com.healthhelper.app.data.repository.DataStoreSettingsRepositoryTest"`
+
+### Fix 3: Migration verification failure handling
+**Linear Issue:** [HEA-74](https://linear.app/lw-claude/issue/HEA-74)
+
+1. Write test in `DataStoreSettingsRepositoryTest.kt` simulating verification failure (mock encrypted prefs to return wrong value on read-back)
+2. In `DataStoreSettingsRepository`, when `verified != legacyKey`: log `Timber.e("Migration verification failed")`, do NOT set `migrationComplete = true`, do NOT clear legacy key from DataStore
+3. Run: `./gradlew test --tests "com.healthhelper.app.data.repository.DataStoreSettingsRepositoryTest"`
+
+### Fix 4: Fix capturedProgress dead code in SyncViewModelTest
+**Linear Issue:** [HEA-75](https://linear.app/lw-claude/issue/HEA-75)
+
+1. In `SyncViewModelTest` "progress updates are reflected in UI state" test, add assertions on `capturedProgress` list: verify it contains expected intermediate values, OR remove the dead `capturedProgress` variable and rename the test to match what it actually verifies
+2. Run: `./gradlew test --tests "com.healthhelper.app.presentation.viewmodel.SyncViewModelTest"`
+
+### Fix 5: Add error handling to SettingsViewModel launch blocks
+**Linear Issue:** [HEA-76](https://linear.app/lw-claude/issue/HEA-76)
+
+1. Write test in `SettingsViewModelTest` verifying that when settings write throws IOException, ViewModel surfaces an error state (or at minimum doesn't crash)
+2. In `SettingsViewModel.updateApiKey()`, `updateBaseUrl()`, `updateSyncInterval()`, wrap the `settingsRepository.setXxx()` call in try/catch. On IOException, log error and optionally surface to UI state
+3. Run: `./gradlew test --tests "com.healthhelper.app.presentation.viewmodel.SettingsViewModelTest"`
+
+### Fix 6: Sanitize error messages shown to users
+**Linear Issue:** [HEA-77](https://linear.app/lw-claude/issue/HEA-77)
+
+1. Write test in `SyncViewModelTest` verifying that when sync throws RuntimeException with internal details, the UI message is generic (not the raw exception message)
+2. In `SyncViewModel.kt:109`, change `"Unexpected error: ${e.message}"` to a generic message like `"Sync failed. Please try again."` and log the full exception at ERROR level
+3. In `FoodScannerApiClient.kt:53-54`, change server error message to generic `"Server returned an error"` and log the actual server message at DEBUG level
+4. Run: `./gradlew test`
