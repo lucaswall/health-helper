@@ -51,6 +51,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun updateApiKey(value: String) {
+        _uiState.update { it.copy(apiKey = value) }
         viewModelScope.launch {
             try {
                 settingsRepository.setApiKey(value)
@@ -61,6 +62,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun updateBaseUrl(value: String) {
+        _uiState.update { it.copy(baseUrl = value) }
         viewModelScope.launch {
             try {
                 settingsRepository.setBaseUrl(value)
@@ -71,6 +73,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun updateSyncInterval(value: Int) {
+        _uiState.update { it.copy(syncInterval = value) }
         viewModelScope.launch {
             try {
                 settingsRepository.setSyncInterval(value)
