@@ -342,3 +342,142 @@ Previous agent team run failed (workers aborted mid-run). Damage assessment:
 
 ### Continuation Status
 All tasks completed.
+
+### Review Findings
+
+Summary: 10 issue(s) found (single-agent deep review — security, reliability, quality)
+- FIX: 7 issue(s) — Linear issues created in Todo
+- DISCARD: 3 finding(s) — not bugs
+
+**Issues requiring fix:**
+- [URGENT] MISSED IMPL: Health Connect WRITE_NUTRITION runtime permission never requested — plan Task 8 explicitly required `PermissionController.createRequestPermissionResultContract()` in SyncScreen but it was never implemented. App silently fails to write to Health Connect. (`app/src/main/kotlin/com/healthhelper/app/presentation/ui/SyncScreen.kt` — missing entirely)
+- [HIGH] BUG: lastSyncedDate gap bug permanently skips failed intermediate dates — `newestSyncedPastDate` captures first successful non-today date (newest-first loop), advancing past any failed dates which are never retried (`app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt:66-69`)
+- [HIGH] BUG: SyncViewModel `isConfigured` state becomes stale after settings change — `combine` only observes `syncIntervalFlow` and `lastSyncedDateFlow`, not `apiKeyFlow`/`baseUrlFlow`. After configuring settings and navigating back, sync button stays disabled. (`app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt:42-44`)
+- [HIGH] BUG: App crashes on startup if Health Connect unavailable — `HealthConnectClient.getOrCreate(context)` throws `IllegalStateException` if HC not installed. Hilt singleton creation crashes the app. (`app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt:46-47`)
+- [MEDIUM] BUG: Misleading `SyncResult.Success(0)` when all HC writes fail — API calls succeed → `successfulDays` increments, but HC writes fail → `totalRecordsSynced` stays 0. User sees "Synced 0 records" with no explanation. (`app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt:56-70,93-96`)
+- [MEDIUM] BUG: `schedulePeriodic()` called on every flow emission, resetting WorkManager periodic timer — opening SyncScreen or completing a sync resets the countdown. (`app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt:55-57`)
+- [LOW] BUG: No base URL validation — trailing slashes produce malformed URL `https://example.com//api/v1/food-log`. (`app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt:26`)
+
+**Discarded findings (not bugs):**
+- [DISCARDED] CONVENTION: Settings saved on every keystroke without debounce (`SettingsViewModel.kt:52-56`) — DataStore batches writes internally; no data corruption. Suboptimal performance but functional. Style preference.
+- [DISCARDED] CONVENTION: Default sync interval (10) below slider minimum (15) — visual mismatch only. Slider clamps display; stored value unchanged unless user interacts. No functional impact.
+- [DISCARDED] TEST: 2 planned tests missing (respects lastSyncedDate, caps at 365 days) in `SyncNutritionUseCaseTest.kt` — the underlying logic is present in the code and covered indirectly by existing multi-day tests. Missing explicit test coverage is low-risk and will be naturally added when fixing HEA-37.
+
+### Linear Updates
+- HEA-29 through HEA-36: Already in Done (moved during implementation)
+- HEA-37: Created in Todo (Fix: lastSyncedDate gap bug)
+- HEA-38: Created in Todo (Fix: HC WRITE_NUTRITION permission never requested)
+- HEA-39: Created in Todo (Fix: SyncViewModel isConfigured stale)
+- HEA-40: Created in Todo (Fix: App crashes if HC unavailable)
+- HEA-41: Created in Todo (Fix: Misleading SyncResult.Success(0))
+- HEA-42: Created in Todo (Fix: WorkManager timer reset)
+- HEA-43: Created in Todo (Fix: No base URL validation)
+
+<!-- REVIEW COMPLETE -->
+
+---
+
+## Fix Plan
+
+**Source:** Review findings from Iteration 1
+**Linear Issues:** [HEA-37](https://linear.app/lw-claude/issue/HEA-37), [HEA-38](https://linear.app/lw-claude/issue/HEA-38), [HEA-39](https://linear.app/lw-claude/issue/HEA-39), [HEA-40](https://linear.app/lw-claude/issue/HEA-40), [HEA-41](https://linear.app/lw-claude/issue/HEA-41), [HEA-42](https://linear.app/lw-claude/issue/HEA-42), [HEA-43](https://linear.app/lw-claude/issue/HEA-43)
+
+### Fix 1: Health Connect WRITE_NUTRITION permission never requested
+**Linear Issue:** [HEA-38](https://linear.app/lw-claude/issue/HEA-38)
+**Priority:** Urgent — core functionality broken
+
+1. Write tests in `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt`:
+   - Test: `hasPermission = false` → UI state reflects permission not granted
+   - Test: triggerSync() when permission not granted does not call use case, updates state to request permission
+   - Test: after permission granted, sync proceeds normally
+2. Run verifier (expect fail)
+3. Implement:
+   - Add `permissionGranted: Boolean` to `SyncUiState`
+   - In `SyncViewModel`: inject `HealthConnectClient`, check `permissionController.getGrantedPermissions()` on init and after permission result. Add `onPermissionResult(granted: Boolean)` method.
+   - In `SyncScreen`: use `rememberLauncherForActivityResult` with `PermissionController.createRequestPermissionResultContract()` for `WRITE_NUTRITION`. Request permission on first sync attempt when not granted. Show "Permission required" message when denied.
+   - Guard `triggerSync()`: if permission not granted, request it instead of calling use case
+4. Run verifier (expect pass)
+
+### Fix 2: lastSyncedDate gap bug skips failed intermediate dates
+**Linear Issue:** [HEA-37](https://linear.app/lw-claude/issue/HEA-37)
+**Priority:** High — silent data loss
+
+1. Write tests in `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt`:
+   - Test: intermediate date fails → lastSyncedDate advances only to the contiguous successful date from the oldest end
+   - Test: all past dates succeed → lastSyncedDate set to yesterday (newest past date)
+   - Test: first past date (newest) fails → lastSyncedDate not updated at all
+   - Test: respects existing lastSyncedDate — doesn't re-sync dates already synced (except today)
+   - Test: caps at 365 days back from today
+2. Run verifier (expect fail)
+3. Implement in `SyncNutritionUseCase.kt`:
+   - Replace `newestSyncedPastDate` tracking with contiguous-range tracking
+   - Process dates oldest-first for tracking purposes (or track per-date success in a map)
+   - After loop: find the newest date D such that all dates from startDate to D succeeded
+   - Only update `lastSyncedDate` to D if D is newer than the current lastSyncedDate
+4. Run verifier (expect pass)
+
+### Fix 3: SyncViewModel isConfigured stale after settings change
+**Linear Issue:** [HEA-39](https://linear.app/lw-claude/issue/HEA-39)
+**Priority:** High — broken user flow
+
+1. Write test in `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt`:
+   - Test: when apiKey/baseUrl flows emit new values, isConfigured updates reactively without needing syncInterval to change
+2. Run verifier (expect fail)
+3. Implement in `SyncViewModel.kt`:
+   - Add `settingsRepository.apiKeyFlow` and `settingsRepository.baseUrlFlow` to the `combine` (use `combine` with 4 flows)
+   - Derive `isConfigured` from `apiKey.isNotEmpty() && baseUrl.isNotEmpty()` directly instead of calling `settingsRepository.isConfigured()`
+   - Only call `syncScheduler.schedulePeriodic()` when the interval value actually changes (addresses HEA-42 partially)
+4. Run verifier (expect pass)
+
+### Fix 4: App crashes if Health Connect unavailable on device
+**Linear Issue:** [HEA-40](https://linear.app/lw-claude/issue/HEA-40)
+**Priority:** High — crash on startup
+
+1. Write test in `app/src/test/kotlin/com/healthhelper/app/data/repository/HealthConnectNutritionRepositoryTest.kt`:
+   - Test: when HealthConnectClient is null, writeNutritionRecords returns false
+2. Run verifier (expect fail)
+3. Implement:
+   - In `AppModule.kt`: check `HealthConnectClient.getSdkStatus(context)` before calling `getOrCreate()`. If status is not `SDK_AVAILABLE`, provide `null`.
+   - Change provide type to `HealthConnectClient?` (nullable)
+   - In `HealthConnectNutritionRepository`: accept nullable client. If null, return false from writeNutritionRecords and log warning.
+   - In `SyncViewModel` or `SyncScreen`: detect HC unavailability and show message
+4. Run verifier (expect pass)
+
+### Fix 5: Misleading SyncResult.Success(0) when HC writes fail
+**Linear Issue:** [HEA-41](https://linear.app/lw-claude/issue/HEA-41)
+**Priority:** Medium — misleading user feedback
+
+1. Write tests in `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt`:
+   - Test: API succeeds with entries but all HC writes fail → returns SyncResult.Error (not Success(0))
+   - Test: API succeeds with entries, some HC writes succeed → returns Success with correct partial count
+2. Run verifier (expect fail)
+3. Implement in `SyncNutritionUseCase.kt`:
+   - Track `totalEntriesFetched` alongside `totalRecordsSynced`
+   - If `totalEntriesFetched > 0 && totalRecordsSynced == 0`, return `SyncResult.Error("Failed to write records to Health Connect")`
+   - If `totalEntriesFetched > 0 && totalRecordsSynced < totalEntriesFetched`, return `SyncResult.Success(totalRecordsSynced)` with a note about partial writes (or add `SyncResult.PartialSuccess`)
+4. Run verifier (expect pass)
+
+### Fix 6: SyncViewModel resets WorkManager periodic timer on every flow emission
+**Linear Issue:** [HEA-42](https://linear.app/lw-claude/issue/HEA-42)
+**Priority:** Medium — background sync unreliable
+
+1. Write test in `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt`:
+   - Test: when lastSyncedDate changes but syncInterval stays same, schedulePeriodic is NOT called again
+   - Test: when syncInterval changes, schedulePeriodic IS called with new value
+2. Run verifier (expect fail)
+3. Implement in `SyncViewModel.kt`:
+   - Collect `syncIntervalFlow` with `distinctUntilChanged()` for scheduler calls
+   - Only call `syncScheduler.schedulePeriodic()` in a separate collection of the interval flow, not in the combined collector
+   - Or track previous interval and skip if unchanged
+4. Run verifier (expect pass)
+
+### Fix 7: No base URL validation — trailing slashes cause malformed URLs
+**Linear Issue:** [HEA-43](https://linear.app/lw-claude/issue/HEA-43)
+**Priority:** Low — user-triggered edge case
+
+1. Write test in `app/src/test/kotlin/com/healthhelper/app/data/api/FoodScannerApiClientTest.kt`:
+   - Test: base URL with trailing slash produces correct API URL (no double slash)
+2. Run verifier (expect fail)
+3. Implement in `FoodScannerApiClient.kt:26`:
+   - Change `"$baseUrl/api/v1/food-log"` to `"${baseUrl.trimEnd('/')}/api/v1/food-log"`
+4. Run verifier (expect pass)
