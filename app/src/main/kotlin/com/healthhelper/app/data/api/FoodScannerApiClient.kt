@@ -50,8 +50,11 @@ class FoodScannerApiClient @Inject constructor(
             val envelope: ApiEnvelope<NutritionSummaryDto> = response.body()
 
             if (!envelope.success) {
-                val errorMsg = envelope.error?.message ?: "API returned success=false"
-                Result.failure(Exception(errorMsg))
+                val serverMsg = envelope.error?.message
+                if (serverMsg != null) {
+                    Timber.d("getFoodLog(%s) server error: %s", date, serverMsg)
+                }
+                Result.failure(Exception("Server returned an error"))
             } else {
                 val entries = envelope.data?.meals?.flatMap { mealGroup ->
                     mealGroup.entries.map { entry ->

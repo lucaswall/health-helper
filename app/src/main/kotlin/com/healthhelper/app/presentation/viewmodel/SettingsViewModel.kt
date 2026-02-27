@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import timber.log.Timber
 import javax.inject.Inject
 
 data class SettingsUiState(
@@ -51,19 +52,31 @@ class SettingsViewModel @Inject constructor(
 
     fun updateApiKey(value: String) {
         viewModelScope.launch {
-            settingsRepository.setApiKey(value)
+            try {
+                settingsRepository.setApiKey(value)
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to save API key")
+            }
         }
     }
 
     fun updateBaseUrl(value: String) {
         viewModelScope.launch {
-            settingsRepository.setBaseUrl(value)
+            try {
+                settingsRepository.setBaseUrl(value)
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to save base URL")
+            }
         }
     }
 
     fun updateSyncInterval(value: Int) {
         viewModelScope.launch {
-            settingsRepository.setSyncInterval(value)
+            try {
+                settingsRepository.setSyncInterval(value)
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to save sync interval")
+            }
         }
     }
 }

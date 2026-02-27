@@ -142,7 +142,7 @@ class FoodScannerApiClientTest {
         val result = client.getFoodLog("https://food.example.com", "fsk_test", "2026-02-27")
 
         assertTrue(result.isFailure)
-        assertEquals("Bad request", result.exceptionOrNull()?.message)
+        assertEquals("Server returned an error", result.exceptionOrNull()?.message)
     }
 
     @Test

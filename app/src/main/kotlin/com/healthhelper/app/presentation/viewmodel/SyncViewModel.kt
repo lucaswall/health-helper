@@ -11,6 +11,7 @@ import androidx.health.connect.client.HealthConnectClient
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import timber.log.Timber
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -106,7 +107,8 @@ class SyncViewModel @Inject constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _uiState.update { it.copy(lastSyncResult = "Unexpected error: ${e.message}") }
+                Timber.e(e, "triggerSync unexpected error")
+                _uiState.update { it.copy(lastSyncResult = "Sync failed. Please try again.") }
             } finally {
                 _uiState.update { it.copy(isSyncing = false, syncProgress = null) }
             }

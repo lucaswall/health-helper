@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.healthhelper.app.domain.repository.SettingsRepository
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -14,6 +15,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import timber.log.Timber
 import javax.inject.Inject
 
 class DataStoreSettingsRepository @Inject constructor(
@@ -46,11 +49,16 @@ class DataStoreSettingsRepository @Inject constructor(
             val prefs = dataStore.data.first()
             val legacyKey = prefs[API_KEY]
             if (!legacyKey.isNullOrEmpty()) {
-                encryptedPrefs.edit().putString(ENCRYPTED_API_KEY, legacyKey).apply()
+                withContext(Dispatchers.IO) {
+                    encryptedPrefs.edit().putString(ENCRYPTED_API_KEY, legacyKey).commit()
+                }
                 // Verify write-back before clearing DataStore
                 val verified = encryptedPrefs.getString(ENCRYPTED_API_KEY, "")
                 if (verified == legacyKey) {
                     dataStore.edit { it.remove(API_KEY) }
+                } else {
+                    Timber.e("Migration verification failed: encrypted prefs read-back mismatch")
+                    return
                 }
             }
             migrationComplete = true
@@ -79,7 +87,9 @@ class DataStoreSettingsRepository @Inject constructor(
         dataStore.data.map { it[LAST_SYNCED_DATE] ?: "" }
 
     override suspend fun setApiKey(value: String) {
-        encryptedPrefs.edit().putString(ENCRYPTED_API_KEY, value).apply()
+        withContext(Dispatchers.IO) {
+            encryptedPrefs.edit().putString(ENCRYPTED_API_KEY, value).commit()
+        }
     }
 
     override suspend fun setBaseUrl(value: String) {

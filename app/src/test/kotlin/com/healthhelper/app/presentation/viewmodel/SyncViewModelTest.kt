@@ -162,8 +162,7 @@ class SyncViewModelTest {
     }
 
     @Test
-    fun `progress updates are reflected in UI state`() = runTest {
-        val capturedProgress = mutableListOf<SyncProgress>()
+    fun `syncProgress is null after sync completes`() = runTest {
         coEvery { syncNutritionUseCase.invoke(any()) } coAnswers {
             val onProgress = firstArg<(SyncProgress) -> Unit>()
             onProgress(SyncProgress("2024-01-01", 5, 1, 10))
@@ -177,7 +176,6 @@ class SyncViewModelTest {
         viewModel.triggerSync()
         advanceUntilIdle()
 
-        // After completion, syncProgress should be null
         viewModel.uiState.test {
             val state = awaitItem()
             assertNull(state.syncProgress)
@@ -302,7 +300,7 @@ class SyncViewModelTest {
         viewModel.uiState.test {
             val state = awaitItem()
             assertFalse(state.isSyncing)
-            assertEquals("Unexpected error: unexpected", state.lastSyncResult)
+            assertEquals("Sync failed. Please try again.", state.lastSyncResult)
             cancelAndIgnoreRemainingEvents()
         }
     }

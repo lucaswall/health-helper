@@ -59,6 +59,7 @@ class DataStoreSettingsRepositoryTest {
             encryptedEditor
         }
         every { encryptedEditor.apply() } just Runs
+        every { encryptedEditor.commit() } returns true
         every { encryptedPrefs.registerOnSharedPreferenceChangeListener(any()) } just Runs
         every { encryptedPrefs.unregisterOnSharedPreferenceChangeListener(any()) } just Runs
 
@@ -78,11 +79,11 @@ class DataStoreSettingsRepositoryTest {
     }
 
     @Test
-    @DisplayName("setApiKey writes to encryptedPrefs")
+    @DisplayName("setApiKey writes to encryptedPrefs with commit for durability")
     fun setApiKeyWritesToEncryptedPrefs() = testScope.runTest {
         repository.setApiKey("fsk_abc123")
         verify { encryptedEditor.putString("api_key", "fsk_abc123") }
-        verify { encryptedEditor.apply() }
+        verify { encryptedEditor.commit() }
     }
 
     @Test
@@ -120,6 +121,30 @@ class DataStoreSettingsRepositoryTest {
         assertEquals("encrypted_key", key)
         val prefs = dataStore.data.first()
         assertEquals("datastore_key", prefs[stringPreferencesKey("api_key")])
+    }
+
+    @Test
+    @DisplayName("migration does not mark complete when verification fails")
+    fun migrationDoesNotCompleteOnVerificationFailure() = testScope.runTest {
+        // Pre-populate DataStore with a legacy api_key
+        dataStore.edit { it[stringPreferencesKey("api_key")] = "legacy_key" }
+
+        // Configure mock to return wrong value on read-back (simulate write failure)
+        var writeCount = 0
+        every { encryptedPrefs.getString("api_key", any<String>()) } answers {
+            // First call in migrateIfNeeded checks if key exists → return empty
+            // Second call is verification → return wrong value
+            if (writeCount++ == 0) "" else "wrong_value"
+        }
+
+        val freshRepo = DataStoreSettingsRepository(dataStore, encryptedPrefs)
+
+        // Trigger migration
+        freshRepo.apiKeyFlow.first()
+
+        // DataStore should still have the legacy key (not cleared)
+        val prefs = dataStore.data.first()
+        assertEquals("legacy_key", prefs[stringPreferencesKey("api_key")])
     }
 
     // --- Existing tests (adapted for new constructor + behavior) ---
