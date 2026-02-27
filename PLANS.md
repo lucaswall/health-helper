@@ -1,6 +1,6 @@
 # Implementation Plan
 
-**Status:** IN_PROGRESS
+**Status:** COMPLETE
 **Branch:** feat/HEA-80-settings-save-reset
 **Issues:** HEA-80, HEA-81, HEA-82, HEA-79, HEA-78
 **Created:** 2026-02-27
@@ -510,3 +510,9 @@ All tasks completed. Fix Plan required.
 1. In the existing `reset reverts UI state to persisted values` test:
    - Before reset: also call `updateBaseUrl("changed-url")` and `updateSyncInterval(99)`
    - After reset: add assertions for `baseUrl == "https://example.com"` and `syncInterval == 30` (the persisted values from setUp mock)
+
+---
+
+## Status: COMPLETE
+
+All tasks implemented and reviewed successfully. All Linear issues moved to Merge.

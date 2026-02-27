@@ -19,6 +19,7 @@ data class SettingsUiState(
     val syncInterval: Int = 5,
     val isConfigured: Boolean = false,
     val hasUnsavedChanges: Boolean = false,
+    val saveError: String? = null,
 )
 
 @HiltViewModel
@@ -36,27 +37,34 @@ class SettingsViewModel @Inject constructor(
     )
 
     private var persistedSettings = PersistedSettings()
+    private var isSaving = false
 
     init {
         viewModelScope.launch {
-            combine(
-                settingsRepository.apiKeyFlow,
-                settingsRepository.baseUrlFlow,
-                settingsRepository.syncIntervalFlow,
-            ) { apiKey, baseUrl, syncInterval ->
-                Triple(apiKey, baseUrl, syncInterval)
-            }.collect { (apiKey, baseUrl, syncInterval) ->
-                persistedSettings = PersistedSettings(apiKey, baseUrl, syncInterval)
-                val configured = apiKey.isNotEmpty() && baseUrl.isNotEmpty()
-                _uiState.update {
-                    it.copy(
-                        apiKey = apiKey,
-                        baseUrl = baseUrl,
-                        syncInterval = syncInterval,
-                        isConfigured = configured,
-                        hasUnsavedChanges = false,
-                    )
+            try {
+                combine(
+                    settingsRepository.apiKeyFlow,
+                    settingsRepository.baseUrlFlow,
+                    settingsRepository.syncIntervalFlow,
+                ) { apiKey, baseUrl, syncInterval ->
+                    Triple(apiKey, baseUrl, syncInterval)
+                }.collect { (apiKey, baseUrl, syncInterval) ->
+                    persistedSettings = PersistedSettings(apiKey, baseUrl, syncInterval)
+                    if (!isSaving) {
+                        val configured = apiKey.isNotEmpty() && baseUrl.isNotEmpty()
+                        _uiState.update {
+                            it.copy(
+                                apiKey = apiKey,
+                                baseUrl = baseUrl,
+                                syncInterval = syncInterval,
+                                isConfigured = configured,
+                                hasUnsavedChanges = false,
+                            )
+                        }
+                    }
                 }
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to collect settings flows")
             }
         }
     }
@@ -82,6 +90,7 @@ class SettingsViewModel @Inject constructor(
     fun save() {
         val current = _uiState.value
         viewModelScope.launch {
+            isSaving = true
             var anyFailed = false
             val apiKeySaved = try {
                 settingsRepository.setApiKey(current.apiKey)
@@ -112,7 +121,16 @@ class SettingsViewModel @Inject constructor(
                 baseUrl = if (baseUrlSaved) current.baseUrl else persistedSettings.baseUrl,
                 syncInterval = if (intervalSaved) current.syncInterval else persistedSettings.syncInterval,
             )
-            _uiState.update { it.withDirtyFlag() }
+            isSaving = false
+            _uiState.update {
+                it.copy(
+                    saveError = if (anyFailed) {
+                        "Some settings could not be saved. Please try again."
+                    } else {
+                        null
+                    },
+                ).withDirtyFlag()
+            }
         }
     }
 

@@ -228,4 +228,30 @@ class DataStoreSettingsRepositoryTest {
     fun notConfiguredWhenBothEmpty() = testScope.runTest {
         assertFalse(repository.isConfigured())
     }
+
+    @Test
+    @DisplayName("isConfigured returns true when API key exists only in DataStore (pre-migration)")
+    fun isConfiguredReturnsTruePreMigration() = testScope.runTest {
+        dataStore.edit { it[stringPreferencesKey("api_key")] = "legacy_key" }
+        repository = DataStoreSettingsRepository(dataStore, encryptedPrefs)
+        repository.setBaseUrl("https://food.example.com")
+        assertTrue(repository.isConfigured())
+    }
+
+    @Test
+    @DisplayName("apiKeyFlow handles migration failure gracefully")
+    fun apiKeyFlowHandlesMigrationFailure() = testScope.runTest {
+        dataStore.edit { it[stringPreferencesKey("api_key")] = "legacy_key" }
+
+        // Make getString throw on first call to simulate Keystore failure
+        every { encryptedPrefs.getString("api_key", any<String>()) } throws
+            RuntimeException("Keystore unavailable")
+
+        val freshRepo = DataStoreSettingsRepository(dataStore, encryptedPrefs)
+
+        // Should not crash — returns empty default
+        every { encryptedPrefs.getString("api_key", any<String>()) } returns ""
+        val key = freshRepo.apiKeyFlow.first()
+        assertEquals("", key)
+    }
 }

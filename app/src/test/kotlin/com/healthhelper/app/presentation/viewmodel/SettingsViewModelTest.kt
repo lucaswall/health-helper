@@ -8,6 +8,7 @@ import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -17,8 +18,11 @@ import kotlinx.coroutines.test.setMain
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import java.io.IOException
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -36,7 +40,6 @@ class SettingsViewModelTest {
         every { settingsRepository.baseUrlFlow } returns flowOf("https://example.com")
         every { settingsRepository.syncIntervalFlow } returns flowOf(30)
         every { settingsRepository.lastSyncedDateFlow } returns flowOf("")
-        coEvery { settingsRepository.isConfigured() } returns true
         coEvery { settingsRepository.setApiKey(any()) } returns Unit
         coEvery { settingsRepository.setBaseUrl(any()) } returns Unit
         coEvery { settingsRepository.setSyncInterval(any()) } returns Unit
@@ -69,7 +72,6 @@ class SettingsViewModelTest {
         every { settingsRepository.apiKeyFlow } returns flowOf("")
         every { settingsRepository.baseUrlFlow } returns flowOf("")
         every { settingsRepository.syncIntervalFlow } returns flowOf(10)
-        coEvery { settingsRepository.isConfigured() } returns false
 
         viewModel = createViewModel()
         advanceUntilIdle()
@@ -221,15 +223,23 @@ class SettingsViewModelTest {
         advanceUntilIdle()
 
         viewModel.updateApiKey("changed")
+        viewModel.updateBaseUrl("https://changed-url.com")
+        viewModel.updateSyncInterval(99)
         viewModel.uiState.test {
-            assertEquals("changed", awaitItem().apiKey)
+            val state = awaitItem()
+            assertEquals("changed", state.apiKey)
+            assertEquals("https://changed-url.com", state.baseUrl)
+            assertEquals(99, state.syncInterval)
             cancelAndIgnoreRemainingEvents()
         }
 
         viewModel.reset()
 
         viewModel.uiState.test {
-            assertEquals("test-key", awaitItem().apiKey)
+            val state = awaitItem()
+            assertEquals("test-key", state.apiKey)
+            assertEquals("https://example.com", state.baseUrl)
+            assertEquals(30, state.syncInterval)
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -263,9 +273,56 @@ class SettingsViewModelTest {
         coVerify { settingsRepository.setBaseUrl(any()) }
         coVerify { settingsRepository.setSyncInterval(any()) }
 
-        // apiKey write failed — should remain dirty
+        // apiKey write failed — should remain dirty and show error
         viewModel.uiState.test {
-            assertTrue(awaitItem().hasUnsavedChanges)
+            val state = awaitItem()
+            assertTrue(state.hasUnsavedChanges)
+            assertNotNull(state.saveError)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `save sets error message when repository write fails`() = runTest {
+        coEvery { settingsRepository.setApiKey(any()) } throws RuntimeException("write failed")
+
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.updateApiKey("new-key")
+        viewModel.save()
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals("Some settings could not be saved. Please try again.", state.saveError)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `saveError is cleared on next successful save`() = runTest {
+        coEvery { settingsRepository.setApiKey(any()) } throws RuntimeException("write failed")
+
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.updateApiKey("new-key")
+        viewModel.save()
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            assertNotNull(awaitItem().saveError)
+            cancelAndIgnoreRemainingEvents()
+        }
+
+        // Fix the mock and save again
+        coEvery { settingsRepository.setApiKey(any()) } returns Unit
+        viewModel.save()
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            assertNull(awaitItem().saveError)
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -277,8 +334,7 @@ class SettingsViewModelTest {
     }
 
     @Test
-    fun `isConfigured state reflects repository isConfigured`() = runTest {
-        coEvery { settingsRepository.isConfigured() } returns false
+    fun `isConfigured is false when apiKey and baseUrl are empty`() = runTest {
         every { settingsRepository.apiKeyFlow } returns flowOf("")
         every { settingsRepository.baseUrlFlow } returns flowOf("")
         every { settingsRepository.syncIntervalFlow } returns flowOf(10)
@@ -289,6 +345,21 @@ class SettingsViewModelTest {
         viewModel.uiState.test {
             val state = awaitItem()
             assertFalse(state.isConfigured)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `init handles repository flow exception gracefully`() = runTest {
+        every { settingsRepository.apiKeyFlow } returns flow { throw IOException("corrupt") }
+
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        // Should not crash — UI stays at defaults
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals("", state.apiKey)
             cancelAndIgnoreRemainingEvents()
         }
     }

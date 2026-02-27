@@ -39,34 +39,35 @@ class DataStoreSettingsRepository @Inject constructor(
     private suspend fun migrateIfNeeded() {
         migrationMutex.withLock {
             if (migrationComplete) return
-            // If encrypted prefs already has the key, skip migration
-            val existingKey = encryptedPrefs.getString(ENCRYPTED_API_KEY, "")
-            if (!existingKey.isNullOrEmpty()) {
-                migrationComplete = true
-                return
-            }
-            // Check DataStore for a legacy api_key to migrate
-            val prefs = dataStore.data.first()
-            val legacyKey = prefs[API_KEY]
-            if (!legacyKey.isNullOrEmpty()) {
-                withContext(Dispatchers.IO) {
+            withContext(Dispatchers.IO) {
+                val existingKey = encryptedPrefs.getString(ENCRYPTED_API_KEY, "")
+                if (!existingKey.isNullOrEmpty()) {
+                    migrationComplete = true
+                    return@withContext
+                }
+                val prefs = dataStore.data.first()
+                val legacyKey = prefs[API_KEY]
+                if (!legacyKey.isNullOrEmpty()) {
                     encryptedPrefs.edit().putString(ENCRYPTED_API_KEY, legacyKey).commit()
+                    val verified = encryptedPrefs.getString(ENCRYPTED_API_KEY, "")
+                    if (verified == legacyKey) {
+                        dataStore.edit { it.remove(API_KEY) }
+                    } else {
+                        Timber.e("Migration verification failed: encrypted prefs read-back mismatch")
+                        return@withContext
+                    }
                 }
-                // Verify write-back before clearing DataStore
-                val verified = encryptedPrefs.getString(ENCRYPTED_API_KEY, "")
-                if (verified == legacyKey) {
-                    dataStore.edit { it.remove(API_KEY) }
-                } else {
-                    Timber.e("Migration verification failed: encrypted prefs read-back mismatch")
-                    return
-                }
+                migrationComplete = true
             }
-            migrationComplete = true
         }
     }
 
     override val apiKeyFlow: Flow<String> = callbackFlow {
-        migrateIfNeeded()
+        try {
+            migrateIfNeeded()
+        } catch (e: Exception) {
+            Timber.e(e, "API key migration failed")
+        }
         trySend(encryptedPrefs.getString(ENCRYPTED_API_KEY, "") ?: "")
         val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
             if (key == ENCRYPTED_API_KEY) {
@@ -105,9 +106,12 @@ class DataStoreSettingsRepository @Inject constructor(
     }
 
     override suspend fun isConfigured(): Boolean {
-        val apiKey = encryptedPrefs.getString(ENCRYPTED_API_KEY, "") ?: ""
-        val prefs = dataStore.data.first()
-        val baseUrl = prefs[BASE_URL] ?: ""
-        return apiKey.isNotEmpty() && baseUrl.isNotEmpty()
+        migrateIfNeeded()
+        return withContext(Dispatchers.IO) {
+            val apiKey = encryptedPrefs.getString(ENCRYPTED_API_KEY, "") ?: ""
+            val prefs = dataStore.data.first()
+            val baseUrl = prefs[BASE_URL] ?: ""
+            apiKey.isNotEmpty() && baseUrl.isNotEmpty()
+        }
     }
 }
