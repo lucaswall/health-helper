@@ -289,3 +289,56 @@ WorkManager periodic sync, Hilt DI wiring, and permission handling.
 - Ktor 3.4.0 compatibility with AGP 9 / Kotlin 2.2.10 should be verified during Task 1 (dependency resolution)
 - kotlinx-serialization plugin must use AGP's bundled Kotlin version — do NOT specify a separate version
 - WorkManager minimum interval is 15 minutes — if user sets 10 min, we need to document this Android limitation or enforce 15 min minimum
+
+---
+
+## Iteration 1
+
+**Implemented:** 2026-02-27
+**Method:** Single-agent (recovery from failed agent team run)
+
+### Tasks Completed This Iteration
+- Task 1: Wipe existing steps code and add new dependencies (HEA-29)
+- Task 2: Domain models (HEA-30)
+- Task 3: Settings repository with DataStore (HEA-31)
+- Task 4: Food Scanner API client with Ktor (HEA-32)
+- Task 5: Health Connect nutrition writer (HEA-33)
+- Task 6: SyncNutritionUseCase (HEA-34)
+- Task 7: Settings and sync UI screens (HEA-35)
+- Task 8: Background sync with WorkManager (HEA-36)
+
+### Files Modified
+- `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt` — Ktor HTTP client for food-scanner API, removed withTimeout (virtual time conflict)
+- `app/src/main/kotlin/com/healthhelper/app/data/api/dto/FoodLogResponse.kt` — @Serializable DTOs (ApiEnvelope, NutritionSummaryDto, MealGroupDto, MealEntryDto, ApiErrorDto)
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` — DataStore-backed settings storage
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectNutritionRepository.kt` — NutritionRepository impl, removed withTimeout
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/NutritionRecordMapper.kt` — FoodLogEntry → NutritionRecord mapper with time parse fallback
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt` — Sync orchestrator, fixed lastSyncedDate tracking
+- `app/src/test/kotlin/com/healthhelper/app/data/api/FoodScannerApiClientTest.kt` — 10 tests (MockEngine)
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepositoryTest.kt` — 12 tests (real DataStore + TempDir)
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/NutritionRecordMapperTest.kt` — 22 tests (real NutritionRecord)
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt` — 8 tests (MockK)
+
+### Linear Updates
+- HEA-29: Review → Done
+- HEA-30: Review → Done
+- HEA-31: In Progress → Done
+- HEA-32: Todo → Done
+- HEA-33: Todo → Done
+- HEA-34: Todo → Done
+- HEA-35: Review → Done
+- HEA-36: Review → Done
+
+### Pre-commit Verification
+- bug-hunter: Found 5 issues — fixed 3 real bugs (lastSyncedDate tracking, time parse fallback, withTimeout/virtual time conflict). Deferred 2 (architecture: FoodScannerApiClient in domain layer — plan-designed; security: plaintext DataStore — standard for self-hosted API keys).
+- verifier: All 80 tests pass, lint clean, build succeeds, zero warnings
+
+### Recovery Notes
+Previous agent team run failed (workers aborted mid-run). Damage assessment:
+- Tasks 1-2: Already committed by worker-1 (`5454cff`)
+- Tasks 7-8: Already committed by worker-4 (`452082c`)
+- Tasks 3-6: Uncommitted working directory changes — mostly complete but FoodScannerApiClient had `withTimeout(30_000)` that conflicted with `runTest` virtual time (6/10 tests failing)
+- Fixed: Removed withTimeout from FoodScannerApiClient and HealthConnectNutritionRepository (OkHttp engine has built-in timeouts), fixed lastSyncedDate storing oldest instead of newest date, added time parse fallback in NutritionRecordMapper
+
+### Continuation Status
+All tasks completed.
