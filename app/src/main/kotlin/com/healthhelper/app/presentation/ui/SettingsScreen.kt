@@ -10,9 +10,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
@@ -108,10 +110,29 @@ fun SettingsScreen(
             Slider(
                 value = uiState.syncInterval.toFloat(),
                 onValueChange = { viewModel.updateSyncInterval(it.toInt()) },
-                valueRange = 15f..120f,
-                steps = 6,
+                valueRange = 5f..120f,
+                steps = 22,
                 modifier = Modifier.fillMaxWidth(),
             )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedButton(
+                    onClick = { viewModel.reset() },
+                    enabled = uiState.hasUnsavedChanges,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Reset")
+                }
+                Button(
+                    onClick = { viewModel.save() },
+                    enabled = uiState.hasUnsavedChanges,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Save")
+                }
+            }
         }
     }
 }

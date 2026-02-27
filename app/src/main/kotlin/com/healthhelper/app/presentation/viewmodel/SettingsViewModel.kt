@@ -16,8 +16,9 @@ import javax.inject.Inject
 data class SettingsUiState(
     val apiKey: String = "",
     val baseUrl: String = "",
-    val syncInterval: Int = 15,
+    val syncInterval: Int = 5,
     val isConfigured: Boolean = false,
+    val hasUnsavedChanges: Boolean = false,
 )
 
 @HiltViewModel
@@ -28,6 +29,14 @@ class SettingsViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
 
+    private data class PersistedSettings(
+        val apiKey: String = "",
+        val baseUrl: String = "",
+        val syncInterval: Int = 5,
+    )
+
+    private var persistedSettings = PersistedSettings()
+
     init {
         viewModelScope.launch {
             combine(
@@ -37,6 +46,7 @@ class SettingsViewModel @Inject constructor(
             ) { apiKey, baseUrl, syncInterval ->
                 Triple(apiKey, baseUrl, syncInterval)
             }.collect { (apiKey, baseUrl, syncInterval) ->
+                persistedSettings = PersistedSettings(apiKey, baseUrl, syncInterval)
                 val configured = apiKey.isNotEmpty() && baseUrl.isNotEmpty()
                 _uiState.update {
                     it.copy(
@@ -44,6 +54,7 @@ class SettingsViewModel @Inject constructor(
                         baseUrl = baseUrl,
                         syncInterval = syncInterval,
                         isConfigured = configured,
+                        hasUnsavedChanges = false,
                     )
                 }
             }
@@ -51,35 +62,78 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun updateApiKey(value: String) {
-        _uiState.update { it.copy(apiKey = value) }
-        viewModelScope.launch {
-            try {
-                settingsRepository.setApiKey(value)
-            } catch (e: Exception) {
-                Timber.e(e, "Failed to save API key")
-            }
+        _uiState.update {
+            it.copy(apiKey = value).withDirtyFlag()
         }
     }
 
     fun updateBaseUrl(value: String) {
-        _uiState.update { it.copy(baseUrl = value) }
-        viewModelScope.launch {
-            try {
-                settingsRepository.setBaseUrl(value)
-            } catch (e: Exception) {
-                Timber.e(e, "Failed to save base URL")
-            }
+        _uiState.update {
+            it.copy(baseUrl = value).withDirtyFlag()
         }
     }
 
     fun updateSyncInterval(value: Int) {
-        _uiState.update { it.copy(syncInterval = value) }
+        _uiState.update {
+            it.copy(syncInterval = value).withDirtyFlag()
+        }
+    }
+
+    fun save() {
+        val current = _uiState.value
         viewModelScope.launch {
-            try {
-                settingsRepository.setSyncInterval(value)
+            var anyFailed = false
+            val apiKeySaved = try {
+                settingsRepository.setApiKey(current.apiKey)
+                true
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to save API key")
+                anyFailed = true
+                false
+            }
+            val baseUrlSaved = try {
+                settingsRepository.setBaseUrl(current.baseUrl)
+                true
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to save base URL")
+                anyFailed = true
+                false
+            }
+            val intervalSaved = try {
+                settingsRepository.setSyncInterval(current.syncInterval)
+                true
             } catch (e: Exception) {
                 Timber.e(e, "Failed to save sync interval")
+                anyFailed = true
+                false
             }
+            persistedSettings = PersistedSettings(
+                apiKey = if (apiKeySaved) current.apiKey else persistedSettings.apiKey,
+                baseUrl = if (baseUrlSaved) current.baseUrl else persistedSettings.baseUrl,
+                syncInterval = if (intervalSaved) current.syncInterval else persistedSettings.syncInterval,
+            )
+            _uiState.update { it.withDirtyFlag() }
         }
+    }
+
+    fun reset() {
+        _uiState.update {
+            val configured = persistedSettings.apiKey.isNotEmpty() &&
+                persistedSettings.baseUrl.isNotEmpty()
+            it.copy(
+                apiKey = persistedSettings.apiKey,
+                baseUrl = persistedSettings.baseUrl,
+                syncInterval = persistedSettings.syncInterval,
+                isConfigured = configured,
+                hasUnsavedChanges = false,
+            )
+        }
+    }
+
+    private fun SettingsUiState.withDirtyFlag(): SettingsUiState {
+        val dirty = apiKey != persistedSettings.apiKey ||
+            baseUrl != persistedSettings.baseUrl ||
+            syncInterval != persistedSettings.syncInterval
+        return copy(hasUnsavedChanges = dirty)
     }
 }

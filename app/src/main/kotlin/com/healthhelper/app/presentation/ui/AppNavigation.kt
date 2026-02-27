@@ -1,5 +1,7 @@
 package com.healthhelper.app.presentation.ui
 
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.runtime.Composable
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -12,6 +14,10 @@ fun AppNavigation() {
     NavHost(
         navController = navController,
         startDestination = "sync",
+        enterTransition = { EnterTransition.None },
+        exitTransition = { ExitTransition.None },
+        popEnterTransition = { EnterTransition.None },
+        popExitTransition = { ExitTransition.None },
     ) {
         composable("sync") {
             SyncScreen(

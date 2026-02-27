@@ -85,36 +85,195 @@ class SettingsViewModelTest {
     }
 
     @Test
-    fun `updateApiKey calls repository setApiKey`() = runTest {
+    fun `updateApiKey updates UI state but does not persist to repository`() = runTest {
         viewModel = createViewModel()
         advanceUntilIdle()
 
         viewModel.updateApiKey("new-api-key")
         advanceUntilIdle()
 
-        coVerify { settingsRepository.setApiKey("new-api-key") }
+        viewModel.uiState.test {
+            assertEquals("new-api-key", awaitItem().apiKey)
+            cancelAndIgnoreRemainingEvents()
+        }
+        coVerify(exactly = 0) { settingsRepository.setApiKey(any()) }
     }
 
     @Test
-    fun `updateBaseUrl calls repository setBaseUrl`() = runTest {
+    fun `updateBaseUrl updates UI state but does not persist to repository`() = runTest {
         viewModel = createViewModel()
         advanceUntilIdle()
 
         viewModel.updateBaseUrl("https://new-url.com")
         advanceUntilIdle()
 
-        coVerify { settingsRepository.setBaseUrl("https://new-url.com") }
+        viewModel.uiState.test {
+            assertEquals("https://new-url.com", awaitItem().baseUrl)
+            cancelAndIgnoreRemainingEvents()
+        }
+        coVerify(exactly = 0) { settingsRepository.setBaseUrl(any()) }
     }
 
     @Test
-    fun `updateSyncInterval calls repository setSyncInterval`() = runTest {
+    fun `updateSyncInterval updates UI state but does not persist to repository`() = runTest {
         viewModel = createViewModel()
         advanceUntilIdle()
 
         viewModel.updateSyncInterval(60)
         advanceUntilIdle()
 
+        viewModel.uiState.test {
+            assertEquals(60, awaitItem().syncInterval)
+            cancelAndIgnoreRemainingEvents()
+        }
+        coVerify(exactly = 0) { settingsRepository.setSyncInterval(any()) }
+    }
+
+    @Test
+    fun `hasUnsavedChanges is false when UI matches persisted state`() = runTest {
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            assertFalse(awaitItem().hasUnsavedChanges)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `hasUnsavedChanges is true after updateApiKey with different value`() = runTest {
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.updateApiKey("changed-key")
+
+        viewModel.uiState.test {
+            assertTrue(awaitItem().hasUnsavedChanges)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `hasUnsavedChanges is true after updateBaseUrl with different value`() = runTest {
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.updateBaseUrl("https://changed-url.com")
+
+        viewModel.uiState.test {
+            assertTrue(awaitItem().hasUnsavedChanges)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `hasUnsavedChanges is true after updateSyncInterval with different value`() = runTest {
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.updateSyncInterval(60)
+
+        viewModel.uiState.test {
+            assertTrue(awaitItem().hasUnsavedChanges)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `save persists all current settings to repository`() = runTest {
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.updateApiKey("new")
+        viewModel.updateBaseUrl("https://new-url.com")
+        viewModel.updateSyncInterval(60)
+        viewModel.save()
+        advanceUntilIdle()
+
+        coVerify { settingsRepository.setApiKey("new") }
+        coVerify { settingsRepository.setBaseUrl("https://new-url.com") }
         coVerify { settingsRepository.setSyncInterval(60) }
+    }
+
+    @Test
+    fun `save sets hasUnsavedChanges to false`() = runTest {
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.updateApiKey("changed")
+        viewModel.uiState.test {
+            assertTrue(awaitItem().hasUnsavedChanges)
+            cancelAndIgnoreRemainingEvents()
+        }
+
+        viewModel.save()
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            assertFalse(awaitItem().hasUnsavedChanges)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `reset reverts UI state to persisted values`() = runTest {
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.updateApiKey("changed")
+        viewModel.uiState.test {
+            assertEquals("changed", awaitItem().apiKey)
+            cancelAndIgnoreRemainingEvents()
+        }
+
+        viewModel.reset()
+
+        viewModel.uiState.test {
+            assertEquals("test-key", awaitItem().apiKey)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `reset sets hasUnsavedChanges to false`() = runTest {
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.updateApiKey("changed")
+        viewModel.reset()
+
+        viewModel.uiState.test {
+            assertFalse(awaitItem().hasUnsavedChanges)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `save handles repository exception gracefully`() = runTest {
+        coEvery { settingsRepository.setApiKey(any()) } throws RuntimeException("write failed")
+
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.updateApiKey("new-key")
+        viewModel.save()
+        advanceUntilIdle()
+
+        // Should not crash — verify base URL and sync interval still attempted
+        coVerify { settingsRepository.setBaseUrl(any()) }
+        coVerify { settingsRepository.setSyncInterval(any()) }
+
+        // apiKey write failed — should remain dirty
+        viewModel.uiState.test {
+            assertTrue(awaitItem().hasUnsavedChanges)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `default SettingsUiState has syncInterval of 5`() {
+        val state = SettingsUiState()
+        assertEquals(5, state.syncInterval)
     }
 
     @Test

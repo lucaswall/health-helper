@@ -373,3 +373,45 @@ Implement Settings Save/Reset workflow, reduce sync interval minimum, disable na
 - Non-linear slider step distribution
 - Automated testing of agent/skill markdown changes
 - Any other Backlog issues not listed above
+
+---
+
+## Iteration 1
+
+**Implemented:** 2026-02-27
+**Method:** Single-agent
+
+### Tasks Completed This Iteration
+- Task 1: Decouple SettingsViewModel update methods from persistence
+- Task 2: Add hasUnsavedChanges, save(), and reset() to SettingsViewModel
+- Task 3: Add Save and Reset buttons to SettingsScreen
+- Task 4: Update sync interval range and default
+- Task 5: Disable navigation transition animations
+- Task 6: Add missing checks to bug-hunter agent
+- Task 7: Add cross-cutting requirements checklist to plan skills
+- Task 8: Integration & Verification
+
+### Files Modified
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModel.kt` — Decoupled update methods from persistence, added `hasUnsavedChanges`, `save()`, `reset()`, `PersistedSettings` tracking, partial-failure-safe save with `withDirtyFlag()`, changed default syncInterval to 5
+- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModelTest.kt` — Replaced 3 persist-on-update tests with no-persist assertions, added 9 new tests for dirty state, save, reset, error handling
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SettingsScreen.kt` — Added Save/Reset buttons, changed slider range to 5-120 with 22 steps
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` — Changed DEFAULT_SYNC_INTERVAL from 15 to 5
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepositoryTest.kt` — Updated default sync interval test from 15 to 5
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/AppNavigation.kt` — Added EnterTransition.None/ExitTransition.None to NavHost
+- `.claude/agents/bug-hunter.md` — Added Data Persistence, dead test code, and UI Safety check sections
+- `.claude/skills/plan-backlog/SKILL.md` — Added cross-cutting requirements sweep (Section 4.5)
+- `.claude/skills/plan-inline/SKILL.md` — Added cross-cutting requirements sweep (step 9)
+
+### Linear Updates
+- HEA-80: Todo → In Progress → Review
+- HEA-81: Todo → In Progress → Review
+- HEA-82: Todo → In Progress → Review
+- HEA-79: Todo → In Progress → Review
+- HEA-78: Todo → In Progress → Review
+
+### Pre-commit Verification
+- bug-hunter: Found 2 bugs (partial save corruption, weak error test), fixed before proceeding
+- verifier: All 138 tests pass, zero warnings, build successful
+
+### Continuation Status
+All tasks completed.

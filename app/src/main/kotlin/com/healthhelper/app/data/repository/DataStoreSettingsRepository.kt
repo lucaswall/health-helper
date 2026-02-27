@@ -29,7 +29,7 @@ class DataStoreSettingsRepository @Inject constructor(
         val BASE_URL = stringPreferencesKey("base_url")
         val SYNC_INTERVAL = intPreferencesKey("sync_interval")
         val LAST_SYNCED_DATE = stringPreferencesKey("last_synced_date")
-        const val DEFAULT_SYNC_INTERVAL = 15
+        const val DEFAULT_SYNC_INTERVAL = 5
         const val ENCRYPTED_API_KEY = "api_key"
     }
 

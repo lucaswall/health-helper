@@ -273,6 +273,20 @@ After writing the plan but before committing, re-read CLAUDE.md and cross-check 
 
 Fix any violations found before proceeding. This step prevents the plan itself from introducing bugs.
 
+#### 4.5 Cross-Cutting Requirements Sweep
+
+After writing all tasks, scan the entire plan for these patterns. If a pattern is detected in ANY task, verify the corresponding specification exists in that task's Defensive Requirements or TDD steps. If missing, add it before finalizing the plan.
+
+| Pattern Detected in Plan | Required Specification |
+|--------------------------|----------------------|
+| Networking code (HTTP client, API calls, Ktor) | Timeout value and timeout error handling behavior |
+| Error messages shown to users (UI state error fields, Toast, Snackbar) | Sanitization — generic user message, raw error logged only |
+| `viewModelScope.launch` or coroutine builders | Error handling (try-catch) and behavior on exception |
+| SharedPreferences / DataStore writes in suspend context | Durability semantics (commit vs apply, edit vs write) |
+| Health Connect operations | Timeout, permission check, SDK availability check |
+| Intent / Activity launch | ActivityNotFoundException handling and fallback |
+| Repeated user-triggered operations (button clicks, pull-to-refresh) | Cancellation of in-flight work before starting new |
+
 ---
 
 ## Task Writing Guidelines
