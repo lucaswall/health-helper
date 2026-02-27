@@ -1,6 +1,7 @@
 # Implementation Plan
 
 **Created:** 2026-02-27
+**Status:** COMPLETE
 **Source:** Inline request: Food Scanner API integration — sync meal data to Health Connect via NutritionRecord, with settings screen and background sync
 **Linear Issues:** [HEA-29](https://linear.app/lw-claude/issue/HEA-29), [HEA-30](https://linear.app/lw-claude/issue/HEA-30), [HEA-31](https://linear.app/lw-claude/issue/HEA-31), [HEA-32](https://linear.app/lw-claude/issue/HEA-32), [HEA-33](https://linear.app/lw-claude/issue/HEA-33), [HEA-34](https://linear.app/lw-claude/issue/HEA-34), [HEA-35](https://linear.app/lw-claude/issue/HEA-35), [HEA-36](https://linear.app/lw-claude/issue/HEA-36)
 
@@ -481,3 +482,58 @@ Summary: 10 issue(s) found (single-agent deep review — security, reliability, 
 3. Implement in `FoodScannerApiClient.kt:26`:
    - Change `"$baseUrl/api/v1/food-log"` to `"${baseUrl.trimEnd('/')}/api/v1/food-log"`
 4. Run verifier (expect pass)
+
+---
+
+## Iteration 2 (Fix Plan)
+
+**Implemented:** 2026-02-27
+**Method:** Single-agent (user requested solo implementation)
+
+### Tasks Completed This Iteration
+- Fix 1: HC WRITE_NUTRITION permission handling (HEA-38)
+- Fix 2: lastSyncedDate gap bug (HEA-37)
+- Fix 3: SyncViewModel isConfigured stale (HEA-39)
+- Fix 4: App crashes if HC unavailable (HEA-40)
+- Fix 5: Misleading SyncResult.Success(0) (HEA-41)
+- Fix 6: WorkManager timer reset (HEA-42)
+- Fix 7: Base URL trailing slash (HEA-43)
+
+### Files Modified
+- `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt` — trimEnd('/') on baseUrl
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectNutritionRepository.kt` — nullable HealthConnectClient, null guard
+- `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt` — getSdkStatus() check, nullable return type
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt` — contiguous-range lastSyncedDate tracking, totalEntriesFetched counter, HC write failure detection
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SyncScreen.kt` — HC permission launcher, permission UI, button guard
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` — 4-flow combine for isConfigured, distinctUntilChanged for scheduler, HC client injection, permission state
+- `app/src/test/kotlin/com/healthhelper/app/data/api/FoodScannerApiClientTest.kt` — trailing slash test
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/HealthConnectNutritionRepositoryTest.kt` — new file, null client test
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt` — 7 new tests (gap tracking, contiguous range, caps, HC write failure)
+- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt` — 7 new tests (isConfigured reactive, scheduler dedup, HC availability, permission)
+
+### Bug-Hunter Post-Fix Findings
+- Fixed: default `healthConnectAvailable = true` → changed to `false`
+- Fixed: LaunchedEffect auto-launched permission dialog → only shows message
+- Fixed: Sync button enabled without permission → added `permissionGranted` guard
+- Fixed: Weak test assertion in hcWriteFailureContinues → added count check
+
+### Verification
+- All 96 tests pass (80 original + 16 new)
+- Build successful, zero warnings
+
+### Linear Updates
+- HEA-37: Todo → Merge (Fix: lastSyncedDate gap)
+- HEA-38: Todo → Merge (Fix: HC permission handling)
+- HEA-39: Todo → Merge (Fix: isConfigured stale)
+- HEA-40: Todo → Merge (Fix: HC crash)
+- HEA-41: Todo → Merge (Fix: misleading Success(0))
+- HEA-42: Todo → Merge (Fix: WorkManager timer reset)
+- HEA-43: Todo → Merge (Fix: trailing slash)
+
+<!-- REVIEW COMPLETE -->
+
+---
+
+## Status: COMPLETE
+
+All tasks implemented and reviewed successfully. All Linear issues moved to Merge.

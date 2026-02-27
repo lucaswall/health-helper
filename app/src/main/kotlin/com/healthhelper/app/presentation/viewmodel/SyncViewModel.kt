@@ -7,12 +7,14 @@ import com.healthhelper.app.domain.model.SyncProgress
 import com.healthhelper.app.domain.model.SyncResult
 import com.healthhelper.app.domain.repository.SettingsRepository
 import com.healthhelper.app.domain.usecase.SyncNutritionUseCase
+import androidx.health.connect.client.HealthConnectClient
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -23,6 +25,8 @@ data class SyncUiState(
     val syncProgress: SyncProgress? = null,
     val isConfigured: Boolean = false,
     val lastSyncedDate: String = "",
+    val healthConnectAvailable: Boolean = false,
+    val permissionGranted: Boolean = false,
 )
 
 @HiltViewModel
@@ -30,6 +34,7 @@ class SyncViewModel @Inject constructor(
     private val syncNutritionUseCase: SyncNutritionUseCase,
     private val settingsRepository: SettingsRepository,
     private val syncScheduler: SyncScheduler,
+    private val healthConnectClient: HealthConnectClient?,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SyncUiState())
@@ -38,25 +43,49 @@ class SyncViewModel @Inject constructor(
     private var syncJob: Job? = null
 
     init {
+        _uiState.update {
+            it.copy(healthConnectAvailable = healthConnectClient != null)
+        }
+
+        // Observe all settings flows for UI state — isConfigured derived reactively
         viewModelScope.launch {
             combine(
+                settingsRepository.apiKeyFlow,
+                settingsRepository.baseUrlFlow,
                 settingsRepository.syncIntervalFlow,
                 settingsRepository.lastSyncedDateFlow,
-            ) { syncInterval, lastSyncedDate ->
-                Pair(syncInterval, lastSyncedDate)
-            }.collect { (syncInterval, lastSyncedDate) ->
-                val configured = settingsRepository.isConfigured()
+            ) { apiKey, baseUrl, _, lastSyncedDate ->
+                val configured = apiKey.isNotEmpty() && baseUrl.isNotEmpty()
+                Pair(configured, lastSyncedDate)
+            }.collect { (configured, lastSyncedDate) ->
                 _uiState.update {
                     it.copy(
                         isConfigured = configured,
                         lastSyncedDate = lastSyncedDate,
                     )
                 }
+            }
+        }
+
+        // Schedule periodic sync only when interval or configured status changes
+        viewModelScope.launch {
+            combine(
+                settingsRepository.syncIntervalFlow,
+                settingsRepository.apiKeyFlow,
+                settingsRepository.baseUrlFlow,
+            ) { interval, apiKey, baseUrl ->
+                val configured = apiKey.isNotEmpty() && baseUrl.isNotEmpty()
+                Pair(interval, configured)
+            }.distinctUntilChanged().collect { (interval, configured) ->
                 if (configured) {
-                    syncScheduler.schedulePeriodic(syncInterval)
+                    syncScheduler.schedulePeriodic(interval)
                 }
             }
         }
+    }
+
+    fun onPermissionResult(granted: Boolean) {
+        _uiState.update { it.copy(permissionGranted = granted) }
     }
 
     fun triggerSync() {
@@ -77,7 +106,6 @@ class SyncViewModel @Inject constructor(
                     isSyncing = false,
                     lastSyncResult = resultMessage,
                     syncProgress = null,
-                    isConfigured = result !is SyncResult.NeedsConfiguration || it.isConfigured,
                 )
             }
         }

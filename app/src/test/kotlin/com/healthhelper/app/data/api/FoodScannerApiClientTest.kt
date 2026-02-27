@@ -15,6 +15,7 @@ import kotlinx.serialization.json.Json
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class FoodScannerApiClientTest {
@@ -247,5 +248,21 @@ class FoodScannerApiClientTest {
         assertEquals(MealType.SNACK, entries[3].mealType)
         assertEquals(MealType.DINNER, entries[4].mealType)
         assertEquals(MealType.SNACK, entries[5].mealType)
+    }
+
+    @Test
+    @DisplayName("base URL with trailing slash produces correct URL without double slash")
+    fun trailingSlashHandled() = runTest {
+        var capturedUrl: String? = null
+        val engine = MockEngine { request ->
+            capturedUrl = request.url.toString()
+            respond(content = successResponse, headers = jsonHeaders)
+        }
+        val client = createClient(engine)
+
+        client.getFoodLog("https://food.example.com/", "fsk_test", "2026-02-27")
+
+        assertTrue(capturedUrl!!.contains("/api/v1/food-log"))
+        assertFalse(capturedUrl!!.contains("//api"))
     }
 }

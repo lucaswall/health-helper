@@ -43,13 +43,17 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideHealthConnectClient(@ApplicationContext context: Context): HealthConnectClient =
-        HealthConnectClient.getOrCreate(context)
+    fun provideHealthConnectClient(@ApplicationContext context: Context): HealthConnectClient? =
+        if (HealthConnectClient.getSdkStatus(context) == HealthConnectClient.SDK_AVAILABLE) {
+            HealthConnectClient.getOrCreate(context)
+        } else {
+            null
+        }
 
     @Provides
     @Singleton
     fun provideNutritionRepository(
-        healthConnectClient: HealthConnectClient,
+        healthConnectClient: HealthConnectClient?,
     ): NutritionRepository = HealthConnectNutritionRepository(healthConnectClient)
 
     @Provides

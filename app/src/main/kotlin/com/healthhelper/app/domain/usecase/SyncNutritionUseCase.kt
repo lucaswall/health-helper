@@ -46,8 +46,10 @@ class SyncNutritionUseCase @Inject constructor(
         val totalDays = dates.size
         var completedDays = 0
         var totalRecordsSynced = 0
+        var totalEntriesFetched = 0
         var successfulDays = 0
-        var newestSyncedPastDate: String? = null
+        // Track per-date success for contiguous lastSyncedDate calculation
+        val pastDateResults = mutableMapOf<LocalDate, Boolean>()
 
         for (date in dates) {
             val dateStr = date.format(DateTimeFormatter.ISO_LOCAL_DATE)
@@ -56,16 +58,19 @@ class SyncNutritionUseCase @Inject constructor(
             if (result.isSuccess) {
                 val entries = result.getOrThrow()
                 if (entries.isNotEmpty()) {
+                    totalEntriesFetched += entries.size
                     val written = nutritionRepository.writeNutritionRecords(dateStr, entries)
                     if (written) {
                         totalRecordsSynced += entries.size
                     }
                 }
                 successfulDays++
-
-                // Track newest synced past date (loop goes newest-first)
-                if (date != today && newestSyncedPastDate == null) {
-                    newestSyncedPastDate = dateStr
+                if (date != today) {
+                    pastDateResults[date] = true
+                }
+            } else {
+                if (date != today) {
+                    pastDateResults[date] = false
                 }
             }
 
@@ -85,15 +90,25 @@ class SyncNutritionUseCase @Inject constructor(
             }
         }
 
-        // Persist newest synced past date after loop completes
-        if (newestSyncedPastDate != null) {
-            settingsRepository.setLastSyncedDate(newestSyncedPastDate)
+        // Persist lastSyncedDate: find newest contiguous successful date from oldest end
+        val pastDates = pastDateResults.keys.sorted() // oldest first
+        var contiguousEnd: LocalDate? = null
+        for (date in pastDates) {
+            if (pastDateResults[date] == true) {
+                contiguousEnd = date
+            } else {
+                break // gap found — stop advancing
+            }
+        }
+        if (contiguousEnd != null) {
+            settingsRepository.setLastSyncedDate(contiguousEnd.format(DateTimeFormatter.ISO_LOCAL_DATE))
         }
 
-        return if (successfulDays > 0) {
-            SyncResult.Success(totalRecordsSynced)
-        } else {
-            SyncResult.Error("All sync attempts failed")
+        return when {
+            successfulDays == 0 -> SyncResult.Error("All sync attempts failed")
+            totalEntriesFetched > 0 && totalRecordsSynced == 0 ->
+                SyncResult.Error("Failed to write records to Health Connect")
+            else -> SyncResult.Success(totalRecordsSynced)
         }
     }
 }

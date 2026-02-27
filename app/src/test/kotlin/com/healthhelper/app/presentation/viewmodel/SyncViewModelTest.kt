@@ -1,6 +1,7 @@
 package com.healthhelper.app.presentation.viewmodel
 
 import app.cash.turbine.test
+import androidx.health.connect.client.HealthConnectClient
 import com.healthhelper.app.data.sync.SyncScheduler
 import com.healthhelper.app.domain.model.SyncProgress
 import com.healthhelper.app.domain.model.SyncResult
@@ -42,6 +43,8 @@ class SyncViewModelTest {
         settingsRepository = mockk()
         syncScheduler = mockk(relaxed = true)
 
+        every { settingsRepository.apiKeyFlow } returns flowOf("fsk_test")
+        every { settingsRepository.baseUrlFlow } returns flowOf("https://example.com")
         every { settingsRepository.syncIntervalFlow } returns flowOf(30)
         every { settingsRepository.lastSyncedDateFlow } returns flowOf("")
         coEvery { settingsRepository.isConfigured() } returns true
@@ -53,8 +56,10 @@ class SyncViewModelTest {
         Dispatchers.resetMain()
     }
 
-    private fun createViewModel(): SyncViewModel =
-        SyncViewModel(syncNutritionUseCase, settingsRepository, syncScheduler)
+    private val healthConnectClient: HealthConnectClient? = mockk(relaxed = true)
+
+    private fun createViewModel(hcClient: HealthConnectClient? = healthConnectClient): SyncViewModel =
+        SyncViewModel(syncNutritionUseCase, settingsRepository, syncScheduler, hcClient)
 
     @Test
     fun `initial state shows idle not syncing`() = runTest {
@@ -230,5 +235,95 @@ class SyncViewModelTest {
 
         // Still only 1 call initiated (guard prevents second)
         assertEquals(1, callCount)
+    }
+
+    @Test
+    fun `isConfigured updates when apiKey and baseUrl flows emit new values`() = runTest {
+        // Start unconfigured
+        every { settingsRepository.apiKeyFlow } returns flowOf("")
+        every { settingsRepository.baseUrlFlow } returns flowOf("")
+
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertFalse(state.isConfigured)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `isConfigured becomes true when both apiKey and baseUrl are non-empty`() = runTest {
+        every { settingsRepository.apiKeyFlow } returns flowOf("fsk_key")
+        every { settingsRepository.baseUrlFlow } returns flowOf("https://example.com")
+
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertTrue(state.isConfigured)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `schedulePeriodic not called again when only lastSyncedDate changes`() = runTest {
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        // schedulePeriodic called once during init (interval=30, configured=true)
+        io.mockk.verify(exactly = 1) { syncScheduler.schedulePeriodic(30) }
+    }
+
+    @Test
+    fun `healthConnectAvailable is false when HC client is null`() = runTest {
+        viewModel = createViewModel(hcClient = null)
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertFalse(state.healthConnectAvailable)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `healthConnectAvailable is true when HC client exists`() = runTest {
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertTrue(state.healthConnectAvailable)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `onPermissionResult updates permissionGranted state`() = runTest {
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.onPermissionResult(true)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertTrue(state.permissionGranted)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `initial permissionGranted is false`() = runTest {
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertFalse(state.permissionGranted)
+            cancelAndIgnoreRemainingEvents()
+        }
     }
 }

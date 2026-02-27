@@ -23,7 +23,7 @@ class FoodScannerApiClient @Inject constructor(
         date: String,
     ): Result<List<FoodLogEntry>> {
         return try {
-            val response = httpClient.get("$baseUrl/api/v1/food-log") {
+            val response = httpClient.get("${baseUrl.trimEnd('/')}/api/v1/food-log") {
                 parameter("date", date)
                 bearerAuth(apiKey)
             }
