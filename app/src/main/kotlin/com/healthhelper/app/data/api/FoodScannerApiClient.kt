@@ -10,6 +10,7 @@ import io.ktor.client.request.bearerAuth
 import io.ktor.client.request.get
 import io.ktor.client.request.parameter
 import io.ktor.http.isSuccess
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.serialization.SerializationException
 import timber.log.Timber
 import javax.inject.Inject
@@ -22,6 +23,9 @@ class FoodScannerApiClient @Inject constructor(
         apiKey: String,
         date: String,
     ): Result<List<FoodLogEntry>> {
+        if (baseUrl.isBlank() || !baseUrl.lowercase().startsWith("https://")) {
+            return Result.failure(Exception("HTTPS required for API connections"))
+        }
         return try {
             val response = httpClient.get("${baseUrl.trimEnd('/')}/api/v1/food-log") {
                 parameter("date", date)
@@ -35,15 +39,22 @@ class FoodScannerApiClient @Inject constructor(
                     429 -> "Rate limited"
                     else -> "HTTP error $status"
                 }
-                Timber.e("getFoodLog(%s) HTTP error: %d", date, status)
+                if (status == 401) {
+                    Timber.w("getFoodLog(%s) HTTP error: %d", date, status)
+                } else {
+                    Timber.e("getFoodLog(%s) HTTP error: %d", date, status)
+                }
                 return Result.failure(Exception(message))
             }
 
             val envelope: ApiEnvelope<NutritionSummaryDto> = response.body()
 
             if (!envelope.success) {
-                val errorMsg = envelope.error?.message ?: "API returned success=false"
-                Result.failure(Exception(errorMsg))
+                val serverMsg = envelope.error?.message
+                if (serverMsg != null) {
+                    Timber.d("getFoodLog(%s) server error: %s", date, serverMsg)
+                }
+                Result.failure(Exception("Server returned an error"))
             } else {
                 val entries = envelope.data?.meals?.flatMap { mealGroup ->
                     mealGroup.entries.map { entry ->
@@ -71,6 +82,7 @@ class FoodScannerApiClient @Inject constructor(
             Timber.e(e, "getFoodLog(%s) parse error", date)
             Result.failure(Exception("Failed to parse response"))
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             Timber.e(e, "getFoodLog(%s) error", date)
             Result.failure(e)
         }

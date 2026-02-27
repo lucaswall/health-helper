@@ -9,7 +9,9 @@ import com.healthhelper.app.domain.repository.SettingsRepository
 import com.healthhelper.app.domain.usecase.SyncNutritionUseCase
 import androidx.health.connect.client.HealthConnectClient
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import timber.log.Timber
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -52,9 +54,8 @@ class SyncViewModel @Inject constructor(
             combine(
                 settingsRepository.apiKeyFlow,
                 settingsRepository.baseUrlFlow,
-                settingsRepository.syncIntervalFlow,
                 settingsRepository.lastSyncedDateFlow,
-            ) { apiKey, baseUrl, _, lastSyncedDate ->
+            ) { apiKey, baseUrl, lastSyncedDate ->
                 val configured = apiKey.isNotEmpty() && baseUrl.isNotEmpty()
                 Pair(configured, lastSyncedDate)
             }.collect { (configured, lastSyncedDate) ->
@@ -91,22 +92,25 @@ class SyncViewModel @Inject constructor(
     fun triggerSync() {
         if (_uiState.value.isSyncing) return
         syncJob?.cancel()
+        _uiState.update { it.copy(isSyncing = true, syncProgress = null) }
         syncJob = viewModelScope.launch {
-            _uiState.update { it.copy(isSyncing = true, syncProgress = null) }
-            val result = syncNutritionUseCase.invoke { progress ->
-                _uiState.update { it.copy(syncProgress = progress) }
-            }
-            val resultMessage = when (result) {
-                is SyncResult.Success -> "Synced ${result.recordsSynced} records"
-                is SyncResult.Error -> "Error: ${result.message}"
-                is SyncResult.NeedsConfiguration -> "Please configure API settings"
-            }
-            _uiState.update {
-                it.copy(
-                    isSyncing = false,
-                    lastSyncResult = resultMessage,
-                    syncProgress = null,
-                )
+            try {
+                val result = syncNutritionUseCase.invoke { progress ->
+                    _uiState.update { it.copy(syncProgress = progress) }
+                }
+                val resultMessage = when (result) {
+                    is SyncResult.Success -> "Synced ${result.recordsSynced} records"
+                    is SyncResult.Error -> "Error: ${result.message}"
+                    is SyncResult.NeedsConfiguration -> "Please configure API settings"
+                }
+                _uiState.update { it.copy(lastSyncResult = resultMessage) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Timber.e(e, "triggerSync unexpected error")
+                _uiState.update { it.copy(lastSyncResult = "Sync failed. Please try again.") }
+            } finally {
+                _uiState.update { it.copy(isSyncing = false, syncProgress = null) }
             }
         }
     }

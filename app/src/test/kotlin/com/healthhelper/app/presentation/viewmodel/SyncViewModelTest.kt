@@ -162,8 +162,7 @@ class SyncViewModelTest {
     }
 
     @Test
-    fun `progress updates are reflected in UI state`() = runTest {
-        val capturedProgress = mutableListOf<SyncProgress>()
+    fun `syncProgress is null after sync completes`() = runTest {
         coEvery { syncNutritionUseCase.invoke(any()) } coAnswers {
             val onProgress = firstArg<(SyncProgress) -> Unit>()
             onProgress(SyncProgress("2024-01-01", 5, 1, 10))
@@ -177,38 +176,11 @@ class SyncViewModelTest {
         viewModel.triggerSync()
         advanceUntilIdle()
 
-        // After completion, syncProgress should be null
         viewModel.uiState.test {
             val state = awaitItem()
             assertNull(state.syncProgress)
             cancelAndIgnoreRemainingEvents()
         }
-    }
-
-    @Test
-    fun `cannot trigger sync while already syncing`() = runTest {
-        var callCount = 0
-        coEvery { syncNutritionUseCase.invoke(any()) } coAnswers {
-            callCount++
-            SyncResult.Success(1)
-        }
-        coEvery { settingsRepository.isConfigured() } returns true
-
-        viewModel = createViewModel()
-        advanceUntilIdle()
-
-        // Simulate already syncing
-        viewModel.triggerSync()
-        // Immediately try again — but since advanceUntilIdle not called,
-        // the first sync completes atomically in test dispatcher; just verify idempotency
-        advanceUntilIdle()
-
-        // Second trigger when not syncing: allowed
-        viewModel.triggerSync()
-        advanceUntilIdle()
-
-        // At least 2 total calls happened (both triggers succeeded since syncing completed)
-        assertTrue(callCount >= 1)
     }
 
     @Test
@@ -311,6 +283,24 @@ class SyncViewModelTest {
         viewModel.uiState.test {
             val state = awaitItem()
             assertTrue(state.permissionGranted)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `triggerSync resets isSyncing and sets error message on unexpected exception`() = runTest {
+        coEvery { syncNutritionUseCase.invoke(any()) } throws RuntimeException("unexpected")
+
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.triggerSync()
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertFalse(state.isSyncing)
+            assertEquals("Sync failed. Please try again.", state.lastSyncResult)
             cancelAndIgnoreRemainingEvents()
         }
     }

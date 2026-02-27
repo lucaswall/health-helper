@@ -1,18 +1,19 @@
 package com.healthhelper.app.domain.usecase
 
-import com.healthhelper.app.data.api.FoodScannerApiClient
 import com.healthhelper.app.domain.model.SyncProgress
 import com.healthhelper.app.domain.model.SyncResult
+import com.healthhelper.app.domain.repository.FoodLogRepository
 import com.healthhelper.app.domain.repository.NutritionRepository
 import com.healthhelper.app.domain.repository.SettingsRepository
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
 import javax.inject.Inject
 
 class SyncNutritionUseCase @Inject constructor(
-    private val apiClient: FoodScannerApiClient,
+    private val foodLogRepository: FoodLogRepository,
     private val nutritionRepository: NutritionRepository,
     private val settingsRepository: SettingsRepository,
 ) {
@@ -27,13 +28,7 @@ class SyncNutritionUseCase @Inject constructor(
 
         val today = LocalDate.now()
         val maxPastDate = today.minusDays(365)
-        val startDate = if (lastSyncedDate.isNotEmpty()) {
-            val lastDate = LocalDate.parse(lastSyncedDate, DateTimeFormatter.ISO_LOCAL_DATE)
-            val nextDate = lastDate.plusDays(1)
-            if (nextDate.isAfter(maxPastDate)) nextDate else maxPastDate
-        } else {
-            maxPastDate
-        }
+        val startDate = parseSyncStartDate(lastSyncedDate, maxPastDate)
 
         // Build date list: today first (always re-sync), then backwards
         val dates = mutableListOf(today)
@@ -53,7 +48,7 @@ class SyncNutritionUseCase @Inject constructor(
 
         for (date in dates) {
             val dateStr = date.format(DateTimeFormatter.ISO_LOCAL_DATE)
-            val result = apiClient.getFoodLog(baseUrl, apiKey, dateStr)
+            val result = foodLogRepository.getFoodLog(baseUrl, apiKey, dateStr)
 
             if (result.isSuccess) {
                 val entries = result.getOrThrow()
@@ -109,6 +104,18 @@ class SyncNutritionUseCase @Inject constructor(
             totalEntriesFetched > 0 && totalRecordsSynced == 0 ->
                 SyncResult.Error("Failed to write records to Health Connect")
             else -> SyncResult.Success(totalRecordsSynced)
+        }
+    }
+
+    private fun parseSyncStartDate(lastSyncedDate: String, maxPastDate: LocalDate): LocalDate {
+        if (lastSyncedDate.isEmpty()) return maxPastDate
+        return try {
+            val lastDate = LocalDate.parse(lastSyncedDate, DateTimeFormatter.ISO_LOCAL_DATE)
+            val nextDate = lastDate.plusDays(1)
+            if (nextDate.isAfter(maxPastDate)) nextDate else maxPastDate
+        } catch (e: DateTimeParseException) {
+            // Corrupt date in DataStore — treat as unsynced and do a full re-sync from maxPastDate
+            maxPastDate
         }
     }
 }

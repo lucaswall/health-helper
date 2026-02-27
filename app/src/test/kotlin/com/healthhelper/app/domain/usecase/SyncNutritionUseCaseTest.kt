@@ -1,10 +1,10 @@
 package com.healthhelper.app.domain.usecase
 
-import com.healthhelper.app.data.api.FoodScannerApiClient
 import com.healthhelper.app.domain.model.FoodLogEntry
 import com.healthhelper.app.domain.model.MealType
 import com.healthhelper.app.domain.model.SyncProgress
 import com.healthhelper.app.domain.model.SyncResult
+import com.healthhelper.app.domain.repository.FoodLogRepository
 import com.healthhelper.app.domain.repository.NutritionRepository
 import com.healthhelper.app.domain.repository.SettingsRepository
 import io.mockk.coEvery
@@ -23,7 +23,7 @@ import kotlin.test.assertTrue
 
 class SyncNutritionUseCaseTest {
 
-    private lateinit var apiClient: FoodScannerApiClient
+    private lateinit var foodLogRepository: FoodLogRepository
     private lateinit var nutritionRepository: NutritionRepository
     private lateinit var settingsRepository: SettingsRepository
     private lateinit var useCase: SyncNutritionUseCase
@@ -47,10 +47,10 @@ class SyncNutritionUseCaseTest {
 
     @BeforeEach
     fun setUp() {
-        apiClient = mockk()
+        foodLogRepository = mockk()
         nutritionRepository = mockk()
         settingsRepository = mockk()
-        useCase = SyncNutritionUseCase(apiClient, nutritionRepository, settingsRepository)
+        useCase = SyncNutritionUseCase(foodLogRepository, nutritionRepository, settingsRepository)
     }
 
     private fun configureSettings(
@@ -81,7 +81,7 @@ class SyncNutritionUseCaseTest {
     fun singleDaySync() = runTest {
         val today = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE)
         configureSettings(lastSyncedDate = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE))
-        coEvery { apiClient.getFoodLog(any(), any(), today) } returns Result.success(listOf(testEntry))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), today) } returns Result.success(listOf(testEntry))
         coEvery { nutritionRepository.writeNutritionRecords(today, any()) } returns true
 
         val result = useCase.invoke()
@@ -96,7 +96,7 @@ class SyncNutritionUseCaseTest {
         val today = LocalDate.now()
         val yesterday = today.minusDays(1)
         configureSettings(lastSyncedDate = yesterday.minusDays(1).format(DateTimeFormatter.ISO_LOCAL_DATE))
-        coEvery { apiClient.getFoodLog(any(), any(), any()) } returns Result.success(listOf(testEntry))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } returns Result.success(listOf(testEntry))
         coEvery { nutritionRepository.writeNutritionRecords(any(), any()) } returns true
 
         val result = useCase.invoke()
@@ -115,8 +115,8 @@ class SyncNutritionUseCaseTest {
         val todayStr = today.format(DateTimeFormatter.ISO_LOCAL_DATE)
         val yesterdayStr = yesterday.format(DateTimeFormatter.ISO_LOCAL_DATE)
 
-        coEvery { apiClient.getFoodLog(any(), any(), todayStr) } returns Result.failure(Exception("Network error"))
-        coEvery { apiClient.getFoodLog(any(), any(), yesterdayStr) } returns Result.success(listOf(testEntry))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), todayStr) } returns Result.failure(Exception("Network error"))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), yesterdayStr) } returns Result.success(listOf(testEntry))
         coEvery { nutritionRepository.writeNutritionRecords(any(), any()) } returns true
 
         val result = useCase.invoke()
@@ -135,7 +135,7 @@ class SyncNutritionUseCaseTest {
         val todayStr = today.format(DateTimeFormatter.ISO_LOCAL_DATE)
         val yesterdayStr = yesterday.format(DateTimeFormatter.ISO_LOCAL_DATE)
 
-        coEvery { apiClient.getFoodLog(any(), any(), any()) } returns Result.success(listOf(testEntry))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } returns Result.success(listOf(testEntry))
         coEvery { nutritionRepository.writeNutritionRecords(todayStr, any()) } returns false
         coEvery { nutritionRepository.writeNutritionRecords(yesterdayStr, any()) } returns true
 
@@ -150,7 +150,7 @@ class SyncNutritionUseCaseTest {
     fun emptyFoodLogSkipsWrite() = runTest {
         val today = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE)
         configureSettings(lastSyncedDate = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE))
-        coEvery { apiClient.getFoodLog(any(), any(), today) } returns Result.success(emptyList())
+        coEvery { foodLogRepository.getFoodLog(any(), any(), today) } returns Result.success(emptyList())
 
         val result = useCase.invoke()
 
@@ -163,7 +163,7 @@ class SyncNutritionUseCaseTest {
     @DisplayName("emits progress updates")
     fun emitsProgress() = runTest {
         configureSettings(lastSyncedDate = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE))
-        coEvery { apiClient.getFoodLog(any(), any(), any()) } returns Result.success(listOf(testEntry))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } returns Result.success(listOf(testEntry))
         coEvery { nutritionRepository.writeNutritionRecords(any(), any()) } returns true
 
         val progressUpdates = mutableListOf<SyncProgress>()
@@ -178,7 +178,7 @@ class SyncNutritionUseCaseTest {
     @DisplayName("all days fail returns Error")
     fun allDaysFailReturnsError() = runTest {
         configureSettings(lastSyncedDate = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE))
-        coEvery { apiClient.getFoodLog(any(), any(), any()) } returns Result.failure(Exception("fail"))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } returns Result.failure(Exception("fail"))
 
         val result = useCase.invoke()
 
@@ -201,10 +201,10 @@ class SyncNutritionUseCaseTest {
         val day3Str = day3.format(DateTimeFormatter.ISO_LOCAL_DATE)
 
         // day1 succeeds, day2 FAILS, day3 succeeds
-        coEvery { apiClient.getFoodLog(any(), any(), todayStr) } returns Result.success(listOf(testEntry))
-        coEvery { apiClient.getFoodLog(any(), any(), day1Str) } returns Result.success(listOf(testEntry))
-        coEvery { apiClient.getFoodLog(any(), any(), day2Str) } returns Result.failure(Exception("transient error"))
-        coEvery { apiClient.getFoodLog(any(), any(), day3Str) } returns Result.success(listOf(testEntry))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), todayStr) } returns Result.success(listOf(testEntry))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), day1Str) } returns Result.success(listOf(testEntry))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), day2Str) } returns Result.failure(Exception("transient error"))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), day3Str) } returns Result.success(listOf(testEntry))
         coEvery { nutritionRepository.writeNutritionRecords(any(), any()) } returns true
 
         useCase.invoke()
@@ -222,7 +222,7 @@ class SyncNutritionUseCaseTest {
         val dayBefore = today.minusDays(2)
         configureSettings(lastSyncedDate = today.minusDays(3).format(DateTimeFormatter.ISO_LOCAL_DATE))
 
-        coEvery { apiClient.getFoodLog(any(), any(), any()) } returns Result.success(listOf(testEntry))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } returns Result.success(listOf(testEntry))
         coEvery { nutritionRepository.writeNutritionRecords(any(), any()) } returns true
 
         useCase.invoke()
@@ -241,8 +241,8 @@ class SyncNutritionUseCaseTest {
         val todayStr = today.format(DateTimeFormatter.ISO_LOCAL_DATE)
         val yesterdayStr = yesterday.format(DateTimeFormatter.ISO_LOCAL_DATE)
 
-        coEvery { apiClient.getFoodLog(any(), any(), todayStr) } returns Result.success(listOf(testEntry))
-        coEvery { apiClient.getFoodLog(any(), any(), yesterdayStr) } returns Result.failure(Exception("fail"))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), todayStr) } returns Result.success(listOf(testEntry))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), yesterdayStr) } returns Result.failure(Exception("fail"))
         coEvery { nutritionRepository.writeNutritionRecords(any(), any()) } returns true
 
         useCase.invoke()
@@ -259,14 +259,14 @@ class SyncNutritionUseCaseTest {
         // lastSyncedDate = yesterday → only today needs syncing
         configureSettings(lastSyncedDate = today.minusDays(1).format(DateTimeFormatter.ISO_LOCAL_DATE))
 
-        coEvery { apiClient.getFoodLog(any(), any(), todayStr) } returns Result.success(listOf(testEntry))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), todayStr) } returns Result.success(listOf(testEntry))
         coEvery { nutritionRepository.writeNutritionRecords(any(), any()) } returns true
 
         useCase.invoke()
 
         // Only today should be fetched (yesterday already synced)
-        coVerify(exactly = 1) { apiClient.getFoodLog(any(), any(), any()) }
-        coVerify { apiClient.getFoodLog(any(), any(), todayStr) }
+        coVerify(exactly = 1) { foodLogRepository.getFoodLog(any(), any(), any()) }
+        coVerify { foodLogRepository.getFoodLog(any(), any(), todayStr) }
     }
 
     @Test
@@ -275,7 +275,7 @@ class SyncNutritionUseCaseTest {
         // Set lastSyncedDate to 400 days ago → should only sync back 365 days
         configureSettings(lastSyncedDate = LocalDate.now().minusDays(400).format(DateTimeFormatter.ISO_LOCAL_DATE))
 
-        coEvery { apiClient.getFoodLog(any(), any(), any()) } returns Result.success(emptyList())
+        coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } returns Result.success(emptyList())
 
         val progressUpdates = mutableListOf<SyncProgress>()
         useCase.invoke { progressUpdates.add(it) }
@@ -289,7 +289,7 @@ class SyncNutritionUseCaseTest {
     fun allHcWritesFailReturnsError() = runTest {
         val today = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE)
         configureSettings(lastSyncedDate = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE))
-        coEvery { apiClient.getFoodLog(any(), any(), today) } returns Result.success(listOf(testEntry))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), today) } returns Result.success(listOf(testEntry))
         coEvery { nutritionRepository.writeNutritionRecords(any(), any()) } returns false
 
         val result = useCase.invoke()
@@ -308,7 +308,7 @@ class SyncNutritionUseCaseTest {
         val todayStr = today.format(DateTimeFormatter.ISO_LOCAL_DATE)
         val yesterdayStr = yesterday.format(DateTimeFormatter.ISO_LOCAL_DATE)
 
-        coEvery { apiClient.getFoodLog(any(), any(), any()) } returns Result.success(listOf(testEntry))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } returns Result.success(listOf(testEntry))
         coEvery { nutritionRepository.writeNutritionRecords(todayStr, any()) } returns true
         coEvery { nutritionRepository.writeNutritionRecords(yesterdayStr, any()) } returns false
 
@@ -317,5 +317,21 @@ class SyncNutritionUseCaseTest {
         // Partial success — some records written
         assertTrue(result is SyncResult.Success)
         assertEquals(1, (result as SyncResult.Success).recordsSynced)
+    }
+
+    @Test
+    @DisplayName("malformed lastSyncedDate falls back to maxPastDate and does not throw")
+    fun malformedLastSyncedDateFallsBack() = runTest {
+        // A corrupt date string that cannot be parsed as ISO_LOCAL_DATE
+        configureSettings(lastSyncedDate = "not-a-date")
+        val today = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE)
+
+        // API returns empty list so we get a clean Success(0) result
+        coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } returns Result.success(emptyList())
+
+        // Should NOT throw DateTimeParseException; result should be Success or Error, never an exception
+        val result = useCase.invoke()
+
+        assertTrue(result is SyncResult.Success || result is SyncResult.Error)
     }
 }

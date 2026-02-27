@@ -21,11 +21,11 @@ class SyncWorker @AssistedInject constructor(
         Timber.d("SyncWorker: starting nutrition sync")
         return when (val result = syncNutritionUseCase.invoke()) {
             is SyncResult.Success -> {
-                Timber.d("SyncWorker: success, synced ${result.recordsSynced} records")
+                Timber.d("SyncWorker: success, synced %d records", result.recordsSynced)
                 Result.success()
             }
             is SyncResult.Error -> {
-                Timber.w("SyncWorker: error — ${result.message}, will retry")
+                Timber.w("SyncWorker: error — %s, will retry", result.message)
                 Result.retry()
             }
             is SyncResult.NeedsConfiguration -> {

@@ -49,13 +49,33 @@ class SyncSchedulerTest {
         // Interval of 5 minutes should be clamped to 15
         syncScheduler.schedulePeriodic(5)
 
+        val requestSlot = slot<PeriodicWorkRequest>()
         verify {
             workManager.enqueueUniquePeriodicWork(
                 SyncScheduler.WORK_NAME,
                 ExistingPeriodicWorkPolicy.UPDATE,
-                any(),
+                capture(requestSlot),
             )
         }
+
+        // Verify interval was clamped to 15 minutes via reflection (field is on parent WorkRequest class)
+        val request = requestSlot.captured
+        fun findField(obj: Any, name: String): java.lang.reflect.Field? {
+            var clazz: Class<*>? = obj.javaClass
+            while (clazz != null) {
+                try { return clazz.getDeclaredField(name) } catch (_: NoSuchFieldException) { }
+                clazz = clazz.superclass
+            }
+            return null
+        }
+        val workSpecField = checkNotNull(findField(request, "workSpec")) { "workSpec field not found" }
+        workSpecField.isAccessible = true
+        val workSpec = workSpecField.get(request)!!
+        val intervalField = checkNotNull(findField(workSpec, "intervalDuration")) { "intervalDuration field not found" }
+        intervalField.isAccessible = true
+        val intervalMs = intervalField.get(workSpec) as Long
+        val fifteenMinutesMs = 15L * 60L * 1000L
+        assertEquals(fifteenMinutesMs, intervalMs)
     }
 
     @Test
@@ -80,33 +100,4 @@ class SyncSchedulerTest {
         }
     }
 
-    @Test
-    fun `schedulePeriodic uses correct work name`() {
-        syncScheduler.schedulePeriodic(20)
-
-        val workNameSlot = slot<String>()
-        verify {
-            workManager.enqueueUniquePeriodicWork(
-                capture(workNameSlot),
-                any(),
-                any(),
-            )
-        }
-        assertEquals("nutrition_sync", workNameSlot.captured)
-    }
-
-    @Test
-    fun `schedulePeriodic uses UPDATE policy`() {
-        syncScheduler.schedulePeriodic(30)
-
-        val policySlot = slot<ExistingPeriodicWorkPolicy>()
-        verify {
-            workManager.enqueueUniquePeriodicWork(
-                any(),
-                capture(policySlot),
-                any(),
-            )
-        }
-        assertEquals(ExistingPeriodicWorkPolicy.UPDATE, policySlot.captured)
-    }
 }

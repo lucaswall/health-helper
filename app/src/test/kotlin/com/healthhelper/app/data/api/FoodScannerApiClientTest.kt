@@ -10,12 +10,15 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import io.ktor.serialization.kotlinx.json.json
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class FoodScannerApiClientTest {
@@ -124,8 +127,9 @@ class FoodScannerApiClientTest {
 
         client.getFoodLog("https://food.example.com", "fsk_test", "2026-01-15")
 
-        assertTrue(capturedUrl!!.contains("food.example.com/api/v1/food-log"))
-        assertTrue(capturedUrl!!.contains("date=2026-01-15"))
+        val url = assertNotNull(capturedUrl)
+        assertTrue(url.contains("food.example.com/api/v1/food-log"))
+        assertTrue(url.contains("date=2026-01-15"))
     }
 
     @Test
@@ -138,7 +142,7 @@ class FoodScannerApiClientTest {
         val result = client.getFoodLog("https://food.example.com", "fsk_test", "2026-02-27")
 
         assertTrue(result.isFailure)
-        assertEquals("Bad request", result.exceptionOrNull()?.message)
+        assertEquals("Server returned an error", result.exceptionOrNull()?.message)
     }
 
     @Test
@@ -251,6 +255,52 @@ class FoodScannerApiClientTest {
     }
 
     @Test
+    @DisplayName("HTTP base URL is rejected with failure result")
+    fun httpBaseUrlRejected() = runTest {
+        val engine = MockEngine { respond(content = successResponse, headers = jsonHeaders) }
+        val client = createClient(engine)
+
+        val result = client.getFoodLog("http://food.example.com", "fsk_test", "2026-02-27")
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull()?.message?.contains("HTTPS") == true)
+    }
+
+    @Test
+    @DisplayName("HTTP base URL is rejected case-insensitively (HTTP:// uppercase)")
+    fun httpBaseUrlRejectedCaseInsensitive() = runTest {
+        val engine = MockEngine { respond(content = successResponse, headers = jsonHeaders) }
+        val client = createClient(engine)
+
+        val result = client.getFoodLog("HTTP://food.example.com", "fsk_test", "2026-02-27")
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull()?.message?.contains("HTTPS") == true)
+    }
+
+    @Test
+    @DisplayName("blank base URL is rejected")
+    fun blankBaseUrlRejected() = runTest {
+        val engine = MockEngine { respond(content = successResponse, headers = jsonHeaders) }
+        val client = createClient(engine)
+
+        val result = client.getFoodLog("", "fsk_test", "2026-02-27")
+
+        assertTrue(result.isFailure)
+    }
+
+    @Test
+    @DisplayName("CancellationException propagates from getFoodLog")
+    fun cancellationExceptionPropagates() = runTest {
+        val engine = MockEngine { throw CancellationException("Cancelled") }
+        val client = createClient(engine)
+
+        assertFailsWith<CancellationException> {
+            client.getFoodLog("https://food.example.com", "fsk_test", "2026-02-27")
+        }
+    }
+
+    @Test
     @DisplayName("base URL with trailing slash produces correct URL without double slash")
     fun trailingSlashHandled() = runTest {
         var capturedUrl: String? = null
@@ -262,7 +312,8 @@ class FoodScannerApiClientTest {
 
         client.getFoodLog("https://food.example.com/", "fsk_test", "2026-02-27")
 
-        assertTrue(capturedUrl!!.contains("/api/v1/food-log"))
-        assertFalse(capturedUrl!!.contains("//api"))
+        val url = assertNotNull(capturedUrl)
+        assertTrue(url.contains("/api/v1/food-log"))
+        assertFalse(url.contains("//api"))
     }
 }

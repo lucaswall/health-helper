@@ -1,378 +1,810 @@
 # Implementation Plan
 
-**Created:** 2026-02-27
 **Status:** COMPLETE
-**Source:** Inline request: Food Scanner API integration — sync meal data to Health Connect via NutritionRecord, with settings screen and background sync
-**Linear Issues:** [HEA-29](https://linear.app/lw-claude/issue/HEA-29), [HEA-30](https://linear.app/lw-claude/issue/HEA-30), [HEA-31](https://linear.app/lw-claude/issue/HEA-31), [HEA-32](https://linear.app/lw-claude/issue/HEA-32), [HEA-33](https://linear.app/lw-claude/issue/HEA-33), [HEA-34](https://linear.app/lw-claude/issue/HEA-34), [HEA-35](https://linear.app/lw-claude/issue/HEA-35), [HEA-36](https://linear.app/lw-claude/issue/HEA-36)
+**Branch:** feat/HEA-44-backlog-audit-fixes
+**Issues:** HEA-44, HEA-45, HEA-46, HEA-47, HEA-48, HEA-49, HEA-50, HEA-51, HEA-52, HEA-53, HEA-56, HEA-57, HEA-58, HEA-59, HEA-60, HEA-62, HEA-64, HEA-65, HEA-66, HEA-67, HEA-68, HEA-69, HEA-70, HEA-71, HEA-72, HEA-73, HEA-74, HEA-75, HEA-76, HEA-77
+**Created:** 2026-02-27
+**Last Updated:** 2026-02-27
 
-## Context Gathered
+## Summary
 
-### Codebase Analysis
-- **Current state:** App reads step counts from Health Connect. All steps-related code will be removed.
-- **Files to remove:** HealthRecord, HealthRecordType, HealthConnectStatus, PermissionStatus, StepsResult, ReadStepsUseCase, CheckHealthConnectStatusUseCase, HealthConnectStatusProvider, HealthConnectRepositoryImpl, HealthConnectRepository (domain), HealthViewModel, HealthScreen, all 3 test files
-- **Files to keep:** HealthHelperApp.kt (Timber init), MainActivity.kt (update for nav), Theme.kt, AppModule.kt (rewrite)
-- **Existing patterns:** Constructor injection via @Inject, Hilt modules in di/, StateFlow in ViewModels, trailing commas, UseCase/Repository/Screen/ViewModel suffixes
-- **Test conventions:** JUnit 5 + MockK + runTest, coEvery/coVerify for suspend fns, StandardTestDispatcher, Turbine for Flow testing
+Comprehensive code audit fix plan addressing 23 backlog issues across security, bugs, architecture, conventions, test quality, and CI infrastructure. Issues range from critical (CancellationException swallowing, missing try/finally) to low (import consistency, duplicate tests). Ordered domain-first per Clean Architecture: domain models/use cases, then data layer, then presentation, then build config, then test improvements.
 
-### Food Scanner API
-- **Base URL:** User-configurable (self-hosted)
-- **Auth:** Bearer token (`fsk_<64 hex chars>`)
-- **Endpoint used:** `GET /api/v1/food-log?date=YYYY-MM-DD` — returns meals grouped by mealTypeId with per-entry nutrition data
-- **Rate limit:** 60 req/min (database-only route)
-- **Response envelope:** `{ success: bool, data: NutritionSummary, timestamp: number }`
+## Issues
 
-### Health Connect Mapping
-- **Record type:** `NutritionRecord` (IntervalRecord) — one per food log entry
-- **Mapped fields:** name→name, calories→energy (kilocalories), proteinG→protein (grams), carbsG→totalCarbohydrate (grams), fatG→totalFat (grams), fiberG→dietaryFiber (grams), sodiumMg→sodium (milligrams), saturatedFatG→saturatedFat (grams), transFatG→transFat (grams), sugarsG→sugar (grams), caloriesFromFat→energyFromFat (kilocalories)
-- **Meal type mapping:** 1→BREAKFAST, 3→LUNCH, 5→DINNER, 2/4/7→SNACK
-- **Idempotent sync:** Use `clientRecordId` derived from food-scanner entry ID
-- **Time handling:** `startTime` from entry `time` field + date, `endTime` = startTime + 1 minute
+### HEA-50: Domain use case directly imports concrete data-layer class
 
-### HTTP Client Decision
-- **Ktor Client 3.4.0** — Kotlin-native coroutines, built-in bearerAuth(), first-class kotlinx.serialization, JetBrains-backed, MockEngine for testing
-- **Engine:** OkHttp (Android standard)
-- **Dependencies:** ktor-client-core, ktor-client-okhttp, ktor-client-content-negotiation, ktor-serialization-kotlinx-json
+**Priority:** High | **Labels:** Convention
+**Description:** `SyncNutritionUseCase` imports `FoodScannerApiClient` (concrete data-layer class), violating Clean Architecture. Domain must depend only on domain-layer interfaces.
+**Acceptance Criteria:**
+- [ ] Domain use case depends on a domain-layer interface, not FoodScannerApiClient
+- [ ] DI module binds the interface to a data-layer implementation
 
-## Original Plan
+### HEA-64: No init-block validation in FoodLogEntry data class
 
-### Task 1: Wipe existing steps code and add new dependencies
-**Linear Issue:** [HEA-29](https://linear.app/lw-claude/issue/HEA-29)
+**Priority:** Low | **Labels:** Bug
+**Description:** `FoodLogEntry` accepts negative values for calories, proteinG, etc. Health Connect rejects negatives at write time; fail-fast at domain layer is better.
+**Acceptance Criteria:**
+- [ ] Negative nutritional values rejected at construction via `require()` blocks
+- [ ] Tests cover validation of negative values
 
-This is an infrastructure task — no TDD. Remove all steps-related code and add dependencies for the new feature.
+### HEA-49: Unhandled DateTimeParseException in date parsing at two locations
 
-**Remove files:**
-- `app/src/main/kotlin/com/healthhelper/app/domain/model/HealthRecord.kt`
-- `app/src/main/kotlin/com/healthhelper/app/domain/model/HealthRecordType.kt`
-- `app/src/main/kotlin/com/healthhelper/app/domain/model/HealthConnectStatus.kt`
-- `app/src/main/kotlin/com/healthhelper/app/domain/model/PermissionStatus.kt`
-- `app/src/main/kotlin/com/healthhelper/app/domain/model/StepsResult.kt`
-- `app/src/main/kotlin/com/healthhelper/app/domain/repository/HealthConnectRepository.kt`
-- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/ReadStepsUseCase.kt`
-- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/CheckHealthConnectStatusUseCase.kt`
-- `app/src/main/kotlin/com/healthhelper/app/data/HealthConnectStatusProvider.kt`
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectRepositoryImpl.kt`
-- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/HealthViewModel.kt`
-- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/HealthScreen.kt`
-- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/ReadStepsUseCaseTest.kt`
-- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/CheckHealthConnectStatusUseCaseTest.kt`
-- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/HealthViewModelTest.kt`
+**Priority:** High | **Labels:** Bug
+**Description:** `LocalDate.parse()` in `SyncNutritionUseCase:31` has no try-catch. Corrupt `lastSyncedDate` in DataStore throws unchecked `DateTimeParseException`.
+**Acceptance Criteria:**
+- [ ] `DateTimeParseException` caught and handled gracefully
+- [ ] Corrupt date treated as empty (full re-sync from maxPastDate)
+- [ ] Tests cover malformed date input
 
-**Update `gradle/libs.versions.toml`** — add:
-- `ktor = "3.4.0"` with artifacts: ktor-client-core, ktor-client-okhttp, ktor-client-content-negotiation, ktor-serialization-kotlinx-json
-- `kotlinx-serialization-json` (for @Serializable DTOs)
-- `datastore-preferences` (for settings storage)
-- `work-runtime-ktx` (for WorkManager background sync)
-- `hilt-work` + `hilt-compiler` for WorkManager Hilt integration
-- `navigation-compose` is already present (2.8.5)
+### HEA-47: CancellationException swallowed by broad catch(Exception) in two locations
 
-**Update `app/build.gradle.kts`** — add:
-- `kotlin("plugin.serialization")` plugin (uses AGP's bundled Kotlin 2.2.10 — do NOT specify separate version)
-- All new library dependencies
-- Keep existing: Compose BOM, Hilt, Health Connect, Timber, JUnit 5, MockK, coroutines-test, Turbine
+**Priority:** High | **Labels:** Bug
+**Description:** `catch (e: Exception)` in `FoodScannerApiClient:73` and `HealthConnectNutritionRepository:29` catches `CancellationException`, breaking structured concurrency.
+**Acceptance Criteria:**
+- [ ] `CancellationException` rethrown in both catch blocks
+- [ ] Tests verify CancellationException propagates
 
-**Update `app/src/main/AndroidManifest.xml`**:
-- Remove `android.permission.health.READ_STEPS`
-- Add `android.permission.health.WRITE_NUTRITION`
-- Keep ViewPermissionUsageActivity alias
+### HEA-46: No HTTPS scheme validation on user-supplied base URL
 
-**Gut `di/AppModule.kt`** — remove all existing provides (they reference deleted classes). Leave empty module shell.
+**Priority:** High | **Labels:** Security
+**Description:** User-configured `baseUrl` used without scheme validation. An `http://` URL transmits the bearer token in cleartext.
+**Acceptance Criteria:**
+- [ ] URLs not starting with `https://` are rejected
+- [ ] Tests cover http:// rejection and https:// acceptance
 
-**Update `MainActivity.kt`** — replace HealthScreen() with a placeholder Composable (Text("HealthHelper")) so the app compiles.
+### HEA-48: triggerSync() has no try/finally — isSyncing stuck permanently on error
 
-**Verify:** `./gradlew assembleDebug` succeeds with zero errors. No tests to run (all deleted).
+**Priority:** High | **Labels:** Bug
+**Description:** If `syncNutritionUseCase.invoke()` throws (e.g., `DateTimeParseException`), `isSyncing` stays true permanently, disabling the Sync button.
+**Acceptance Criteria:**
+- [ ] `isSyncing` always reset to false via try/finally
+- [ ] Error message shown to user on unexpected exception
+- [ ] Test verifies isSyncing resets on exception
 
----
+### HEA-52: Default sync interval (10min) below WorkManager minimum (15min)
 
-### Task 2: Domain models
-**Linear Issue:** [HEA-30](https://linear.app/lw-claude/issue/HEA-30)
+**Priority:** Medium | **Labels:** Bug
+**Description:** `DEFAULT_SYNC_INTERVAL = 10` but `SyncScheduler.MIN_INTERVAL_MINUTES = 15` and UI slider starts at 15. Fresh install shows 10 in UI, gets clamped to 15.
+**Acceptance Criteria:**
+- [ ] Default changed to 15 to match WorkManager minimum and UI slider
 
-Pure Kotlin domain models. No Android dependencies.
+### HEA-53: LaunchedEffect missing permissionGranted key in SyncScreen
 
-1. Write tests in `app/src/test/kotlin/com/healthhelper/app/domain/model/MealTypeTest.kt`:
-   - Test mapping of each food-scanner mealTypeId (1, 2, 3, 4, 5, 7) to correct MealType enum value
-   - Test unknown mealTypeId returns UNKNOWN
-2. Run verifier (expect fail)
-3. Create domain models:
-   - `app/src/main/kotlin/com/healthhelper/app/domain/model/MealType.kt` — enum with BREAKFAST, LUNCH, DINNER, SNACK, UNKNOWN + companion `fromFoodScannerId(Int): MealType` factory
-   - `app/src/main/kotlin/com/healthhelper/app/domain/model/FoodLogEntry.kt` — data class with: id (Int), foodName (String), mealType (MealType), time (String?, HH:mm:ss), calories (Double), proteinG (Double), carbsG (Double), fatG (Double), fiberG (Double), sodiumMg (Double), saturatedFatG (Double?), transFatG (Double?), sugarsG (Double?), caloriesFromFat (Double?)
-   - `app/src/main/kotlin/com/healthhelper/app/domain/model/SyncResult.kt` — sealed class: Success(recordsSynced: Int), Error(message: String), NeedsConfiguration (no API key/URL set)
-   - `app/src/main/kotlin/com/healthhelper/app/domain/model/SyncProgress.kt` — data class: currentDate (String), totalDays (Int), completedDays (Int), recordsSynced (Int)
-4. Run verifier (expect pass)
+**Priority:** Medium | **Labels:** Bug
+**Description:** `LaunchedEffect(uiState.healthConnectAvailable)` body reads `permissionGranted` but doesn't include it as a key.
+**Acceptance Criteria:**
+- [ ] `permissionGranted` added to LaunchedEffect key set
 
----
+### HEA-65: Redundant isConfigured() call in SettingsViewModel combine block
 
-### Task 3: Settings repository
-**Linear Issue:** [HEA-31](https://linear.app/lw-claude/issue/HEA-31)
+**Priority:** Low | **Labels:** Convention
+**Description:** `settingsRepository.isConfigured()` called inside combine/collect when `apiKey` and `baseUrl` are already available for inline derivation.
+**Acceptance Criteria:**
+- [ ] `isConfigured` derived inline from combine parameters (matching SyncViewModel pattern)
 
-DataStore-backed settings storage. Domain interface + data implementation.
+### HEA-67: HTTP 401 Unauthorized logged at ERROR instead of WARN
 
-1. Write tests in `app/src/test/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepositoryTest.kt`:
-   - Test storing and retrieving API key
-   - Test storing and retrieving base URL
-   - Test storing and retrieving sync interval (Int, minutes)
-   - Test default values (empty string for key/URL, 10 for interval)
-   - Test storing and retrieving last synced date (String, YYYY-MM-DD format)
-   - Test `isConfigured()` returns false when API key or base URL is empty, true when both set
-   - Use a real DataStore with a test-scoped temporary file (JUnit 5 TempDir) — DataStore is pure Kotlin, no Android deps needed for preferences
-2. Run verifier (expect fail)
-3. Implement:
-   - `app/src/main/kotlin/com/healthhelper/app/domain/repository/SettingsRepository.kt` — interface with: `apiKeyFlow: Flow<String>`, `baseUrlFlow: Flow<String>`, `syncIntervalFlow: Flow<Int>`, `lastSyncedDateFlow: Flow<String>`, `suspend setApiKey(String)`, `suspend setBaseUrl(String)`, `suspend setSyncInterval(Int)`, `suspend setLastSyncedDate(String)`, `suspend isConfigured(): Boolean`
-   - `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` — implementation using `DataStore<Preferences>`, injected via constructor. Use preference keys: `api_key`, `base_url`, `sync_interval`, `last_synced_date`.
-4. Run verifier (expect pass)
+**Priority:** Low | **Labels:** Bug
+**Description:** All HTTP errors logged at `Timber.e`. 401 is an expected misconfiguration, not a system failure.
+**Acceptance Criteria:**
+- [ ] 401 logged at WARN level; other HTTP errors remain at ERROR
 
----
+### HEA-68: Spurious state updates from combine including unused syncIntervalFlow
 
-### Task 4: Food Scanner API client
-**Linear Issue:** [HEA-32](https://linear.app/lw-claude/issue/HEA-32)
+**Priority:** Low | **Labels:** Convention
+**Description:** First `combine` in SyncViewModel includes `syncIntervalFlow` as unused `_` parameter. Interval changes trigger unnecessary state updates.
+**Acceptance Criteria:**
+- [ ] `syncIntervalFlow` removed from the first combine block
 
-Ktor HTTP client with DTOs and response envelope parsing.
+### HEA-66: String templates used instead of Timber format specifiers in SyncWorker
 
-1. Write tests in `app/src/test/kotlin/com/healthhelper/app/data/api/FoodScannerApiClientTest.kt`:
-   - Use Ktor MockEngine to simulate API responses
-   - Test successful food-log response deserializes correctly into domain FoodLogEntry list
-   - Test Bearer token is sent in Authorization header
-   - Test correct URL construction with date parameter
-   - Test error response (success: false) returns appropriate error
-   - Test 401 response returns auth error
-   - Test 429 response returns rate limit error
-   - Test network failure returns error
-   - Test null/missing optional fields (saturatedFatG, transFatG, sugarsG, caloriesFromFat) handled gracefully
-   - Test meal type IDs are correctly mapped to domain MealType via FoodLogEntry construction
-2. Run verifier (expect fail)
-3. Implement:
-   - `app/src/main/kotlin/com/healthhelper/app/data/api/dto/FoodLogResponse.kt` — @Serializable DTOs matching the food-scanner API response: `ApiEnvelope<T>` (success, data, timestamp, error), `NutritionSummaryDto` (date, meals, totals), `MealGroupDto` (mealTypeId, entries, subtotal), `MealEntryDto` (id, foodName, time, calories, proteinG, carbsG, fatG, fiberG, sodiumMg, saturatedFatG, transFatG, sugarsG, caloriesFromFat), `ApiErrorDto` (code, message, details)
-   - `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt` — class with constructor-injected `HttpClient`. Single method: `suspend fun getFoodLog(baseUrl: String, apiKey: String, date: String): Result<List<FoodLogEntry>>`. Internally: GET `$baseUrl/api/v1/food-log?date=$date` with `bearerAuth(apiKey)`, deserialize `ApiEnvelope<NutritionSummaryDto>`, map `MealEntryDto` list → `FoodLogEntry` list (flatten all meal groups, apply `MealType.fromFoodScannerId()`). Error handling: catch `ResponseException` for HTTP errors, `SerializationException` for parse errors, generic Exception for network.
-4. Run verifier (expect pass)
+**Priority:** Low | **Labels:** Convention
+**Description:** `${}` string templates in Timber calls evaluate even in release builds without a DebugTree.
+**Acceptance Criteria:**
+- [ ] String templates replaced with `%s`/`%d` format specifiers
 
----
+### HEA-62: No explicit network security config in AndroidManifest
 
-### Task 5: Health Connect nutrition writer
-**Linear Issue:** [HEA-33](https://linear.app/lw-claude/issue/HEA-33)
+**Priority:** Low | **Labels:** Security
+**Description:** No `android:networkSecurityConfig` attribute. Android 28+ blocks cleartext by default, but explicit config documents intent.
+**Acceptance Criteria:**
+- [ ] `network_security_config.xml` created blocking cleartext traffic
+- [ ] Referenced in AndroidManifest.xml
 
-Repository that writes NutritionRecords to Health Connect.
+### HEA-45: API key stored in plain unencrypted DataStore
 
-1. Write tests in `app/src/test/kotlin/com/healthhelper/app/data/repository/NutritionRecordMapperTest.kt`:
-   - Test mapping FoodLogEntry → NutritionRecord fields: name, energy (kilocalories), protein (grams), totalCarbohydrate (grams), totalFat (grams), dietaryFiber (grams), sodium (milligrams), saturatedFat (grams), transFat (grams), sugar (grams), energyFromFat (kilocalories)
-   - Test meal type mapping: BREAKFAST→MEAL_TYPE_BREAKFAST, LUNCH→MEAL_TYPE_LUNCH, DINNER→MEAL_TYPE_DINNER, SNACK→MEAL_TYPE_SNACK, UNKNOWN→MEAL_TYPE_UNKNOWN
-   - Test time parsing: "12:30:00" on date "2026-01-15" → correct Instant (local timezone), endTime = startTime + 60s
-   - Test null time falls back to noon of the given date
-   - Test nullable nutrition fields: null saturatedFatG → null saturatedFat on NutritionRecord
-   - Test clientRecordId is set to "foodscanner-{entryId}" for idempotent upsert
-   - Note: NutritionRecord is a real Health Connect class — these tests verify the mapper function output. Use the actual NutritionRecord constructor (it's a data class, not mocked).
-2. Run verifier (expect fail)
-3. Implement:
-   - `app/src/main/kotlin/com/healthhelper/app/domain/repository/NutritionRepository.kt` — interface: `suspend fun writeNutritionRecords(date: String, entries: List<FoodLogEntry>): Boolean`
-   - `app/src/main/kotlin/com/healthhelper/app/data/repository/NutritionRecordMapper.kt` — pure function `fun mapToNutritionRecord(entry: FoodLogEntry, date: String): NutritionRecord`. Handles: Energy.kilocalories(), Mass.grams(), Mass.milligrams(), MealType int constants, time parsing (LocalTime.parse + LocalDate.parse → ZonedDateTime → Instant), Metadata with clientRecordId = "foodscanner-${entry.id}"
-   - `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectNutritionRepository.kt` — implementation of NutritionRepository. Constructor-injected `HealthConnectClient`. Uses mapper to convert entries, calls `client.insertRecords(records)`. Try-catch at boundary, returns Boolean. Uses Timber for logging.
-4. Run verifier (expect pass)
+**Priority:** Urgent | **Labels:** Security
+**Description:** API bearer token stored as raw string in `DataStore<Preferences>` under `"api_key"`. Unencrypted and accessible via root/backup.
+**Acceptance Criteria:**
+- [ ] API key stored in EncryptedSharedPreferences
+- [ ] Migration from plain DataStore to encrypted storage on first run
+- [ ] Flow-based reactive interface preserved
+- [ ] Old plain-text key removed from DataStore after migration
 
----
+### HEA-44: R8/ProGuard obfuscation disabled in release build
 
-### Task 6: SyncNutritionUseCase
-**Linear Issue:** [HEA-34](https://linear.app/lw-claude/issue/HEA-34)
+**Priority:** Urgent | **Labels:** Security
+**Description:** `isMinifyEnabled = false` for release. APK completely unobfuscated.
+**Acceptance Criteria:**
+- [ ] R8 enabled for release builds
+- [ ] ProGuard rules for all dependencies (Kotlin serialization, Ktor, Health Connect, Hilt)
+- [ ] Release build compiles successfully
 
-Orchestrates the full sync: fetch from API → write to Health Connect → track progress.
+### HEA-51: NutritionRecordMapperTest assertion fragility (Int/Long)
 
-1. Write tests in `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt`:
-   - Mock FoodScannerApiClient, NutritionRepository, SettingsRepository
-   - Test: not configured (no API key) → returns SyncResult.NeedsConfiguration
-   - Test: single day sync — fetches food log, writes to HC, updates lastSyncedDate, returns Success with count
-   - Test: multi-day sync — syncs from today backwards, calls API for each date, aggregates record count
-   - Test: API error on one day doesn't stop sync of other days (continues, reports partial success)
-   - Test: HC write failure on one day doesn't stop other days
-   - Test: empty food log for a date (no entries) → skips HC write, still counts as synced
-   - Test: respects lastSyncedDate — doesn't re-sync dates already synced (except today which always re-syncs)
-   - Test: caps at 365 days back from today
-   - Test: emits SyncProgress updates via a callback/Flow parameter
-2. Run verifier (expect fail)
-3. Implement:
-   - `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt` — class with @Inject constructor taking FoodScannerApiClient, NutritionRepository, SettingsRepository. Method: `suspend fun invoke(onProgress: (SyncProgress) -> Unit = {}): SyncResult`. Logic:
-     - Check isConfigured() → NeedsConfiguration if false
-     - Collect current apiKey, baseUrl, lastSyncedDate from settings
-     - Calculate date range: today down to max(lastSyncedDate + 1 day, today - 365 days). Always include today.
-     - Iterate dates newest-first. For each date: call apiClient.getFoodLog(), on success call nutritionRepo.writeNutritionRecords(), emit progress
-     - After each successful date (not today), update lastSyncedDate if this date is older than current marker
-     - On completion, return Success(totalRecordsSynced) or Error if zero days succeeded
-     - Add small delay between API calls (500ms) to stay well under 60 req/min rate limit
-4. Run verifier (expect pass)
+**Priority:** High | **Labels:** Bug
+**Description:** `assertEquals(60, duration.seconds)` — works via Kotlin literal widening but fragile if refactored to use a variable.
+**Acceptance Criteria:**
+- [ ] Literal changed to `60L` for explicit Long comparison
 
----
+### HEA-56: SyncViewModelTest double-trigger guard assertion always passes
 
-### Task 7: Settings and sync UI
-**Linear Issue:** [HEA-35](https://linear.app/lw-claude/issue/HEA-35)
+**Priority:** Medium | **Labels:** Technical Debt
+**Description:** `assertTrue(callCount >= 1)` at line 211 is trivially true. Does not test the double-trigger guard.
+**Acceptance Criteria:**
+- [ ] Test removed (functionality covered by `cannot trigger sync when isSyncing is true` test at line 215)
 
-ViewModels and Compose screens for settings configuration and sync control.
+### HEA-57: SyncSchedulerTest does not verify clamped interval value
 
-1. Write tests in `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModelTest.kt`:
-   - Mock SettingsRepository
-   - Test: initial state loads current settings from repository flows
-   - Test: updateApiKey() calls repository.setApiKey()
-   - Test: updateBaseUrl() calls repository.setBaseUrl()
-   - Test: updateSyncInterval() calls repository.setSyncInterval()
-   - Test: isConfigured state reflects repository.isConfigured()
-2. Write tests in `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt`:
-   - Mock SyncNutritionUseCase, SettingsRepository
-   - Test: initial state shows idle, not syncing
-   - Test: triggerSync() sets isSyncing=true, calls use case, sets isSyncing=false on completion
-   - Test: sync success updates lastSyncResult with record count
-   - Test: sync error updates lastSyncResult with error message
-   - Test: sync NeedsConfiguration updates state accordingly
-   - Test: progress updates are reflected in UI state
-   - Test: cannot trigger sync while already syncing
-3. Run verifier (expect fail)
-4. Implement:
-   - `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModel.kt` — @HiltViewModel with SettingsRepository. UiState: apiKey, baseUrl, syncInterval, isConfigured. Methods: updateApiKey(), updateBaseUrl(), updateSyncInterval(). Collects settings flows into StateFlow.
-   - `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` — @HiltViewModel with SyncNutritionUseCase, SettingsRepository. UiState: isSyncing, lastSyncResult (String?), syncProgress (SyncProgress?), isConfigured, lastSyncedDate. Method: triggerSync(). Collects isConfigured and lastSyncedDate from settings.
-   - `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SettingsScreen.kt` — Composable: OutlinedTextField for base URL, OutlinedTextField for API key (visualTransformation = PasswordVisualTransformation for masking, with toggle visibility icon), dropdown or stepper for sync interval (minutes), "Save" implicit (write on change via debounce or on focus loss). Back navigation.
-   - `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SyncScreen.kt` — Composable: Shows sync status (idle/syncing/last result), progress bar during sync (completedDays/totalDays), "Sync Now" button (disabled when syncing or not configured), last synced date display, settings icon/button to navigate to SettingsScreen. If not configured, show a message prompting to configure API in settings.
-   - `app/src/main/kotlin/com/healthhelper/app/presentation/ui/AppNavigation.kt` — NavHost with two routes: "sync" (startDestination) and "settings". Wire navigation between screens.
-   - Update `MainActivity.kt` — replace placeholder with `AppNavigation()` inside HealthHelperTheme.
-5. Run verifier (expect pass)
+**Priority:** Medium | **Labels:** Technical Debt
+**Description:** Clamping test only checks `enqueueUniquePeriodicWork` was called, not that the interval was clamped.
+**Acceptance Criteria:**
+- [ ] Test captures `PeriodicWorkRequest` and verifies interval is 15 minutes (not 5)
 
----
+### HEA-59: Force unwrap (!!) on nullable capturedUrl in FoodScannerApiClientTest
 
-### Task 8: Background sync with WorkManager and final wiring
-**Linear Issue:** [HEA-36](https://linear.app/lw-claude/issue/HEA-36)
+**Priority:** Medium | **Labels:** Technical Debt
+**Description:** `capturedUrl!!` force-unwrap produces unclear NPE instead of assertion failure.
+**Acceptance Criteria:**
+- [ ] Force unwraps replaced with `assertNotNull` for clear failure messages
 
-WorkManager periodic sync, Hilt DI wiring, and permission handling.
+### HEA-69: MealTypeTest uses JUnit 5 import instead of kotlin.test
 
-1. Write tests in `app/src/test/kotlin/com/healthhelper/app/data/sync/SyncSchedulerTest.kt`:
-   - Mock WorkManager
-   - Test: schedulePeriodic() enqueues PeriodicWorkRequest with correct interval
-   - Test: cancelSync() cancels work by unique name
-   - Test: updateInterval() cancels existing and re-enqueues with new interval
-2. Run verifier (expect fail)
-3. Implement:
-   - `app/src/main/kotlin/com/healthhelper/app/data/sync/SyncWorker.kt` — @HiltWorker class extending CoroutineWorker. Injects SyncNutritionUseCase via @AssistedInject. doWork(): calls syncUseCase(), returns Result.success() or Result.retry() on transient error, Result.failure() on permanent error. Uses Timber for logging.
-   - `app/src/main/kotlin/com/healthhelper/app/data/sync/SyncScheduler.kt` — class with @Inject constructor taking WorkManager. Methods: `fun schedulePeriodic(intervalMinutes: Int)` — enqueues PeriodicWorkRequestBuilder with ExistingPeriodicWorkPolicy.UPDATE, unique work name "nutrition_sync", constraint: NetworkType.CONNECTED. `fun cancelSync()`. `fun updateInterval(minutes: Int)` — calls schedulePeriodic.
-   - `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt` — rewrite completely. Provides: SettingsRepository (DataStoreSettingsRepository), NutritionRepository (HealthConnectNutritionRepository), HttpClient (Ktor with OkHttp engine + ContentNegotiation + Json), FoodScannerApiClient, HealthConnectClient (via HealthConnectClient.getOrCreate(context)), WorkManager (via WorkManager.getInstance(context)), SyncScheduler, DataStore<Preferences>.
-   - `app/src/main/kotlin/com/healthhelper/app/di/WorkerModule.kt` — Hilt module for WorkManager initialization. Use `@InstallIn(SingletonComponent::class)` with HiltWorkerFactory binding.
-   - Update `HealthHelperApp.kt` — implement `Configuration.Provider` for Hilt WorkManager integration, override `workManagerConfiguration` property.
-   - Update `SyncViewModel` — inject SyncScheduler, call schedulePeriodic() when sync interval changes, call it on init if configured.
-   - Update `AndroidManifest.xml` — add `FOREGROUND_SERVICE` permission if needed for long syncs (evaluate if needed), ensure `WRITE_NUTRITION` permission is present. Remove the default WorkManager initializer (add `<provider>` removal for `androidx.startup`).
-   - Add runtime permission request for `WRITE_NUTRITION` in SyncScreen — use `PermissionController.createRequestPermissionResultContract()`, request on first sync attempt.
-4. Run verifier (expect pass)
+**Priority:** Low | **Labels:** Technical Debt
+**Description:** `import org.junit.jupiter.api.Assertions.assertEquals` instead of `kotlin.test.assertEquals` used everywhere else.
+**Acceptance Criteria:**
+- [ ] Import changed to `kotlin.test.assertEquals`
 
-## Post-Implementation Checklist
-1. Run `bug-hunter` agent — Review all changes for bugs, security issues, coroutine problems
-2. Run `verifier` agent — Verify all tests pass, build succeeds, zero warnings
-3. Manual verification: Install on device, configure API key/URL, trigger sync, verify NutritionRecords appear in Health Connect app
+### HEA-70: SyncSchedulerTest has duplicate test assertions
 
----
+**Priority:** Low | **Labels:** Technical Debt
+**Description:** `uses correct work name` and `uses UPDATE policy` tests duplicate assertions already in the first test.
+**Acceptance Criteria:**
+- [ ] Redundant tests removed
 
-## Plan Summary
+### HEA-58: HealthConnectNutritionRepository missing test coverage for error paths
 
-**Objective:** Replace the steps-reading app with a food-scanner-to-Health-Connect nutrition sync app
+**Priority:** Medium | **Labels:** Technical Debt
+**Description:** Only 1 test (null client). SecurityException, general Exception, and successful write paths untested.
+**Acceptance Criteria:**
+- [ ] Tests for SecurityException → returns false
+- [ ] Tests for general Exception → returns false
+- [ ] Tests for successful write → returns true
+- [ ] Tests for empty entries list handling
 
-**Request:** Wipe existing steps code. Add settings screen for API key and base URL. Integrate with food-scanner's /api/v1/food-log endpoint via Ktor Client. Map meal entries to Health Connect NutritionRecords and write them. Support manual sync + configurable background sync (default 10 min). Sync up to 1 year of history. Write-only — no Health Connect reads. Ignore goals endpoints.
+### HEA-60: No unit tests for SyncWorker
 
-**Linear Issues:** HEA-29, HEA-30, HEA-31, HEA-32, HEA-33, HEA-34, HEA-35, HEA-36
+**Priority:** Medium | **Labels:** Technical Debt
+**Description:** `SyncWorker.doWork()` branching logic (Success/Error/NeedsConfiguration) is untested.
+**Acceptance Criteria:**
+- [ ] Tests for Success → Result.success()
+- [ ] Tests for Error → Result.retry()
+- [ ] Tests for NeedsConfiguration → Result.failure()
 
-**Approach:** Bottom-up TDD implementation. First wipe old code and add dependencies (Ktor 3.4.0, DataStore, WorkManager, kotlinx-serialization). Then build domain models, settings storage, API client, and HC writer independently. Wire them together in SyncNutritionUseCase. Build UI with two screens (sync status + settings) using Compose Navigation. Finally add WorkManager for background sync.
+### HEA-71: Add GitHub Actions workflow to run tests on PRs
 
-**Scope:**
-- Tasks: 8
-- Files affected: ~25 (15 deleted, ~20 new, ~5 modified)
-- New tests: yes (8+ test files)
+**Priority:** Medium | **Labels:** Technical Debt
+**Description:** No CI workflow runs tests on pull requests. Existing workflows are Claude Code integrations only (code review + PR assistant). Test regressions can be merged undetected.
+**Acceptance Criteria:**
+- [ ] GitHub Actions workflow triggers on PRs to `main`
+- [ ] Runs `./gradlew test` (unit tests)
+- [ ] Runs `./gradlew assembleDebug` (build verification)
+- [ ] Uses JDK 17 and caches Gradle dependencies
+- [ ] Reports test results clearly on PR checks
 
-**Key Decisions:**
-- Ktor Client 3.4.0 over Retrofit — Kotlin-native coroutines, built-in bearerAuth, first-class kotlinx.serialization, MockEngine for testing
-- One NutritionRecord per food log entry (not per meal or per day) — Health Connect aggregates automatically
-- clientRecordId = "foodscanner-{entryId}" for idempotent upsert — prevents duplicates on re-sync
-- Sync newest-first (today → backwards) so recent data appears immediately
-- Today always re-synced (food may be added throughout the day), past dates synced once
-- 500ms delay between API calls to stay well under 60 req/min rate limit
-- DataStore for settings (not Room) — simple key-value storage is sufficient
+## Prerequisites
 
-**Risks/Considerations:**
-- First full sync of 365 days requires ~365 API calls (~6 minutes at 60/min with throttling). Progress UI is essential.
-- Health Connect WRITE_NUTRITION permission requires runtime request — must handle denied state gracefully
-- Ktor 3.4.0 compatibility with AGP 9 / Kotlin 2.2.10 should be verified during Task 1 (dependency resolution)
-- kotlinx-serialization plugin must use AGP's bundled Kotlin version — do NOT specify a separate version
-- WorkManager minimum interval is 15 minutes — if user sets 10 min, we need to document this Android limitation or enforce 15 min minimum
+- [x] Gradle dependencies are up to date
+- [x] `gradle/libs.versions.toml` has required library versions
+- [x] Build compiles successfully
+- [x] All existing tests pass
+- [ ] `security-crypto` version added to `libs.versions.toml` (needed for HEA-45)
+
+## Implementation Tasks
+
+### Task 1: Create FoodLogRepository domain interface
+
+**Issue:** HEA-50
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/domain/repository/FoodLogRepository.kt` (create)
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/FoodScannerFoodLogRepository.kt` (create)
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt` (modify)
+
+**TDD Steps:**
+
+1. **RED** — Update `SyncNutritionUseCaseTest` to mock a `FoodLogRepository` interface instead of `FoodScannerApiClient`. The interface should have `suspend fun getFoodLog(baseUrl: String, apiKey: String, date: String): Result<List<FoodLogEntry>>`. Tests will fail to compile because the interface doesn't exist yet.
+   - Run: `./gradlew test --tests "com.healthhelper.app.domain.usecase.SyncNutritionUseCaseTest"`
+   - Verify: Compilation fails — `FoodLogRepository` not found
+
+2. **GREEN** — Create `FoodLogRepository` interface in `domain/repository/`. Create `FoodScannerFoodLogRepository` in `data/repository/` that wraps `FoodScannerApiClient` and implements the interface. Update `SyncNutritionUseCase` constructor to take `FoodLogRepository` instead of `FoodScannerApiClient`. Update `AppModule` to bind `FoodLogRepository` to `FoodScannerFoodLogRepository`.
+   - Run: `./gradlew test --tests "com.healthhelper.app.domain.usecase.SyncNutritionUseCaseTest"`
+   - Verify: All 16 existing tests pass
+
+3. **REFACTOR** — Verify `SyncNutritionUseCase` has no data-layer imports. The only imports should be from `domain/` packages and standard library.
+
+**Notes:**
+- Follow existing pattern: `NutritionRepository` interface in `domain/repository/`, `HealthConnectNutritionRepository` impl in `data/repository/`
+- The wrapper delegates directly to `FoodScannerApiClient.getFoodLog()` — no new logic
+- Reference: `domain/repository/NutritionRepository.kt` and `data/repository/HealthConnectNutritionRepository.kt`
+
+### Task 2: Add FoodLogEntry init validation
+
+**Issue:** HEA-64
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/domain/model/FoodLogEntry.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/domain/model/FoodLogEntryTest.kt` (create)
+
+**TDD Steps:**
+
+1. **RED** — Create `FoodLogEntryTest` with tests asserting that negative `calories`, `proteinG`, `carbsG`, `fatG`, `fiberG`, `sodiumMg` throw `IllegalArgumentException`. Also test that negative nullable fields (`saturatedFatG`, `transFatG`, `sugarsG`, `caloriesFromFat`) throw when non-null and negative. Test that zero and positive values succeed.
+   - Run: `./gradlew test --tests "com.healthhelper.app.domain.model.FoodLogEntryTest"`
+   - Verify: Negative-value tests pass (no validation yet — data class accepts anything)
+
+   Wait — tests for "negative throws" will PASS incorrectly since no validation exists. Adjust: write tests that assert `assertThrows<IllegalArgumentException>` for negative values. These will FAIL because no exception is thrown yet.
+
+2. **GREEN** — Add an `init` block to `FoodLogEntry` with `require()` calls for each non-negative constraint. Required (non-nullable) fields: `calories >= 0`, `proteinG >= 0`, `carbsG >= 0`, `fatG >= 0`, `fiberG >= 0`, `sodiumMg >= 0`. Nullable fields: validate only when non-null.
+   - Run: `./gradlew test --tests "com.healthhelper.app.domain.model.FoodLogEntryTest"`
+   - Verify: All validation tests pass
+
+3. **REFACTOR** — Verify existing tests in `FoodScannerApiClientTest`, `SyncNutritionUseCaseTest`, and `NutritionRecordMapperTest` still pass (they use valid non-negative test data).
+   - Run: `./gradlew test`
+   - Verify: Full suite passes
+
+**Notes:**
+- Use descriptive `require` messages: `require(calories >= 0) { "calories must be non-negative, was $calories" }`
+- Reference: standard Kotlin `require()` pattern
+
+### Task 3: Handle DateTimeParseException in SyncNutritionUseCase
+
+**Issue:** HEA-49
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt` (modify)
+
+**TDD Steps:**
+
+1. **RED** — Add test: when `lastSyncedDateFlow` returns a malformed date string (e.g., `"not-a-date"`), `invoke()` should treat it as empty and sync from `maxPastDate` (not throw). Assert the result is `SyncResult.Success` or `SyncResult.Error` (depending on API responses), NOT an uncaught exception.
+   - Run: `./gradlew test --tests "com.healthhelper.app.domain.usecase.SyncNutritionUseCaseTest"`
+   - Verify: Test fails with `DateTimeParseException`
+
+2. **GREEN** — Wrap the `LocalDate.parse(lastSyncedDate, ...)` call in a try-catch for `DateTimeParseException`. On catch, log a warning and treat as empty string (fall through to `maxPastDate`).
+   - Run: `./gradlew test --tests "com.healthhelper.app.domain.usecase.SyncNutritionUseCaseTest"`
+   - Verify: Test passes
+
+3. **REFACTOR** — Extract the date parsing into a small private function for clarity.
+
+**Defensive Requirements:**
+- `DateTimeParseException` caught and logged at WARN level
+- Corrupt date triggers full re-sync (safe fallback)
+- No state corruption — `lastSyncedDate` in DataStore is only updated on successful sync
+
+### Task 4: Rethrow CancellationException in data layer
+
+**Issue:** HEA-47
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectNutritionRepository.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/data/api/FoodScannerApiClientTest.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/HealthConnectNutritionRepositoryTest.kt` (modify)
+
+**TDD Steps:**
+
+1. **RED** — Add tests to both test files asserting that `CancellationException` propagates (is not caught). In `FoodScannerApiClientTest`: mock the HTTP engine to throw `CancellationException`, assert it propagates. In `HealthConnectNutritionRepositoryTest`: mock `insertRecords` to throw `CancellationException`, assert it propagates.
+   - Run: `./gradlew test --tests "com.healthhelper.app.data.api.FoodScannerApiClientTest" --tests "com.healthhelper.app.data.repository.HealthConnectNutritionRepositoryTest"`
+   - Verify: Tests fail (CancellationException is caught and swallowed)
+
+2. **GREEN** — In both `catch (e: Exception)` blocks, add `if (e is CancellationException) throw e` as the first line. This preserves structured concurrency while keeping the existing error handling for other exceptions.
+   - Run: `./gradlew test --tests "com.healthhelper.app.data.api.FoodScannerApiClientTest" --tests "com.healthhelper.app.data.repository.HealthConnectNutritionRepositoryTest"`
+   - Verify: All tests pass (including existing ones)
+
+**Defensive Requirements:**
+- `kotlin.coroutines.cancellation.CancellationException` must propagate through all coroutine boundaries
+- Existing error handling for `SerializationException`, `SecurityException`, and general `Exception` remains unchanged
+- Import `kotlin.coroutines.cancellation.CancellationException` (not `java.util.concurrent.CancellationException`)
+
+### Task 5: Add HTTPS scheme validation on base URL
+
+**Issue:** HEA-46
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/data/api/FoodScannerApiClientTest.kt` (modify)
+
+**TDD Steps:**
+
+1. **RED** — Add test: calling `getFoodLog("http://food.example.com", ...)` returns `Result.failure` with message indicating HTTPS is required. Add test: `getFoodLog("https://food.example.com", ...)` continues to work.
+   - Run: `./gradlew test --tests "com.healthhelper.app.data.api.FoodScannerApiClientTest"`
+   - Verify: HTTP test fails (no validation exists, request proceeds)
+
+2. **GREEN** — Add a scheme check at the start of `getFoodLog()`: if `baseUrl` does not start with `https://` (case-insensitive), return `Result.failure(Exception("HTTPS required for API connections"))`.
+   - Run: `./gradlew test --tests "com.healthhelper.app.data.api.FoodScannerApiClientTest"`
+   - Verify: All tests pass
+
+**Defensive Requirements:**
+- Check is case-insensitive (`HTTP://` also rejected)
+- Empty/blank baseUrl also rejected
+- Validation happens before any network call (no token leakage)
+
+### Task 6: Add try/finally to triggerSync in SyncViewModel
+
+**Issue:** HEA-48
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt` (modify)
+
+**TDD Steps:**
+
+1. **RED** — Add test: when `syncNutritionUseCase.invoke()` throws an unexpected exception (e.g., `RuntimeException("unexpected")`), `isSyncing` should be reset to `false` and `lastSyncResult` should contain an error message.
+   - Run: `./gradlew test --tests "com.healthhelper.app.presentation.viewmodel.SyncViewModelTest"`
+   - Verify: Test fails (isSyncing stays true, lastSyncResult is null)
+
+2. **GREEN** — Wrap the `syncNutritionUseCase.invoke()` call and result handling in `try { ... } catch (e: Exception) { ... } finally { ... }`. In `catch`: set error message. In `finally`: always set `isSyncing = false` and `syncProgress = null`.
+   - Run: `./gradlew test --tests "com.healthhelper.app.presentation.viewmodel.SyncViewModelTest"`
+   - Verify: All tests pass
+
+**Defensive Requirements:**
+- `finally` block always executes, even on `CancellationException`
+- Error message in catch should be generic: "Unexpected error: ${e.message}"
+- `CancellationException` should be rethrown after cleanup (coroutine cancellation must propagate)
+
+### Task 7: Small bug fixes and convention cleanup
+
+**Issues:** HEA-52, HEA-53, HEA-65, HEA-66, HEA-67, HEA-68
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` (modify — HEA-52)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SyncScreen.kt` (modify — HEA-53)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModel.kt` (modify — HEA-65)
+- `app/src/main/kotlin/com/healthhelper/app/data/sync/SyncWorker.kt` (modify — HEA-66)
+- `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt` (modify — HEA-67)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` (modify — HEA-68)
+
+**Steps (surgical changes, no TDD needed for config/convention fixes):**
+
+1. **HEA-52** — In `DataStoreSettingsRepository`, change `const val DEFAULT_SYNC_INTERVAL = 10` to `15`.
+
+2. **HEA-53** — In `SyncScreen`, change `LaunchedEffect(uiState.healthConnectAvailable)` to `LaunchedEffect(uiState.healthConnectAvailable, uiState.permissionGranted)`.
+
+3. **HEA-65** — In `SettingsViewModel`, replace the `settingsRepository.isConfigured()` call inside the combine/collect with inline derivation: `val configured = apiKey.isNotEmpty() && baseUrl.isNotEmpty()`. Follow the pattern already used in `SyncViewModel:58`.
+
+4. **HEA-66** — In `SyncWorker`, replace string templates with Timber format specifiers:
+   - Line 24: `"SyncWorker: success, synced ${result.recordsSynced} records"` → use `%d` for recordsSynced
+   - Line 28: `"SyncWorker: error — ${result.message}, will retry"` → use `%s` for message
+
+5. **HEA-67** — In `FoodScannerApiClient`, split the Timber log for HTTP errors: use `Timber.w` for 401 status, keep `Timber.e` for all other HTTP error statuses. Move the log call inside the `when` block or add a conditional.
+
+6. **HEA-68** — In `SyncViewModel`, remove `settingsRepository.syncIntervalFlow` from the first `combine` block (lines 52-67). Change the combine from 4 flows to 3 flows (apiKeyFlow, baseUrlFlow, lastSyncedDateFlow). Remove the unused `_` lambda parameter. The second combine (lines 72-84) already handles sync interval changes separately.
+
+**Verification:**
+- Run: `./gradlew test`
+- Verify: All existing tests pass (these are non-behavior-changing fixes except HEA-52 which changes a default value)
+
+### Task 8: Add network security configuration
+
+**Issue:** HEA-62
+**Files:**
+- `app/src/main/res/xml/network_security_config.xml` (create)
+- `app/src/main/AndroidManifest.xml` (modify)
+
+**Steps:**
+
+1. Create `app/src/main/res/xml/network_security_config.xml` that explicitly disallows cleartext traffic (matching Android 28+ default but making it explicit).
+
+2. Add `android:networkSecurityConfig="@xml/network_security_config"` to the `<application>` tag in `AndroidManifest.xml`.
+
+**Verification:**
+- Run: `./gradlew assembleDebug`
+- Verify: Build succeeds with the new config
+
+**Notes:**
+- Keep it simple: `<network-security-config><base-config cleartextTrafficPermitted="false" /></network-security-config>`
+
+### Task 9: Migrate API key to encrypted storage
+
+**Issue:** HEA-45
+**Files:**
+- `gradle/libs.versions.toml` (modify — add security-crypto version)
+- `app/build.gradle.kts` (modify — add security-crypto dependency)
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepositoryTest.kt` (modify if exists)
+
+**TDD Steps:**
+
+1. **RED** — Add/modify tests for `DataStoreSettingsRepository` that verify:
+   - API key is stored and retrieved correctly through encrypted storage
+   - Migration from plain DataStore to encrypted storage works (key readable after migration)
+   - Old plain-text key is removed from DataStore after migration
+   - Other settings (baseUrl, syncInterval, lastSyncedDate) remain in DataStore unchanged
+   - Run tests — fail because encryption isn't implemented yet
+
+2. **GREEN** — Implementation approach:
+   - Add `androidx.security:security-crypto` dependency (version in `libs.versions.toml`)
+   - Modify `DataStoreSettingsRepository` to accept an `EncryptedSharedPreferences` instance alongside DataStore
+   - Store/retrieve `apiKey` from `EncryptedSharedPreferences` instead of DataStore
+   - Implement `apiKeyFlow` using `callbackFlow` that reads from encrypted prefs and listens for changes
+   - Add migration logic in repository init: if DataStore has an `api_key` value, move it to encrypted prefs and clear from DataStore
+   - Update `AppModule` to provide `EncryptedSharedPreferences` via `MasterKey` and inject into repository
+
+3. **REFACTOR** — Verify the Flow-based interface works reactively: setting a key emits on the flow.
+
+**Defensive Requirements:**
+- `MasterKey` creation can fail on devices with broken Keystore — catch and fall back to plain storage with a WARN log
+- First-run migration must be atomic: read from DataStore, write to encrypted, verify read-back, then clear from DataStore
+- If encrypted prefs already has the key (re-run), skip migration
+- Thread safety: migration runs in coroutine scope, guarded by mutex or init block
+
+**Notes:**
+- `EncryptedSharedPreferences` uses AES256-SIV for keys and AES256-GCM for values
+- `MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()`
+- Reference: [AndroidX Security Crypto docs](https://developer.android.com/reference/androidx/security/crypto/EncryptedSharedPreferences)
+
+### Task 10: Enable R8 for release builds
+
+**Issue:** HEA-44
+**Files:**
+- `app/build.gradle.kts` (modify)
+- `app/proguard-rules.pro` (create)
+
+**Steps:**
+
+1. In `app/build.gradle.kts`, update the release buildType:
+   - Set `isMinifyEnabled = true`
+   - Set `isShrinkResources = true`
+   - Add `proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")`
+
+2. Create `app/proguard-rules.pro` with rules for:
+   - **Kotlin Serialization**: Keep `@Serializable` annotated classes and their serializer companions
+   - **Ktor**: Keep engine and plugin classes
+   - **Health Connect**: Keep API classes used via reflection
+   - **Hilt**: Already includes its own rules via annotation processor
+   - **WorkManager**: Keep worker classes referenced by name
+   - **DataStore**: Keep preference key classes
+
+3. **Verification:**
+   - Run: `./gradlew assembleRelease`
+   - Verify: Release APK builds without errors
+   - Run: `./gradlew test` (unit tests use debug variant, should still pass)
+
+**Notes:**
+- Start with conservative rules (keep more than necessary) and tighten later
+- Kotlin serialization requires `-keepclassmembers` for `@Serializable` classes and their `Companion` objects
+- Ktor OkHttp engine needs `-dontwarn` rules for optional dependencies
+
+### Task 11: Fix existing test issues
+
+**Issues:** HEA-51, HEA-56, HEA-57, HEA-59, HEA-69, HEA-70
+**Files:**
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/NutritionRecordMapperTest.kt` (modify — HEA-51)
+- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt` (modify — HEA-56)
+- `app/src/test/kotlin/com/healthhelper/app/data/sync/SyncSchedulerTest.kt` (modify — HEA-57, HEA-70)
+- `app/src/test/kotlin/com/healthhelper/app/data/api/FoodScannerApiClientTest.kt` (modify — HEA-59)
+- `app/src/test/kotlin/com/healthhelper/app/domain/model/MealTypeTest.kt` (modify — HEA-69)
+
+**Steps:**
+
+1. **HEA-51** — In `NutritionRecordMapperTest:162`, change `assertEquals(60, ...)` to `assertEquals(60L, ...)` for explicit Long comparison.
+
+2. **HEA-56** — In `SyncViewModelTest`, remove the test `cannot trigger sync while already syncing` (lines 188-212). The behavior is already properly tested by `cannot trigger sync when isSyncing is true` (lines 215-238) which uses a delay to hold the coroutine and verifies `assertEquals(1, callCount)`.
+
+3. **HEA-57** — In `SyncSchedulerTest`, enhance the `schedulePeriodic clamps interval to minimum 15 minutes` test: capture the `PeriodicWorkRequest` via a slot, then verify the interval. Access `requestSlot.captured.workSpec.intervalDuration` and assert it equals `TimeUnit.MINUTES.toMillis(15)`. If `workSpec` is not accessible, verify by checking that the captured request's tags or constraints match expectations, or use reflection.
+
+4. **HEA-59** — In `FoodScannerApiClientTest`, replace all `capturedUrl!!` and `capturedAuth!!` with `assertNotNull(capturedUrl)` / `assertNotNull(capturedAuth)` followed by assertions on the returned non-null value. Locations: `correctUrlConstruction` test (lines 127-128) and `trailingSlashHandled` test (lines 265-266).
+
+5. **HEA-69** — In `MealTypeTest:3`, change `import org.junit.jupiter.api.Assertions.assertEquals` to `import kotlin.test.assertEquals`.
+
+6. **HEA-70** — In `SyncSchedulerTest`, remove the two redundant test methods:
+   - `schedulePeriodic uses correct work name` (lines 83-96) — already asserted in first test at line 43
+   - `schedulePeriodic uses UPDATE policy` (lines 98-111) — already asserted in first test at line 44
+
+**Verification:**
+- Run: `./gradlew test`
+- Verify: All tests pass with fewer test methods (removed duplicates)
+
+### Task 12: Add HealthConnectNutritionRepository error path tests
+
+**Issue:** HEA-58
+**Files:**
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/HealthConnectNutritionRepositoryTest.kt` (modify)
+
+**TDD Steps:**
+
+1. **RED** — Add test cases:
+   - `writeNutritionRecords returns false when insertRecords throws SecurityException` — mock `HealthConnectClient`, mock `insertRecords` to throw `SecurityException`, assert `writeNutritionRecords` returns `false`
+   - `writeNutritionRecords returns false when insertRecords throws general Exception` — same pattern with generic `Exception`
+   - `writeNutritionRecords returns true on successful write` — mock `insertRecords` to succeed (returns `InsertRecordsResponse`), assert returns `true`
+   - `writeNutritionRecords handles empty entries list` — pass empty list, verify no `insertRecords` call or successful return
+
+   Tests will initially fail because `HealthConnectClient` mocking setup doesn't exist in the test class yet.
+
+2. **GREEN** — Set up MockK mocks for `HealthConnectClient` in the test class. Use `coEvery { healthConnectClient.insertRecords(any()) }` to control behavior. Create repository with the mocked client. Verify results.
+   - Run: `./gradlew test --tests "com.healthhelper.app.data.repository.HealthConnectNutritionRepositoryTest"`
+   - Verify: All tests pass
+
+**Notes:**
+- `HealthConnectClient` is an interface — mock it with `mockk<HealthConnectClient>()`
+- `insertRecords` is a suspend function — use `coEvery`/`coThrows`
+- `mapToNutritionRecord` needs a valid `FoodLogEntry` and date string — reuse `testEntry` from existing test
+
+### Task 13: Add SyncWorker unit tests
+
+**Issue:** HEA-60
+**Files:**
+- `app/src/test/kotlin/com/healthhelper/app/data/sync/SyncWorkerTest.kt` (create)
+
+**TDD Steps:**
+
+1. **RED** — Create `SyncWorkerTest` with three tests:
+   - `doWork returns success when sync succeeds` — mock `SyncNutritionUseCase` to return `SyncResult.Success(5)`, call `doWork()`, assert `Result.success()`
+   - `doWork returns retry when sync errors` — mock to return `SyncResult.Error("fail")`, assert `Result.retry()`
+   - `doWork returns failure when needs configuration` — mock to return `SyncResult.NeedsConfiguration`, assert `Result.failure()`
+
+   Tests will fail because the test file doesn't exist yet.
+
+2. **GREEN** — Create the test class. Construct `SyncWorker` directly with:
+   - `context: Context = mockk(relaxed = true)`
+   - `workerParams: WorkerParameters = mockk(relaxed = true)`
+   - `syncNutritionUseCase: SyncNutritionUseCase = mockk()`
+
+   Call `worker.doWork()` in `runTest` and assert the return value.
+   - Run: `./gradlew test --tests "com.healthhelper.app.data.sync.SyncWorkerTest"`
+   - Verify: All 3 tests pass
+
+**Notes:**
+- `SyncWorker` extends `CoroutineWorker` — `doWork()` is a `suspend fun`
+- Direct construction bypasses Hilt — that's fine for unit tests
+- `ListenableWorker.Result.success()`, `.retry()`, `.failure()` are comparable with `assertEquals`
+- MockK relaxed mocks handle the `WorkerParameters` internals that `ListenableWorker` accesses
+
+### Task 14: Add GitHub Actions CI workflow
+
+**Issue:** HEA-71
+**Files:**
+- `.github/workflows/ci.yml` (create)
+
+**Steps:**
+
+1. Create `.github/workflows/ci.yml` with:
+   - **Triggers:** Pull requests targeting `main` (opened, synchronize, reopened). Also trigger on pushes to `main` to keep status current.
+   - **Runner:** `ubuntu-latest`
+   - **JDK:** Set up JDK 17 using `actions/setup-java@v4` with `distribution: 'temurin'`
+   - **Gradle caching:** Use `actions/setup-java`'s built-in `cache: 'gradle'` parameter, or `gradle/actions/setup-gradle@v4` for advanced caching
+   - **Android SDK:** Use `android-actions/setup-android@v3` to install the Android SDK
+   - **Steps:**
+     1. Checkout code
+     2. Set up JDK 17
+     3. Set up Android SDK
+     4. Grant Gradle wrapper execute permission: `chmod +x ./gradlew`
+     5. Run unit tests: `./gradlew test`
+     6. Build debug APK: `./gradlew assembleDebug`
+   - **Test results:** Use `dorny/test-reporter@v1` or `mikepenz/action-junit-report@v4` to publish JUnit XML results from `app/build/test-results/` as PR check annotations
+
+2. **Verification:**
+   - Push the workflow file to a branch and open a test PR
+   - Verify the workflow triggers and passes
+   - Verify test results appear as PR check annotations
+
+**Notes:**
+- Keep the workflow simple — single job with sequential steps
+- Gradle wrapper is already committed to the repo (`gradlew`, `gradle/wrapper/`)
+- Unit tests don't need an Android emulator (they run on JVM)
+- `assembleDebug` verifies the full build pipeline without needing a device
+- Reference existing workflows in `.github/workflows/` for permission patterns
+
+### Task 15: Integration & Verification
+
+**Issues:** All
+**Files:** Various from previous tasks
+
+**Steps:**
+
+1. Run full test suite: `./gradlew test`
+2. Build debug APK: `./gradlew assembleDebug`
+3. Build release APK: `./gradlew assembleRelease` (verifies R8 rules)
+4. Manual verification checklist:
+   - [ ] `SyncNutritionUseCase` has no imports from `com.healthhelper.app.data` package
+   - [ ] `FoodLogEntry` rejects negative calories in tests
+   - [ ] `FoodScannerApiClient` rejects `http://` URLs
+   - [ ] `SyncViewModel.triggerSync()` has try/finally
+   - [ ] `DataStoreSettingsRepository` uses EncryptedSharedPreferences for API key
+   - [ ] `network_security_config.xml` exists and is referenced in manifest
+   - [ ] Release build has `isMinifyEnabled = true`
+   - [ ] No `org.junit.jupiter.api.Assertions` imports remain in test files
+   - [ ] `.github/workflows/ci.yml` exists and runs tests + build on PRs
+
+## MCP Usage During Implementation
+
+| MCP Server | Tool | Purpose |
+|------------|------|---------|
+| Linear | `save_issue` | Move issues to "In Progress" when starting each task, "Done" when complete |
+| Linear | `create_comment` | Add implementation notes to issues if needed |
+
+## Error Handling
+
+| Error Scenario | Expected Behavior | Test Coverage |
+|---------------|-------------------|---------------|
+| Negative nutrition values | `IllegalArgumentException` at construction | Task 2 unit tests |
+| Malformed lastSyncedDate | Treat as empty, full re-sync | Task 3 unit tests |
+| CancellationException in API call | Rethrown, not caught | Task 4 unit tests |
+| http:// base URL | `Result.failure` before network call | Task 5 unit tests |
+| Exception during triggerSync | isSyncing reset, error shown | Task 6 unit tests |
+| Broken Android Keystore (HEA-45) | Fall back to plain DataStore with warning | Task 9 defensive check |
+| R8 strips needed classes | ProGuard keep rules prevent it | Task 10 release build test |
+
+## Risks & Open Questions
+
+- [ ] **HEA-45 Keystore compatibility:** Some devices (especially older/rooted) have broken Keystore implementations. Plan includes fallback to plain storage.
+- [ ] **HEA-44 ProGuard rules completeness:** R8 rules may need iteration. Initial rules should be conservative (keep more). Tighten after successful release build.
+- [ ] **HEA-57 WorkSpec accessibility:** `PeriodicWorkRequest.workSpec.intervalDuration` may be internal API. If inaccessible, the test may need reflection or an alternative verification approach.
+- [ ] **HEA-60 CoroutineWorker test setup:** Direct construction with mocked Context/WorkerParameters should work, but if `ListenableWorker` accesses Context in unexpected ways, may need `work-testing` library or Robolectric.
+
+## Scope Boundaries
+
+**In Scope:**
+- All 23 valid backlog issues listed above
+- Domain architecture fix (FoodLogRepository interface)
+- Security hardening (encrypted storage, R8, HTTPS validation, network config)
+- Bug fixes (CancellationException, try/finally, date parsing, defaults, log levels)
+- Convention cleanup (Timber specifiers, redundant calls, unused flows)
+- Test quality improvements (fix assertions, remove duplicates, add coverage)
+- CI infrastructure (GitHub Actions workflow for PR test/build gating)
+
+**Out of Scope:**
+- HEA-54 (Canceled): API key in UI state — must be there for settings editing
+- HEA-55 (Canceled): Server message in SyncWorker — server messages don't reach SyncWorker
+- HEA-61 (Canceled): SSL pinning — incompatible with user-configurable base URLs
+- HEA-63 (Canceled): HttpClient close — standard Android singleton pattern
+- UI/UX changes beyond the specific bug fixes
+- New features or enhancements not in the backlog
+- Instrumented tests (only unit tests in scope)
 
 ---
 
 ## Iteration 1
 
 **Implemented:** 2026-02-27
-**Method:** Single-agent (recovery from failed agent team run)
+**Method:** Agent team (4 workers, worktree-isolated)
 
 ### Tasks Completed This Iteration
-- Task 1: Wipe existing steps code and add new dependencies (HEA-29)
-- Task 2: Domain models (HEA-30)
-- Task 3: Settings repository with DataStore (HEA-31)
-- Task 4: Food Scanner API client with Ktor (HEA-32)
-- Task 5: Health Connect nutrition writer (HEA-33)
-- Task 6: SyncNutritionUseCase (HEA-34)
-- Task 7: Settings and sync UI screens (HEA-35)
-- Task 8: Background sync with WorkManager (HEA-36)
+- Task 1: Create FoodLogRepository domain interface (HEA-50) — domain interface + data wrapper + DI binding (worker-1)
+- Task 2: Add FoodLogEntry init validation (HEA-64) — require() blocks for 10 fields + 16 tests (worker-1)
+- Task 3: Handle DateTimeParseException (HEA-49) — try-catch with maxPastDate fallback + test (worker-1)
+- Task 4: Rethrow CancellationException (HEA-47) — added rethrow in 2 catch blocks + 2 tests (worker-2)
+- Task 5: HTTPS scheme validation (HEA-46) — case-insensitive https:// guard + 3 tests (worker-2)
+- Task 6: try/finally triggerSync (HEA-48) — catch/finally in SyncViewModel + race fix + test (worker-3)
+- Task 7: Small bug fixes — HEA-52 (default interval 15), HEA-53 (LaunchedEffect key), HEA-65 (inline isConfigured), HEA-66 (Timber format), HEA-67 (401 WARN), HEA-68 (unused combine flow) (workers 2+3)
+- Task 8: Network security config (HEA-62) — network_security_config.xml + manifest ref (worker-2)
+- Task 9: Encrypted API key storage (HEA-45) — EncryptedSharedPreferences + migration + fallback (worker-3)
+- Task 10: R8/ProGuard (HEA-44) — isMinifyEnabled + proguard-rules.pro (worker-4)
+- Task 11: Fix test issues — HEA-51 (60L), HEA-56 (remove trivial test), HEA-57 (verify clamped interval), HEA-59 (assertNotNull), HEA-69 (kotlin.test import), HEA-70 (remove duplicates) (worker-4)
+- Task 12: Repository error path tests (HEA-58) — 4 new tests for SecurityException/Exception/success/empty (worker-4)
+- Task 13: SyncWorker tests (HEA-60) — 3 new tests for success/retry/failure (worker-4)
+- Task 14: GitHub Actions CI workflow (HEA-71) — ci.yml with JDK 17, Android SDK, test + build (worker-4)
 
 ### Files Modified
-- `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt` — Ktor HTTP client for food-scanner API, removed withTimeout (virtual time conflict)
-- `app/src/main/kotlin/com/healthhelper/app/data/api/dto/FoodLogResponse.kt` — @Serializable DTOs (ApiEnvelope, NutritionSummaryDto, MealGroupDto, MealEntryDto, ApiErrorDto)
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` — DataStore-backed settings storage
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectNutritionRepository.kt` — NutritionRepository impl, removed withTimeout
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/NutritionRecordMapper.kt` — FoodLogEntry → NutritionRecord mapper with time parse fallback
-- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt` — Sync orchestrator, fixed lastSyncedDate tracking
-- `app/src/test/kotlin/com/healthhelper/app/data/api/FoodScannerApiClientTest.kt` — 10 tests (MockEngine)
-- `app/src/test/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepositoryTest.kt` — 12 tests (real DataStore + TempDir)
-- `app/src/test/kotlin/com/healthhelper/app/data/repository/NutritionRecordMapperTest.kt` — 22 tests (real NutritionRecord)
-- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt` — 8 tests (MockK)
+- `app/src/main/kotlin/com/healthhelper/app/domain/repository/FoodLogRepository.kt` — Created domain interface
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/FoodScannerFoodLogRepository.kt` — Created data wrapper
+- `app/src/main/kotlin/com/healthhelper/app/domain/model/FoodLogEntry.kt` — Added init validation
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt` — FoodLogRepository + DateTimeParseException
+- `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt` — CancellationException + HTTPS + 401 WARN
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectNutritionRepository.kt` — CancellationException rethrow
+- `app/src/main/kotlin/com/healthhelper/app/data/sync/SyncWorker.kt` — Timber format specifiers
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` — Encrypted storage + DEFAULT_SYNC_INTERVAL
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` — try/finally + race fix + remove unused combine flow
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModel.kt` — Inline isConfigured + default sync interval fix
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SyncScreen.kt` — LaunchedEffect permissionGranted key
+- `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt` — FoodLogRepository + EncryptedSharedPreferences bindings
+- `app/build.gradle.kts` — R8 + security-crypto dependency
+- `app/proguard-rules.pro` — Created ProGuard rules
+- `app/src/main/AndroidManifest.xml` — networkSecurityConfig
+- `app/src/main/res/xml/network_security_config.xml` — Created cleartext block
+- `gradle/libs.versions.toml` — security-crypto version
+- `.github/workflows/ci.yml` — Created CI workflow
+- `app/src/test/kotlin/com/healthhelper/app/domain/model/FoodLogEntryTest.kt` — Created (16 tests)
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt` — Updated mocks + malformed date test
+- `app/src/test/kotlin/com/healthhelper/app/data/api/FoodScannerApiClientTest.kt` — HTTPS + CancellationException + assertNotNull
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/HealthConnectNutritionRepositoryTest.kt` — CancellationException + error paths
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/NutritionRecordMapperTest.kt` — 60L fix
+- `app/src/test/kotlin/com/healthhelper/app/data/sync/SyncSchedulerTest.kt` — Clamped interval verify + removed duplicates
+- `app/src/test/kotlin/com/healthhelper/app/data/sync/SyncWorkerTest.kt` — Created (3 tests)
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepositoryTest.kt` — Encrypted storage tests
+- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt` — Exception test + removed trivial test
+- `app/src/test/kotlin/com/healthhelper/app/domain/model/MealTypeTest.kt` — kotlin.test import
 
 ### Linear Updates
-- HEA-29: Review → Done
-- HEA-30: Review → Done
-- HEA-31: In Progress → Done
-- HEA-32: Todo → Done
-- HEA-33: Todo → Done
-- HEA-34: Todo → Done
-- HEA-35: Review → Done
-- HEA-36: Review → Done
+- HEA-44: Todo → In Progress → Review
+- HEA-45: Todo → In Progress → Review
+- HEA-46: Todo → In Progress → Review
+- HEA-47: Todo → In Progress → Review
+- HEA-48: Todo → In Progress → Review
+- HEA-49: Todo → In Progress → Review
+- HEA-50: Todo → In Progress → Review
+- HEA-51: Todo → In Review
+- HEA-52: Todo → In Progress → Review
+- HEA-53: Todo → In Progress → Review
+- HEA-56: Todo → In Review
+- HEA-57: Todo → In Review
+- HEA-58: Todo → In Review
+- HEA-59: Todo → In Review
+- HEA-60: Todo → In Review
+- HEA-62: Todo → In Review
+- HEA-64: Todo → In Review
+- HEA-65: Todo → In Progress → Review
+- HEA-66: Todo → In Review
+- HEA-67: Todo → In Review
+- HEA-68: Todo → In Progress → Review
+- HEA-69: Todo → In Review
+- HEA-70: Todo → In Review
+- HEA-71: Todo → In Review
 
 ### Pre-commit Verification
-- bug-hunter: Found 5 issues — fixed 3 real bugs (lastSyncedDate tracking, time parse fallback, withTimeout/virtual time conflict). Deferred 2 (architecture: FoodScannerApiClient in domain layer — plan-designed; security: plaintext DataStore — standard for self-hosted API keys).
-- verifier: All 80 tests pass, lint clean, build succeeds, zero warnings
+- bug-hunter: Found 2 HIGH bugs (SettingsUiState default mismatch, triggerSync race window), fixed before proceeding. 3 MEDIUM (by-design). 1 LOW (pre-existing).
+- verifier: All tests pass, zero warnings
 
-### Recovery Notes
-Previous agent team run failed (workers aborted mid-run). Damage assessment:
-- Tasks 1-2: Already committed by worker-1 (`5454cff`)
-- Tasks 7-8: Already committed by worker-4 (`452082c`)
-- Tasks 3-6: Uncommitted working directory changes — mostly complete but FoodScannerApiClient had `withTimeout(30_000)` that conflicted with `runTest` virtual time (6/10 tests failing)
-- Fixed: Removed withTimeout from FoodScannerApiClient and HealthConnectNutritionRepository (OkHttp engine has built-in timeouts), fixed lastSyncedDate storing oldest instead of newest date, added time parse fallback in NutritionRecordMapper
+### Work Partition
+- Worker 1: Tasks 1, 2, 3 (domain layer — FoodLogRepository, FoodLogEntry validation, DateTimeParseException)
+- Worker 2: Tasks 4, 5, 8, HEA-66, HEA-67 (data layer — CancellationException, HTTPS, network config, Timber)
+- Worker 3: Tasks 6, 9, HEA-52, HEA-53, HEA-65, HEA-68 (presentation + settings — try/finally, encrypted storage, bug fixes)
+- Worker 4: Tasks 10, 11, 12, 13, 14 (tests + build + CI — R8, test fixes, new tests, CI workflow)
+
+### Merge Summary
+- Worker 1: fast-forward (no conflicts)
+- Worker 2: merged cleanly
+- Worker 3: merged cleanly (auto-merged AppModule.kt)
+- Worker 4: 1 conflict in HealthConnectNutritionRepositoryTest.kt (workers 2+4 both added tests — resolved by keeping all tests)
 
 ### Continuation Status
 All tasks completed.
 
 ### Review Findings
 
-Summary: 10 issue(s) found (single-agent deep review — security, reliability, quality)
-- FIX: 7 issue(s) — Linear issues created in Todo
-- DISCARD: 3 finding(s) — not bugs
+Summary: 6 issue(s) found (Team: security, reliability, quality reviewers — 28 files reviewed)
+- FIX: 6 issue(s) — Linear issues created in Todo
+- DISCARDED: 12 finding(s) — false positives / not applicable
 
 **Issues requiring fix:**
-- [URGENT] MISSED IMPL: Health Connect WRITE_NUTRITION runtime permission never requested — plan Task 8 explicitly required `PermissionController.createRequestPermissionResultContract()` in SyncScreen but it was never implemented. App silently fails to write to Health Connect. (`app/src/main/kotlin/com/healthhelper/app/presentation/ui/SyncScreen.kt` — missing entirely)
-- [HIGH] BUG: lastSyncedDate gap bug permanently skips failed intermediate dates — `newestSyncedPastDate` captures first successful non-today date (newest-first loop), advancing past any failed dates which are never retried (`app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt:66-69`)
-- [HIGH] BUG: SyncViewModel `isConfigured` state becomes stale after settings change — `combine` only observes `syncIntervalFlow` and `lastSyncedDateFlow`, not `apiKeyFlow`/`baseUrlFlow`. After configuring settings and navigating back, sync button stays disabled. (`app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt:42-44`)
-- [HIGH] BUG: App crashes on startup if Health Connect unavailable — `HealthConnectClient.getOrCreate(context)` throws `IllegalStateException` if HC not installed. Hilt singleton creation crashes the app. (`app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt:46-47`)
-- [MEDIUM] BUG: Misleading `SyncResult.Success(0)` when all HC writes fail — API calls succeed → `successfulDays` increments, but HC writes fail → `totalRecordsSynced` stays 0. User sees "Synced 0 records" with no explanation. (`app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt:56-70,93-96`)
-- [MEDIUM] BUG: `schedulePeriodic()` called on every flow emission, resetting WorkManager periodic timer — opening SyncScreen or completing a sync resets the countdown. (`app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt:55-57`)
-- [LOW] BUG: No base URL validation — trailing slashes produce malformed URL `https://example.com//api/v1/food-log`. (`app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt:26`)
+- [HIGH] TIMEOUT: No HttpTimeout plugin on Ktor HttpClient — sync can run indefinitely during backfill (`app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt:90`) — [HEA-72](https://linear.app/lw-claude/issue/HEA-72)
+- [MEDIUM] BUG: setApiKey uses apply() instead of commit() — async write not durable on process kill (`app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt:81-83`) — [HEA-73](https://linear.app/lw-claude/issue/HEA-73)
+- [MEDIUM] BUG: Migration verification failure silently swallowed — migrationComplete set true even when read-back fails, API key can be lost (`app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt:51-56`) — [HEA-74](https://linear.app/lw-claude/issue/HEA-74)
+- [MEDIUM] BUG: capturedProgress never asserted in SyncViewModelTest — dead code gives false test confidence (`app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt:165-185`) — [HEA-75](https://linear.app/lw-claude/issue/HEA-75)
+- [MEDIUM] ERROR: Bare launch in SettingsViewModel with no error handling — DataStore IOException silently dropped (`app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModel.kt:52-66`) — [HEA-76](https://linear.app/lw-claude/issue/HEA-76)
+- [MEDIUM] SECURITY: Raw exception/server messages exposed in user-visible UI — can leak hostnames and internal details (`app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt:109`, `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt:53-54`) — [HEA-77](https://linear.app/lw-claude/issue/HEA-77)
 
 **Discarded findings (not bugs):**
-- [DISCARDED] CONVENTION: Settings saved on every keystroke without debounce (`SettingsViewModel.kt:52-56`) — DataStore batches writes internally; no data corruption. Suboptimal performance but functional. Style preference.
-- [DISCARDED] CONVENTION: Default sync interval (10) below slider minimum (15) — visual mismatch only. Slider clamps display; stored value unchanged unless user interacts. No functional impact.
-- [DISCARDED] TEST: 2 planned tests missing (respects lastSyncedDate, caps at 365 days) in `SyncNutritionUseCaseTest.kt` — the underlying logic is present in the code and covered indirectly by existing multi-day tests. Missing explicit test coverage is low-risk and will be naturally added when fixing HEA-37.
+- [DISCARDED] SECURITY: Silent fallback from EncryptedSharedPreferences to plain SharedPreferences (AppModule.kt:60-63) — Intentional design per plan requirements: Keystore fallback ensures app works on devices with broken Keystore. Timber.w warning present for diagnostics.
+- [DISCARDED] SECURITY: security-crypto 1.1.0-alpha06 is alpha (libs.versions.toml:24) — De-facto Android standard; Google has not released stable 1.1.0 despite years of production usage. The 1.0.0 "stable" has deprecated MasterKeys API replaced by MasterKey.Builder in 1.1.0-alpha.
+- [DISCARDED] SECURITY: Full API key in SettingsViewModel UI state (SettingsViewModel.kt:16,42) — Required for settings editing; HEA-54 was explicitly canceled for this reason.
+- [DISCARDED] SECURITY: dataExtractionRules may override allowBackup (AndroidManifest.xml:10-12) — EncryptedSharedPreferences uses device-bound Keystore keys; even if backed up, data cannot be decrypted on another device. Backup rules files outside review scope.
+- [DISCARDED] RESOURCE: apiKeyFlow cold callbackFlow creates multiple listeners (DataStoreSettingsRepository.kt:60-70) — Style-only; all listeners correctly register/unregister. Resource optimization, not correctness issue.
+- [DISCARDED] RESOURCE: HttpClient singleton never closed (AppModule.kt:90) — Standard Android singleton pattern; HEA-63 was explicitly canceled for this reason.
+- [DISCARDED] EDGE CASE: Implicit ISO_LOCAL_DATE format in NutritionRecordMapper (NutritionRecordMapper.kt:18) — All callers format with DateTimeFormatter.ISO_LOCAL_DATE; exception already caught by repository's catch block.
+- [DISCARDED] TYPE: Force unwrap !! in NutritionRecordMapperTest (NutritionRecordMapperTest.kt) — Tests correctly catch regressions; NPE still fails the test. Less clear failure message but zero correctness impact.
+- [DISCARDED] TYPE: Unsafe redundant cast after assertTrue in SyncNutritionUseCaseTest — Style-only; assertTrue check is correct, zero correctness impact.
+- [DISCARDED] TYPE: Unsafe cast via reflection in SyncSchedulerTest (SyncSchedulerTest.kt:76) — Style-only; reflection access is inherently fragile regardless of cast safety.
+- [DISCARDED] CONVENTION: Missing `operator` keyword on invoke (SyncNutritionUseCase.kt:20) — Style-only; all callers use explicit .invoke() which works correctly. Not enforced by CLAUDE.md.
+- [DISCARDED] CONVENTION: No Timber logging in SyncNutritionUseCase — Observability enhancement, not a bug. Adding operational logging is desirable but not a correctness issue.
+
+**MIGRATIONS.md check:** No MIGRATIONS.md exists. Implementation added EncryptedSharedPreferences migration logic in DataStoreSettingsRepository (auto-migrates on first run). Migration is handled in code; documentation file not required.
 
 ### Linear Updates
-- HEA-29 through HEA-36: Already in Done (moved during implementation)
-- HEA-37: Created in Todo (Fix: lastSyncedDate gap bug)
-- HEA-38: Created in Todo (Fix: HC WRITE_NUTRITION permission never requested)
-- HEA-39: Created in Todo (Fix: SyncViewModel isConfigured stale)
-- HEA-40: Created in Todo (Fix: App crashes if HC unavailable)
-- HEA-41: Created in Todo (Fix: Misleading SyncResult.Success(0))
-- HEA-42: Created in Todo (Fix: WorkManager timer reset)
-- HEA-43: Created in Todo (Fix: No base URL validation)
+- HEA-44 through HEA-71: Review → Merge (all 24 original issues)
+- HEA-72: Created in Todo (Fix: HttpTimeout)
+- HEA-73: Created in Todo (Fix: setApiKey durability)
+- HEA-74: Created in Todo (Fix: migration verification)
+- HEA-75: Created in Todo (Fix: capturedProgress dead code)
+- HEA-76: Created in Todo (Fix: SettingsViewModel error handling)
+- HEA-77: Created in Todo (Fix: raw error messages in UI)
 
 <!-- REVIEW COMPLETE -->
 
@@ -381,156 +813,67 @@ Summary: 10 issue(s) found (single-agent deep review — security, reliability, 
 ## Fix Plan
 
 **Source:** Review findings from Iteration 1
-**Linear Issues:** [HEA-37](https://linear.app/lw-claude/issue/HEA-37), [HEA-38](https://linear.app/lw-claude/issue/HEA-38), [HEA-39](https://linear.app/lw-claude/issue/HEA-39), [HEA-40](https://linear.app/lw-claude/issue/HEA-40), [HEA-41](https://linear.app/lw-claude/issue/HEA-41), [HEA-42](https://linear.app/lw-claude/issue/HEA-42), [HEA-43](https://linear.app/lw-claude/issue/HEA-43)
+**Linear Issues:** [HEA-72](https://linear.app/lw-claude/issue/HEA-72), [HEA-73](https://linear.app/lw-claude/issue/HEA-73), [HEA-74](https://linear.app/lw-claude/issue/HEA-74), [HEA-75](https://linear.app/lw-claude/issue/HEA-75), [HEA-76](https://linear.app/lw-claude/issue/HEA-76), [HEA-77](https://linear.app/lw-claude/issue/HEA-77)
 
-### Fix 1: Health Connect WRITE_NUTRITION permission never requested
-**Linear Issue:** [HEA-38](https://linear.app/lw-claude/issue/HEA-38)
-**Priority:** Urgent — core functionality broken
+### Fix 1: Add HttpTimeout to Ktor client
+**Linear Issue:** [HEA-72](https://linear.app/lw-claude/issue/HEA-72)
 
-1. Write tests in `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt`:
-   - Test: `hasPermission = false` → UI state reflects permission not granted
-   - Test: triggerSync() when permission not granted does not call use case, updates state to request permission
-   - Test: after permission granted, sync proceeds normally
-2. Run verifier (expect fail)
-3. Implement:
-   - Add `permissionGranted: Boolean` to `SyncUiState`
-   - In `SyncViewModel`: inject `HealthConnectClient`, check `permissionController.getGrantedPermissions()` on init and after permission result. Add `onPermissionResult(granted: Boolean)` method.
-   - In `SyncScreen`: use `rememberLauncherForActivityResult` with `PermissionController.createRequestPermissionResultContract()` for `WRITE_NUTRITION`. Request permission on first sync attempt when not granted. Show "Permission required" message when denied.
-   - Guard `triggerSync()`: if permission not granted, request it instead of calling use case
-4. Run verifier (expect pass)
+1. Add `ktor-client-timeout` dependency if not already available (check `libs.versions.toml` — Ktor client-core likely bundles HttpTimeout)
+2. In `AppModule.kt`, add `install(HttpTimeout) { requestTimeoutMillis = 30_000L }` to the HttpClient builder block
+3. Verify: `./gradlew test` — existing tests pass
+4. Verify: `./gradlew assembleDebug` — build succeeds
 
-### Fix 2: lastSyncedDate gap bug skips failed intermediate dates
-**Linear Issue:** [HEA-37](https://linear.app/lw-claude/issue/HEA-37)
-**Priority:** High — silent data loss
+### Fix 2: setApiKey uses commit() for durability
+**Linear Issue:** [HEA-73](https://linear.app/lw-claude/issue/HEA-73)
 
-1. Write tests in `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt`:
-   - Test: intermediate date fails → lastSyncedDate advances only to the contiguous successful date from the oldest end
-   - Test: all past dates succeed → lastSyncedDate set to yesterday (newest past date)
-   - Test: first past date (newest) fails → lastSyncedDate not updated at all
-   - Test: respects existing lastSyncedDate — doesn't re-sync dates already synced (except today)
-   - Test: caps at 365 days back from today
-2. Run verifier (expect fail)
-3. Implement in `SyncNutritionUseCase.kt`:
-   - Replace `newestSyncedPastDate` tracking with contiguous-range tracking
-   - Process dates oldest-first for tracking purposes (or track per-date success in a map)
-   - After loop: find the newest date D such that all dates from startDate to D succeeded
-   - Only update `lastSyncedDate` to D if D is newer than the current lastSyncedDate
-4. Run verifier (expect pass)
+1. Write test in `DataStoreSettingsRepositoryTest.kt` verifying setApiKey persists durably (mock EncryptedSharedPreferences to verify `commit()` is called)
+2. In `DataStoreSettingsRepository.setApiKey()`, change `.apply()` to `withContext(Dispatchers.IO) { encryptedPrefs.edit().putString(ENCRYPTED_API_KEY, key).commit() }`
+3. Run: `./gradlew test --tests "com.healthhelper.app.data.repository.DataStoreSettingsRepositoryTest"`
 
-### Fix 3: SyncViewModel isConfigured stale after settings change
-**Linear Issue:** [HEA-39](https://linear.app/lw-claude/issue/HEA-39)
-**Priority:** High — broken user flow
+### Fix 3: Migration verification failure handling
+**Linear Issue:** [HEA-74](https://linear.app/lw-claude/issue/HEA-74)
 
-1. Write test in `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt`:
-   - Test: when apiKey/baseUrl flows emit new values, isConfigured updates reactively without needing syncInterval to change
-2. Run verifier (expect fail)
-3. Implement in `SyncViewModel.kt`:
-   - Add `settingsRepository.apiKeyFlow` and `settingsRepository.baseUrlFlow` to the `combine` (use `combine` with 4 flows)
-   - Derive `isConfigured` from `apiKey.isNotEmpty() && baseUrl.isNotEmpty()` directly instead of calling `settingsRepository.isConfigured()`
-   - Only call `syncScheduler.schedulePeriodic()` when the interval value actually changes (addresses HEA-42 partially)
-4. Run verifier (expect pass)
+1. Write test in `DataStoreSettingsRepositoryTest.kt` simulating verification failure (mock encrypted prefs to return wrong value on read-back)
+2. In `DataStoreSettingsRepository`, when `verified != legacyKey`: log `Timber.e("Migration verification failed")`, do NOT set `migrationComplete = true`, do NOT clear legacy key from DataStore
+3. Run: `./gradlew test --tests "com.healthhelper.app.data.repository.DataStoreSettingsRepositoryTest"`
 
-### Fix 4: App crashes if Health Connect unavailable on device
-**Linear Issue:** [HEA-40](https://linear.app/lw-claude/issue/HEA-40)
-**Priority:** High — crash on startup
+### Fix 4: Fix capturedProgress dead code in SyncViewModelTest
+**Linear Issue:** [HEA-75](https://linear.app/lw-claude/issue/HEA-75)
 
-1. Write test in `app/src/test/kotlin/com/healthhelper/app/data/repository/HealthConnectNutritionRepositoryTest.kt`:
-   - Test: when HealthConnectClient is null, writeNutritionRecords returns false
-2. Run verifier (expect fail)
-3. Implement:
-   - In `AppModule.kt`: check `HealthConnectClient.getSdkStatus(context)` before calling `getOrCreate()`. If status is not `SDK_AVAILABLE`, provide `null`.
-   - Change provide type to `HealthConnectClient?` (nullable)
-   - In `HealthConnectNutritionRepository`: accept nullable client. If null, return false from writeNutritionRecords and log warning.
-   - In `SyncViewModel` or `SyncScreen`: detect HC unavailability and show message
-4. Run verifier (expect pass)
+1. In `SyncViewModelTest` "progress updates are reflected in UI state" test, add assertions on `capturedProgress` list: verify it contains expected intermediate values, OR remove the dead `capturedProgress` variable and rename the test to match what it actually verifies
+2. Run: `./gradlew test --tests "com.healthhelper.app.presentation.viewmodel.SyncViewModelTest"`
 
-### Fix 5: Misleading SyncResult.Success(0) when HC writes fail
-**Linear Issue:** [HEA-41](https://linear.app/lw-claude/issue/HEA-41)
-**Priority:** Medium — misleading user feedback
+### Fix 5: Add error handling to SettingsViewModel launch blocks
+**Linear Issue:** [HEA-76](https://linear.app/lw-claude/issue/HEA-76)
 
-1. Write tests in `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt`:
-   - Test: API succeeds with entries but all HC writes fail → returns SyncResult.Error (not Success(0))
-   - Test: API succeeds with entries, some HC writes succeed → returns Success with correct partial count
-2. Run verifier (expect fail)
-3. Implement in `SyncNutritionUseCase.kt`:
-   - Track `totalEntriesFetched` alongside `totalRecordsSynced`
-   - If `totalEntriesFetched > 0 && totalRecordsSynced == 0`, return `SyncResult.Error("Failed to write records to Health Connect")`
-   - If `totalEntriesFetched > 0 && totalRecordsSynced < totalEntriesFetched`, return `SyncResult.Success(totalRecordsSynced)` with a note about partial writes (or add `SyncResult.PartialSuccess`)
-4. Run verifier (expect pass)
+1. Write test in `SettingsViewModelTest` verifying that when settings write throws IOException, ViewModel surfaces an error state (or at minimum doesn't crash)
+2. In `SettingsViewModel.updateApiKey()`, `updateBaseUrl()`, `updateSyncInterval()`, wrap the `settingsRepository.setXxx()` call in try/catch. On IOException, log error and optionally surface to UI state
+3. Run: `./gradlew test --tests "com.healthhelper.app.presentation.viewmodel.SettingsViewModelTest"`
 
-### Fix 6: SyncViewModel resets WorkManager periodic timer on every flow emission
-**Linear Issue:** [HEA-42](https://linear.app/lw-claude/issue/HEA-42)
-**Priority:** Medium — background sync unreliable
+### Fix 6: Sanitize error messages shown to users
+**Linear Issue:** [HEA-77](https://linear.app/lw-claude/issue/HEA-77)
 
-1. Write test in `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt`:
-   - Test: when lastSyncedDate changes but syncInterval stays same, schedulePeriodic is NOT called again
-   - Test: when syncInterval changes, schedulePeriodic IS called with new value
-2. Run verifier (expect fail)
-3. Implement in `SyncViewModel.kt`:
-   - Collect `syncIntervalFlow` with `distinctUntilChanged()` for scheduler calls
-   - Only call `syncScheduler.schedulePeriodic()` in a separate collection of the interval flow, not in the combined collector
-   - Or track previous interval and skip if unchanged
-4. Run verifier (expect pass)
+1. Write test in `SyncViewModelTest` verifying that when sync throws RuntimeException with internal details, the UI message is generic (not the raw exception message)
+2. In `SyncViewModel.kt:109`, change `"Unexpected error: ${e.message}"` to a generic message like `"Sync failed. Please try again."` and log the full exception at ERROR level
+3. In `FoodScannerApiClient.kt:53-54`, change server error message to generic `"Server returned an error"` and log the actual server message at DEBUG level
+4. Run: `./gradlew test`
 
-### Fix 7: No base URL validation — trailing slashes cause malformed URLs
-**Linear Issue:** [HEA-43](https://linear.app/lw-claude/issue/HEA-43)
-**Priority:** Low — user-triggered edge case
+### Fix Implementation
 
-1. Write test in `app/src/test/kotlin/com/healthhelper/app/data/api/FoodScannerApiClientTest.kt`:
-   - Test: base URL with trailing slash produces correct API URL (no double slash)
-2. Run verifier (expect fail)
-3. Implement in `FoodScannerApiClient.kt:26`:
-   - Change `"$baseUrl/api/v1/food-log"` to `"${baseUrl.trimEnd('/')}/api/v1/food-log"`
-4. Run verifier (expect pass)
+All 6 fixes applied directly (not via plan-implement). All tests pass. Bug-hunter clean (1 LOW convention fix applied).
 
----
+**Files modified:**
+- `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt` — HttpTimeout plugin
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` — commit(), migration verification, Timber logging
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` — generic error message + Timber.e
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModel.kt` — try/catch + Timber.e
+- `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt` — sanitized server error message
+- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt` — removed dead capturedProgress, updated assertion
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepositoryTest.kt` — commit() verification, migration failure test
+- `app/src/test/kotlin/com/healthhelper/app/data/api/FoodScannerApiClientTest.kt` — updated assertion for sanitized message
 
-## Iteration 2 (Fix Plan)
-
-**Implemented:** 2026-02-27
-**Method:** Single-agent (user requested solo implementation)
-
-### Tasks Completed This Iteration
-- Fix 1: HC WRITE_NUTRITION permission handling (HEA-38)
-- Fix 2: lastSyncedDate gap bug (HEA-37)
-- Fix 3: SyncViewModel isConfigured stale (HEA-39)
-- Fix 4: App crashes if HC unavailable (HEA-40)
-- Fix 5: Misleading SyncResult.Success(0) (HEA-41)
-- Fix 6: WorkManager timer reset (HEA-42)
-- Fix 7: Base URL trailing slash (HEA-43)
-
-### Files Modified
-- `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt` — trimEnd('/') on baseUrl
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectNutritionRepository.kt` — nullable HealthConnectClient, null guard
-- `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt` — getSdkStatus() check, nullable return type
-- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt` — contiguous-range lastSyncedDate tracking, totalEntriesFetched counter, HC write failure detection
-- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SyncScreen.kt` — HC permission launcher, permission UI, button guard
-- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` — 4-flow combine for isConfigured, distinctUntilChanged for scheduler, HC client injection, permission state
-- `app/src/test/kotlin/com/healthhelper/app/data/api/FoodScannerApiClientTest.kt` — trailing slash test
-- `app/src/test/kotlin/com/healthhelper/app/data/repository/HealthConnectNutritionRepositoryTest.kt` — new file, null client test
-- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt` — 7 new tests (gap tracking, contiguous range, caps, HC write failure)
-- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt` — 7 new tests (isConfigured reactive, scheduler dedup, HC availability, permission)
-
-### Bug-Hunter Post-Fix Findings
-- Fixed: default `healthConnectAvailable = true` → changed to `false`
-- Fixed: LaunchedEffect auto-launched permission dialog → only shows message
-- Fixed: Sync button enabled without permission → added `permissionGranted` guard
-- Fixed: Weak test assertion in hcWriteFailureContinues → added count check
-
-### Verification
-- All 96 tests pass (80 original + 16 new)
-- Build successful, zero warnings
-
-### Linear Updates
-- HEA-37: Todo → Merge (Fix: lastSyncedDate gap)
-- HEA-38: Todo → Merge (Fix: HC permission handling)
-- HEA-39: Todo → Merge (Fix: isConfigured stale)
-- HEA-40: Todo → Merge (Fix: HC crash)
-- HEA-41: Todo → Merge (Fix: misleading Success(0))
-- HEA-42: Todo → Merge (Fix: WorkManager timer reset)
-- HEA-43: Todo → Merge (Fix: trailing slash)
-
-<!-- REVIEW COMPLETE -->
+**Linear Updates:**
+- HEA-72 through HEA-77: Todo → Merge (all 6 fix issues)
 
 ---
 

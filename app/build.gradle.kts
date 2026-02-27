@@ -20,7 +20,9 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
 
@@ -76,6 +78,9 @@ dependencies {
 
     // DataStore
     implementation(libs.datastore.preferences)
+
+    // Encrypted SharedPreferences
+    implementation(libs.security.crypto)
 
     // WorkManager
     implementation(libs.work.runtime.ktx)
