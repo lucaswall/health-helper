@@ -3,6 +3,7 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
     alias(libs.plugins.hilt)
+    alias(libs.plugins.kotlin.serialization)
 }
 
 android {
@@ -60,6 +61,28 @@ dependencies {
     // Health Connect
     implementation(libs.health.connect)
 
+    // Ktor HTTP client
+    implementation(libs.ktor.client.core)
+    implementation(libs.ktor.client.okhttp)
+    implementation(libs.ktor.client.content.negotiation)
+    implementation(libs.ktor.serialization.kotlinx.json)
+
+    // Kotlinx Serialization
+    implementation(libs.kotlinx.serialization.json)
+
+    // DataStore
+    implementation(libs.datastore.preferences)
+
+    // WorkManager
+    implementation(libs.work.runtime.ktx)
+
+    // Hilt WorkManager integration
+    implementation(libs.hilt.work)
+    ksp(libs.hilt.androidx.compiler)
+
+    // Navigation
+    implementation(libs.navigation.compose)
+
     // Testing
     testImplementation(kotlin("test"))
     testImplementation(libs.junit5.api)
@@ -69,6 +92,7 @@ dependencies {
     testImplementation(libs.coroutines.test)
     testImplementation(libs.turbine)
     testRuntimeOnly(libs.junit.platform.launcher)
+    testImplementation(libs.ktor.client.mock)
 }
 
 tasks.withType<Test> {
