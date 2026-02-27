@@ -108,7 +108,18 @@ Example arguments:
 6. **Generate plan** - Create TDD tasks with test-first approach
 7. **Write PLANS.md** - Overwrite with new plan
 8. **Validate plan against CLAUDE.md** - Re-read CLAUDE.md and cross-check each task: domain layer has no Android imports, all dependencies in version catalog, external calls have timeout specs, intents have exception handling, coroutines have cancellation guards. Fix violations before proceeding.
-9. **Create Linear issues** - Create issues in Todo state for each task
+9. **Cross-cutting requirements sweep** - After writing all tasks, scan the entire plan for these patterns. If a pattern is detected in ANY task, verify the corresponding specification exists in that task's Defensive Requirements or TDD steps. If missing, add it before finalizing the plan.
+
+   | Pattern Detected in Plan | Required Specification |
+   |--------------------------|----------------------|
+   | Networking code (HTTP client, API calls, Ktor) | Timeout value and timeout error handling behavior |
+   | Error messages shown to users (UI state error fields, Toast, Snackbar) | Sanitization — generic user message, raw error logged only |
+   | `viewModelScope.launch` or coroutine builders | Error handling (try-catch) and behavior on exception |
+   | SharedPreferences / DataStore writes in suspend context | Durability semantics (commit vs apply, edit vs write) |
+   | Health Connect operations | Timeout, permission check, SDK availability check |
+   | Intent / Activity launch | ActivityNotFoundException handling and fallback |
+   | Repeated user-triggered operations (button clicks, pull-to-refresh) | Cancellation of in-flight work before starting new |
+10. **Create Linear issues** - Create issues in Todo state for each task
 
 ## Codebase Exploration Guidelines
 

@@ -85,6 +85,9 @@ Analyze uncommitted git changes for bugs and project rule violations.
 - Cursors not closed (ContentResolver, Room)
 - Missing cleanup in error paths (finally blocks)
 
+**Data Persistence:**
+- SharedPreferences writes in suspend functions — verify `commit()` or DataStore `edit {}` for durability, not `apply()` which is fire-and-forget and may lose data if process dies
+
 **Lifecycle:**
 - State not preserved across configuration changes (screen rotation)
 - ViewModel not used for surviving process recreation
@@ -116,10 +119,17 @@ Analyze uncommitted git changes for bugs and project rule violations.
 - MockK mocks don't hide real bugs (verify important interactions)
 - Edge cases and error paths tested
 
+**Test Validity (dead code):**
+- Variables declared and populated in tests but never referenced in assertions or verify calls — dead test code that gives false confidence in coverage
+
 **Test Data:**
 - No real user data
 - Fictional names only
 - No production credentials
+
+### UI Safety (When Code Touches User-Visible State)
+
+- Raw `Exception.message`, `e.localizedMessage`, or server/API response text flowing directly to UI-visible state (Text composable, Toast, Snackbar, error state fields) — use generic user-facing messages and log the raw message for debugging only
 
 ### AI-Generated Code Risks
 

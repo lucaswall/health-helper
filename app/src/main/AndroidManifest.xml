@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- Network access for Food Scanner API -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <!-- Health Connect permissions -->
     <uses-permission android:name="android.permission.health.WRITE_NUTRITION" />
 
