@@ -16,6 +16,7 @@ import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class FoodScannerApiClientTest {
@@ -124,8 +125,9 @@ class FoodScannerApiClientTest {
 
         client.getFoodLog("https://food.example.com", "fsk_test", "2026-01-15")
 
-        assertTrue(capturedUrl!!.contains("food.example.com/api/v1/food-log"))
-        assertTrue(capturedUrl!!.contains("date=2026-01-15"))
+        val url = assertNotNull(capturedUrl)
+        assertTrue(url.contains("food.example.com/api/v1/food-log"))
+        assertTrue(url.contains("date=2026-01-15"))
     }
 
     @Test
@@ -262,7 +264,8 @@ class FoodScannerApiClientTest {
 
         client.getFoodLog("https://food.example.com/", "fsk_test", "2026-02-27")
 
-        assertTrue(capturedUrl!!.contains("/api/v1/food-log"))
-        assertFalse(capturedUrl!!.contains("//api"))
+        val url = assertNotNull(capturedUrl)
+        assertTrue(url.contains("/api/v1/food-log"))
+        assertFalse(url.contains("//api"))
     }
 }
