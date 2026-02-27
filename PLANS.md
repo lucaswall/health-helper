@@ -413,5 +413,100 @@ Implement Settings Save/Reset workflow, reduce sync interval minimum, disable na
 - bug-hunter: Found 2 bugs (partial save corruption, weak error test), fixed before proceeding
 - verifier: All 138 tests pass, zero warnings, build successful
 
+### Review Findings
+
+Summary: 12 findings evaluated, 8 require fix (Team: security, reliability, quality reviewers)
+- FIX: 7 issue(s) — Linear issues created
+- DISCARDED: 4 finding(s) — false positives / not applicable
+
+**Issues requiring fix:**
+- [HIGH] BUG: Race condition — combine collector overwrites UI state during save() (`SettingsViewModel.kt:41-62,82-117`) — HEA-83
+- [MEDIUM] COROUTINE: Unhandled exceptions in settings flow collection and API key migration (`SettingsViewModel.kt:41`, `DataStoreSettingsRepository.kt:68-78`) — HEA-84
+- [MEDIUM] BUG: isConfigured() returns incorrect result before API key migration (`DataStoreSettingsRepository.kt:107-112`) — HEA-85
+- [MEDIUM] SECURITY: EncryptedSharedPreferences crypto operations block main thread (`DataStoreSettingsRepository.kt:43,56,108`) — HEA-86
+- [LOW] BUG: No user-visible error feedback when settings save fails (`SettingsViewModel.kt:82-117`) — HEA-87
+- [LOW] CONVENTION: Misleading isConfigured test name and dead mock (`SettingsViewModelTest.kt:280-294`) — HEA-88
+- [LOW] CONVENTION: Partial assertion in reset test — only checks apiKey (`SettingsViewModelTest.kt:219-235`) — HEA-89
+
+**Discarded findings (not bugs):**
+- [DISCARDED] SECURITY: API key may remain in plaintext if Keystore fails persistently (`DataStoreSettingsRepository.kt:28`) — Code correctly handles retry via `migrationComplete` flag; system-level Keystore failure is not actionable by app code
+- [DISCARDED] SECURITY: API key held as plain String in JVM heap (`SettingsViewModel.kt:17`) — Inherent to displaying the value in a UI text field; no practical fix exists
+- [DISCARDED] CONVENTION: Dead mock setup in setUp() for lastSyncedDateFlow and isConfigured() (`SettingsViewModelTest.kt:38-39`) — Style-only; standard test class pattern with zero correctness impact
+- [DISCARDED] CONVENTION: Migration retry path untested (`DataStoreSettingsRepositoryTest.kt:127-148`) — Core safety behavior (migration not falsely marked complete on failure) is tested; retry mechanism is straightforward
+
+### Linear Updates
+- HEA-80: Review → Merge (original task completed)
+- HEA-81: Review → Merge (original task completed)
+- HEA-82: Review → Merge (original task completed)
+- HEA-79: Review → Merge (original task completed)
+- HEA-78: Review → Merge (original task completed)
+- HEA-83: Created in Todo (Fix: race condition in save)
+- HEA-84: Created in Todo (Fix: unhandled exceptions in flow collection)
+- HEA-85: Created in Todo (Fix: isConfigured pre-migration)
+- HEA-86: Created in Todo (Fix: EncryptedPrefs main thread blocking)
+- HEA-87: Created in Todo (Fix: save error UI feedback)
+- HEA-88: Created in Todo (Fix: misleading test name)
+- HEA-89: Created in Todo (Fix: partial reset assertion)
+
+<!-- REVIEW COMPLETE -->
+
 ### Continuation Status
-All tasks completed.
+All tasks completed. Fix Plan required.
+
+---
+
+## Fix Plan
+
+**Source:** Review findings from Iteration 1
+**Linear Issues:** [HEA-83](https://linear.app/lw-claude/issue/HEA-83), [HEA-84](https://linear.app/lw-claude/issue/HEA-84), [HEA-85](https://linear.app/lw-claude/issue/HEA-85), [HEA-86](https://linear.app/lw-claude/issue/HEA-86), [HEA-87](https://linear.app/lw-claude/issue/HEA-87), [HEA-88](https://linear.app/lw-claude/issue/HEA-88), [HEA-89](https://linear.app/lw-claude/issue/HEA-89)
+
+### Fix 1: Race condition — combine collector overwrites UI during save
+**Linear Issue:** [HEA-83](https://linear.app/lw-claude/issue/HEA-83)
+
+1. Write test in `SettingsViewModelTest.kt`: `save does not overwrite UI state with intermediate flow emissions` — modify apiKey, baseUrl, syncInterval, call save(), verify UI state retains all 3 values throughout (not just after completion)
+2. Add `isSaving` flag to `SettingsViewModel`. Set `true` before launching save coroutine, `false` after all writes complete
+3. In the `combine().collect` handler: when `isSaving` is true, update `persistedSettings` but skip `_uiState.update` — the save coroutine handles UI state when it finishes
+4. After save completes: update `persistedSettings` with successfully saved values, recalculate dirty flag, clear `isSaving`
+
+### Fix 2: Unhandled exceptions in flow collection and migration
+**Linear Issue:** [HEA-84](https://linear.app/lw-claude/issue/HEA-84)
+
+1. Write test in `SettingsViewModelTest.kt`: `init handles repository flow exception gracefully` — mock apiKeyFlow to throw IOException, verify ViewModel doesn't crash and UI stays at defaults
+2. Write test in `DataStoreSettingsRepositoryTest.kt`: `apiKeyFlow handles migration failure gracefully` — configure encryptedPrefs to throw on getString, verify flow still emits (empty default)
+3. Wrap `migrateIfNeeded()` call in `callbackFlow` with try-catch; on failure, log with Timber and emit empty default
+4. Wrap `combine().collect` in `SettingsViewModel.init` with try-catch; on failure, log with Timber (UI stays at defaults)
+
+### Fix 3: isConfigured() missing migration call
+**Linear Issue:** [HEA-85](https://linear.app/lw-claude/issue/HEA-85)
+
+1. Write test in `DataStoreSettingsRepositoryTest.kt`: `isConfigured returns true when API key exists only in DataStore (pre-migration)` — populate DataStore with legacy key, verify `isConfigured()` returns true
+2. Add `migrateIfNeeded()` call at the start of `isConfigured()`
+
+### Fix 4: EncryptedPrefs reads on main thread
+**Linear Issue:** [HEA-86](https://linear.app/lw-claude/issue/HEA-86)
+
+1. Wrap `migrateIfNeeded()` body entirely in `withContext(Dispatchers.IO)` (lines 40-65) — this covers getString calls at lines 43 and 56, plus the existing commit at line 52-53 (already IO but nested is fine)
+2. Wrap `isConfigured()` body in `withContext(Dispatchers.IO)` (lines 107-112) — covers getString at line 108
+
+### Fix 5: Save error UI feedback
+**Linear Issue:** [HEA-87](https://linear.app/lw-claude/issue/HEA-87)
+
+1. Write test in `SettingsViewModelTest.kt`: `save sets error message when repository write fails` — mock setApiKey to throw, call save(), verify `uiState.saveError` is non-null with user-facing message
+2. Write test: `saveError is cleared on next successful save`
+3. Add `saveError: String? = null` field to `SettingsUiState`
+4. In `save()`: if `anyFailed`, set `saveError = "Some settings could not be saved. Please try again."`; if all succeed, set `saveError = null`
+5. In `SettingsScreen.kt`: show `saveError` as a `Text` with `MaterialTheme.colorScheme.error` color, below the Save/Reset buttons, when non-null
+
+### Fix 6: Misleading test name and dead mock
+**Linear Issue:** [HEA-88](https://linear.app/lw-claude/issue/HEA-88)
+
+1. Rename test from `isConfigured state reflects repository isConfigured` to `isConfigured is false when apiKey and baseUrl are empty`
+2. Remove the dead `coEvery { settingsRepository.isConfigured() } returns false` line from the test
+3. Remove the dead `coEvery { settingsRepository.isConfigured() } returns true` line from `setUp()` (line 39)
+
+### Fix 7: Partial assertion in reset test
+**Linear Issue:** [HEA-89](https://linear.app/lw-claude/issue/HEA-89)
+
+1. In the existing `reset reverts UI state to persisted values` test:
+   - Before reset: also call `updateBaseUrl("changed-url")` and `updateSyncInterval(99)`
+   - After reset: add assertions for `baseUrl == "https://example.com"` and `syncInterval == 30` (the persisted values from setUp mock)
