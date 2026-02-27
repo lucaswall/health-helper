@@ -3,6 +3,7 @@ package com.healthhelper.app.data.repository
 import androidx.health.connect.client.HealthConnectClient
 import com.healthhelper.app.domain.model.FoodLogEntry
 import com.healthhelper.app.domain.repository.NutritionRepository
+import kotlin.coroutines.cancellation.CancellationException
 import timber.log.Timber
 import javax.inject.Inject
 
@@ -27,6 +28,7 @@ class HealthConnectNutritionRepository @Inject constructor(
             Timber.e(e, "writeNutritionRecords(%s): permission denied", date)
             false
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             Timber.e(e, "writeNutritionRecords(%s): failed", date)
             false
         }

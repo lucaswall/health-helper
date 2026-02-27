@@ -10,11 +10,13 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import io.ktor.serialization.kotlinx.json.json
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -248,6 +250,52 @@ class FoodScannerApiClientTest {
         assertEquals(MealType.SNACK, entries[3].mealType)
         assertEquals(MealType.DINNER, entries[4].mealType)
         assertEquals(MealType.SNACK, entries[5].mealType)
+    }
+
+    @Test
+    @DisplayName("HTTP base URL is rejected with failure result")
+    fun httpBaseUrlRejected() = runTest {
+        val engine = MockEngine { respond(content = successResponse, headers = jsonHeaders) }
+        val client = createClient(engine)
+
+        val result = client.getFoodLog("http://food.example.com", "fsk_test", "2026-02-27")
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull()?.message?.contains("HTTPS") == true)
+    }
+
+    @Test
+    @DisplayName("HTTP base URL is rejected case-insensitively (HTTP:// uppercase)")
+    fun httpBaseUrlRejectedCaseInsensitive() = runTest {
+        val engine = MockEngine { respond(content = successResponse, headers = jsonHeaders) }
+        val client = createClient(engine)
+
+        val result = client.getFoodLog("HTTP://food.example.com", "fsk_test", "2026-02-27")
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull()?.message?.contains("HTTPS") == true)
+    }
+
+    @Test
+    @DisplayName("blank base URL is rejected")
+    fun blankBaseUrlRejected() = runTest {
+        val engine = MockEngine { respond(content = successResponse, headers = jsonHeaders) }
+        val client = createClient(engine)
+
+        val result = client.getFoodLog("", "fsk_test", "2026-02-27")
+
+        assertTrue(result.isFailure)
+    }
+
+    @Test
+    @DisplayName("CancellationException propagates from getFoodLog")
+    fun cancellationExceptionPropagates() = runTest {
+        val engine = MockEngine { throw CancellationException("Cancelled") }
+        val client = createClient(engine)
+
+        assertFailsWith<CancellationException> {
+            client.getFoodLog("https://food.example.com", "fsk_test", "2026-02-27")
+        }
     }
 
     @Test
