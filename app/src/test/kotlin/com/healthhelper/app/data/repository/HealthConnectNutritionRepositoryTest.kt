@@ -1,10 +1,15 @@
 package com.healthhelper.app.data.repository
 
+import androidx.health.connect.client.HealthConnectClient
 import com.healthhelper.app.domain.model.FoodLogEntry
 import com.healthhelper.app.domain.model.MealType
+import io.mockk.coEvery
+import io.mockk.mockk
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 
 class HealthConnectNutritionRepositoryTest {
@@ -32,5 +37,17 @@ class HealthConnectNutritionRepositoryTest {
         val repository = HealthConnectNutritionRepository(healthConnectClient = null)
         val result = repository.writeNutritionRecords("2026-01-15", listOf(testEntry))
         assertFalse(result)
+    }
+
+    @Test
+    @DisplayName("CancellationException propagates through writeNutritionRecords")
+    fun cancellationExceptionPropagates() = runTest {
+        val mockClient = mockk<HealthConnectClient>()
+        coEvery { mockClient.insertRecords(any()) } throws CancellationException("Cancelled")
+        val repository = HealthConnectNutritionRepository(mockClient)
+
+        assertFailsWith<CancellationException> {
+            repository.writeNutritionRecords("2026-01-15", emptyList())
+        }
     }
 }
