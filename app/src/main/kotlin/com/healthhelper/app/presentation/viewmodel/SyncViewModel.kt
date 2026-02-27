@@ -91,8 +91,8 @@ class SyncViewModel @Inject constructor(
     fun triggerSync() {
         if (_uiState.value.isSyncing) return
         syncJob?.cancel()
+        _uiState.update { it.copy(isSyncing = true, syncProgress = null) }
         syncJob = viewModelScope.launch {
-            _uiState.update { it.copy(isSyncing = true, syncProgress = null) }
             try {
                 val result = syncNutritionUseCase.invoke { progress ->
                     _uiState.update { it.copy(syncProgress = progress) }

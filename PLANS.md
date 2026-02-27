@@ -1,6 +1,6 @@
 # Implementation Plan
 
-**Status:** IN_PROGRESS
+**Status:** COMPLETE
 **Branch:** feat/HEA-44-backlog-audit-fixes
 **Issues:** HEA-44, HEA-45, HEA-46, HEA-47, HEA-48, HEA-49, HEA-50, HEA-51, HEA-52, HEA-53, HEA-56, HEA-57, HEA-58, HEA-59, HEA-60, HEA-62, HEA-64, HEA-65, HEA-66, HEA-67, HEA-68, HEA-69, HEA-70, HEA-71
 **Created:** 2026-02-27
@@ -668,3 +668,101 @@ Comprehensive code audit fix plan addressing 23 backlog issues across security, 
 - UI/UX changes beyond the specific bug fixes
 - New features or enhancements not in the backlog
 - Instrumented tests (only unit tests in scope)
+
+---
+
+## Iteration 1
+
+**Implemented:** 2026-02-27
+**Method:** Agent team (4 workers, worktree-isolated)
+
+### Tasks Completed This Iteration
+- Task 1: Create FoodLogRepository domain interface (HEA-50) — domain interface + data wrapper + DI binding (worker-1)
+- Task 2: Add FoodLogEntry init validation (HEA-64) — require() blocks for 10 fields + 16 tests (worker-1)
+- Task 3: Handle DateTimeParseException (HEA-49) — try-catch with maxPastDate fallback + test (worker-1)
+- Task 4: Rethrow CancellationException (HEA-47) — added rethrow in 2 catch blocks + 2 tests (worker-2)
+- Task 5: HTTPS scheme validation (HEA-46) — case-insensitive https:// guard + 3 tests (worker-2)
+- Task 6: try/finally triggerSync (HEA-48) — catch/finally in SyncViewModel + race fix + test (worker-3)
+- Task 7: Small bug fixes — HEA-52 (default interval 15), HEA-53 (LaunchedEffect key), HEA-65 (inline isConfigured), HEA-66 (Timber format), HEA-67 (401 WARN), HEA-68 (unused combine flow) (workers 2+3)
+- Task 8: Network security config (HEA-62) — network_security_config.xml + manifest ref (worker-2)
+- Task 9: Encrypted API key storage (HEA-45) — EncryptedSharedPreferences + migration + fallback (worker-3)
+- Task 10: R8/ProGuard (HEA-44) — isMinifyEnabled + proguard-rules.pro (worker-4)
+- Task 11: Fix test issues — HEA-51 (60L), HEA-56 (remove trivial test), HEA-57 (verify clamped interval), HEA-59 (assertNotNull), HEA-69 (kotlin.test import), HEA-70 (remove duplicates) (worker-4)
+- Task 12: Repository error path tests (HEA-58) — 4 new tests for SecurityException/Exception/success/empty (worker-4)
+- Task 13: SyncWorker tests (HEA-60) — 3 new tests for success/retry/failure (worker-4)
+- Task 14: GitHub Actions CI workflow (HEA-71) — ci.yml with JDK 17, Android SDK, test + build (worker-4)
+
+### Files Modified
+- `app/src/main/kotlin/com/healthhelper/app/domain/repository/FoodLogRepository.kt` — Created domain interface
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/FoodScannerFoodLogRepository.kt` — Created data wrapper
+- `app/src/main/kotlin/com/healthhelper/app/domain/model/FoodLogEntry.kt` — Added init validation
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt` — FoodLogRepository + DateTimeParseException
+- `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt` — CancellationException + HTTPS + 401 WARN
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectNutritionRepository.kt` — CancellationException rethrow
+- `app/src/main/kotlin/com/healthhelper/app/data/sync/SyncWorker.kt` — Timber format specifiers
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` — Encrypted storage + DEFAULT_SYNC_INTERVAL
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` — try/finally + race fix + remove unused combine flow
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModel.kt` — Inline isConfigured + default sync interval fix
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SyncScreen.kt` — LaunchedEffect permissionGranted key
+- `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt` — FoodLogRepository + EncryptedSharedPreferences bindings
+- `app/build.gradle.kts` — R8 + security-crypto dependency
+- `app/proguard-rules.pro` — Created ProGuard rules
+- `app/src/main/AndroidManifest.xml` — networkSecurityConfig
+- `app/src/main/res/xml/network_security_config.xml` — Created cleartext block
+- `gradle/libs.versions.toml` — security-crypto version
+- `.github/workflows/ci.yml` — Created CI workflow
+- `app/src/test/kotlin/com/healthhelper/app/domain/model/FoodLogEntryTest.kt` — Created (16 tests)
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt` — Updated mocks + malformed date test
+- `app/src/test/kotlin/com/healthhelper/app/data/api/FoodScannerApiClientTest.kt` — HTTPS + CancellationException + assertNotNull
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/HealthConnectNutritionRepositoryTest.kt` — CancellationException + error paths
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/NutritionRecordMapperTest.kt` — 60L fix
+- `app/src/test/kotlin/com/healthhelper/app/data/sync/SyncSchedulerTest.kt` — Clamped interval verify + removed duplicates
+- `app/src/test/kotlin/com/healthhelper/app/data/sync/SyncWorkerTest.kt` — Created (3 tests)
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepositoryTest.kt` — Encrypted storage tests
+- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt` — Exception test + removed trivial test
+- `app/src/test/kotlin/com/healthhelper/app/domain/model/MealTypeTest.kt` — kotlin.test import
+
+### Linear Updates
+- HEA-44: Todo → In Progress → Review
+- HEA-45: Todo → In Progress → Review
+- HEA-46: Todo → In Progress → Review
+- HEA-47: Todo → In Progress → Review
+- HEA-48: Todo → In Progress → Review
+- HEA-49: Todo → In Progress → Review
+- HEA-50: Todo → In Progress → Review
+- HEA-51: Todo → In Review
+- HEA-52: Todo → In Progress → Review
+- HEA-53: Todo → In Progress → Review
+- HEA-56: Todo → In Review
+- HEA-57: Todo → In Review
+- HEA-58: Todo → In Review
+- HEA-59: Todo → In Review
+- HEA-60: Todo → In Review
+- HEA-62: Todo → In Review
+- HEA-64: Todo → In Review
+- HEA-65: Todo → In Progress → Review
+- HEA-66: Todo → In Review
+- HEA-67: Todo → In Review
+- HEA-68: Todo → In Progress → Review
+- HEA-69: Todo → In Review
+- HEA-70: Todo → In Review
+- HEA-71: Todo → In Review
+
+### Pre-commit Verification
+- bug-hunter: Found 2 HIGH bugs (SettingsUiState default mismatch, triggerSync race window), fixed before proceeding. 3 MEDIUM (by-design). 1 LOW (pre-existing).
+- verifier: All tests pass, zero warnings
+
+### Work Partition
+- Worker 1: Tasks 1, 2, 3 (domain layer — FoodLogRepository, FoodLogEntry validation, DateTimeParseException)
+- Worker 2: Tasks 4, 5, 8, HEA-66, HEA-67 (data layer — CancellationException, HTTPS, network config, Timber)
+- Worker 3: Tasks 6, 9, HEA-52, HEA-53, HEA-65, HEA-68 (presentation + settings — try/finally, encrypted storage, bug fixes)
+- Worker 4: Tasks 10, 11, 12, 13, 14 (tests + build + CI — R8, test fixes, new tests, CI workflow)
+
+### Merge Summary
+- Worker 1: fast-forward (no conflicts)
+- Worker 2: merged cleanly
+- Worker 3: merged cleanly (auto-merged AppModule.kt)
+- Worker 4: 1 conflict in HealthConnectNutritionRepositoryTest.kt (workers 2+4 both added tests — resolved by keeping all tests)
+
+### Continuation Status
+All tasks completed.

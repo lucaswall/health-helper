@@ -15,7 +15,7 @@ import javax.inject.Inject
 data class SettingsUiState(
     val apiKey: String = "",
     val baseUrl: String = "",
-    val syncInterval: Int = 10,
+    val syncInterval: Int = 15,
     val isConfigured: Boolean = false,
 )
 
