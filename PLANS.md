@@ -2,7 +2,7 @@
 
 **Created:** 2026-02-27
 **Source:** Inline request: Food Scanner API integration — sync meal data to Health Connect via NutritionRecord, with settings screen and background sync
-**Linear Issues:** HEA-TBD, HEA-TBD, HEA-TBD, HEA-TBD, HEA-TBD, HEA-TBD, HEA-TBD, HEA-TBD
+**Linear Issues:** [HEA-29](https://linear.app/lw-claude/issue/HEA-29), [HEA-30](https://linear.app/lw-claude/issue/HEA-30), [HEA-31](https://linear.app/lw-claude/issue/HEA-31), [HEA-32](https://linear.app/lw-claude/issue/HEA-32), [HEA-33](https://linear.app/lw-claude/issue/HEA-33), [HEA-34](https://linear.app/lw-claude/issue/HEA-34), [HEA-35](https://linear.app/lw-claude/issue/HEA-35), [HEA-36](https://linear.app/lw-claude/issue/HEA-36)
 
 ## Context Gathered
 
@@ -35,7 +35,7 @@
 ## Original Plan
 
 ### Task 1: Wipe existing steps code and add new dependencies
-**Linear Issue:** HEA-TBD
+**Linear Issue:** [HEA-29](https://linear.app/lw-claude/issue/HEA-29)
 
 This is an infrastructure task — no TDD. Remove all steps-related code and add dependencies for the new feature.
 
@@ -83,7 +83,7 @@ This is an infrastructure task — no TDD. Remove all steps-related code and add
 ---
 
 ### Task 2: Domain models
-**Linear Issue:** HEA-TBD
+**Linear Issue:** [HEA-30](https://linear.app/lw-claude/issue/HEA-30)
 
 Pure Kotlin domain models. No Android dependencies.
 
@@ -101,7 +101,7 @@ Pure Kotlin domain models. No Android dependencies.
 ---
 
 ### Task 3: Settings repository
-**Linear Issue:** HEA-TBD
+**Linear Issue:** [HEA-31](https://linear.app/lw-claude/issue/HEA-31)
 
 DataStore-backed settings storage. Domain interface + data implementation.
 
@@ -122,7 +122,7 @@ DataStore-backed settings storage. Domain interface + data implementation.
 ---
 
 ### Task 4: Food Scanner API client
-**Linear Issue:** HEA-TBD
+**Linear Issue:** [HEA-32](https://linear.app/lw-claude/issue/HEA-32)
 
 Ktor HTTP client with DTOs and response envelope parsing.
 
@@ -146,7 +146,7 @@ Ktor HTTP client with DTOs and response envelope parsing.
 ---
 
 ### Task 5: Health Connect nutrition writer
-**Linear Issue:** HEA-TBD
+**Linear Issue:** [HEA-33](https://linear.app/lw-claude/issue/HEA-33)
 
 Repository that writes NutritionRecords to Health Connect.
 
@@ -168,7 +168,7 @@ Repository that writes NutritionRecords to Health Connect.
 ---
 
 ### Task 6: SyncNutritionUseCase
-**Linear Issue:** HEA-TBD
+**Linear Issue:** [HEA-34](https://linear.app/lw-claude/issue/HEA-34)
 
 Orchestrates the full sync: fetch from API → write to Health Connect → track progress.
 
@@ -198,7 +198,7 @@ Orchestrates the full sync: fetch from API → write to Health Connect → track
 ---
 
 ### Task 7: Settings and sync UI
-**Linear Issue:** HEA-TBD
+**Linear Issue:** [HEA-35](https://linear.app/lw-claude/issue/HEA-35)
 
 ViewModels and Compose screens for settings configuration and sync control.
 
@@ -231,7 +231,7 @@ ViewModels and Compose screens for settings configuration and sync control.
 ---
 
 ### Task 8: Background sync with WorkManager and final wiring
-**Linear Issue:** HEA-TBD
+**Linear Issue:** [HEA-36](https://linear.app/lw-claude/issue/HEA-36)
 
 WorkManager periodic sync, Hilt DI wiring, and permission handling.
 
@@ -265,7 +265,7 @@ WorkManager periodic sync, Hilt DI wiring, and permission handling.
 
 **Request:** Wipe existing steps code. Add settings screen for API key and base URL. Integrate with food-scanner's /api/v1/food-log endpoint via Ktor Client. Map meal entries to Health Connect NutritionRecords and write them. Support manual sync + configurable background sync (default 10 min). Sync up to 1 year of history. Write-only — no Health Connect reads. Ignore goals endpoints.
 
-**Linear Issues:** HEA-TBD (8 issues to be created)
+**Linear Issues:** HEA-29, HEA-30, HEA-31, HEA-32, HEA-33, HEA-34, HEA-35, HEA-36
 
 **Approach:** Bottom-up TDD implementation. First wipe old code and add dependencies (Ktor 3.4.0, DataStore, WorkManager, kotlinx-serialization). Then build domain models, settings storage, API client, and HC writer independently. Wire them together in SyncNutritionUseCase. Build UI with two screens (sync status + settings) using Compose Navigation. Finally add WorkManager for background sync.
 
