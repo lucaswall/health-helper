@@ -2,13 +2,13 @@
 
 **Status:** IN_PROGRESS
 **Branch:** feat/HEA-44-backlog-audit-fixes
-**Issues:** HEA-44, HEA-45, HEA-46, HEA-47, HEA-48, HEA-49, HEA-50, HEA-51, HEA-52, HEA-53, HEA-56, HEA-57, HEA-58, HEA-59, HEA-60, HEA-62, HEA-64, HEA-65, HEA-66, HEA-67, HEA-68, HEA-69, HEA-70
+**Issues:** HEA-44, HEA-45, HEA-46, HEA-47, HEA-48, HEA-49, HEA-50, HEA-51, HEA-52, HEA-53, HEA-56, HEA-57, HEA-58, HEA-59, HEA-60, HEA-62, HEA-64, HEA-65, HEA-66, HEA-67, HEA-68, HEA-69, HEA-70, HEA-71
 **Created:** 2026-02-27
 **Last Updated:** 2026-02-27
 
 ## Summary
 
-Comprehensive code audit fix plan addressing 22 backlog issues across security, bugs, architecture, conventions, and test quality. Issues range from critical (CancellationException swallowing, missing try/finally) to low (import consistency, duplicate tests). Ordered domain-first per Clean Architecture: domain models/use cases, then data layer, then presentation, then build config, then test improvements.
+Comprehensive code audit fix plan addressing 23 backlog issues across security, bugs, architecture, conventions, test quality, and CI infrastructure. Issues range from critical (CancellationException swallowing, missing try/finally) to low (import consistency, duplicate tests). Ordered domain-first per Clean Architecture: domain models/use cases, then data layer, then presentation, then build config, then test improvements.
 
 ## Issues
 
@@ -191,6 +191,17 @@ Comprehensive code audit fix plan addressing 22 backlog issues across security, 
 - [ ] Tests for Success → Result.success()
 - [ ] Tests for Error → Result.retry()
 - [ ] Tests for NeedsConfiguration → Result.failure()
+
+### HEA-71: Add GitHub Actions workflow to run tests on PRs
+
+**Priority:** Medium | **Labels:** Technical Debt
+**Description:** No CI workflow runs tests on pull requests. Existing workflows are Claude Code integrations only (code review + PR assistant). Test regressions can be merged undetected.
+**Acceptance Criteria:**
+- [ ] GitHub Actions workflow triggers on PRs to `main`
+- [ ] Runs `./gradlew test` (unit tests)
+- [ ] Runs `./gradlew assembleDebug` (build verification)
+- [ ] Uses JDK 17 and caches Gradle dependencies
+- [ ] Reports test results clearly on PR checks
 
 ## Prerequisites
 
@@ -556,7 +567,42 @@ Comprehensive code audit fix plan addressing 22 backlog issues across security, 
 - `ListenableWorker.Result.success()`, `.retry()`, `.failure()` are comparable with `assertEquals`
 - MockK relaxed mocks handle the `WorkerParameters` internals that `ListenableWorker` accesses
 
-### Task 14: Integration & Verification
+### Task 14: Add GitHub Actions CI workflow
+
+**Issue:** HEA-71
+**Files:**
+- `.github/workflows/ci.yml` (create)
+
+**Steps:**
+
+1. Create `.github/workflows/ci.yml` with:
+   - **Triggers:** Pull requests targeting `main` (opened, synchronize, reopened). Also trigger on pushes to `main` to keep status current.
+   - **Runner:** `ubuntu-latest`
+   - **JDK:** Set up JDK 17 using `actions/setup-java@v4` with `distribution: 'temurin'`
+   - **Gradle caching:** Use `actions/setup-java`'s built-in `cache: 'gradle'` parameter, or `gradle/actions/setup-gradle@v4` for advanced caching
+   - **Android SDK:** Use `android-actions/setup-android@v3` to install the Android SDK
+   - **Steps:**
+     1. Checkout code
+     2. Set up JDK 17
+     3. Set up Android SDK
+     4. Grant Gradle wrapper execute permission: `chmod +x ./gradlew`
+     5. Run unit tests: `./gradlew test`
+     6. Build debug APK: `./gradlew assembleDebug`
+   - **Test results:** Use `dorny/test-reporter@v1` or `mikepenz/action-junit-report@v4` to publish JUnit XML results from `app/build/test-results/` as PR check annotations
+
+2. **Verification:**
+   - Push the workflow file to a branch and open a test PR
+   - Verify the workflow triggers and passes
+   - Verify test results appear as PR check annotations
+
+**Notes:**
+- Keep the workflow simple — single job with sequential steps
+- Gradle wrapper is already committed to the repo (`gradlew`, `gradle/wrapper/`)
+- Unit tests don't need an Android emulator (they run on JVM)
+- `assembleDebug` verifies the full build pipeline without needing a device
+- Reference existing workflows in `.github/workflows/` for permission patterns
+
+### Task 15: Integration & Verification
 
 **Issues:** All
 **Files:** Various from previous tasks
@@ -575,6 +621,7 @@ Comprehensive code audit fix plan addressing 22 backlog issues across security, 
    - [ ] `network_security_config.xml` exists and is referenced in manifest
    - [ ] Release build has `isMinifyEnabled = true`
    - [ ] No `org.junit.jupiter.api.Assertions` imports remain in test files
+   - [ ] `.github/workflows/ci.yml` exists and runs tests + build on PRs
 
 ## MCP Usage During Implementation
 
@@ -605,12 +652,13 @@ Comprehensive code audit fix plan addressing 22 backlog issues across security, 
 ## Scope Boundaries
 
 **In Scope:**
-- All 22 valid backlog issues listed above
+- All 23 valid backlog issues listed above
 - Domain architecture fix (FoodLogRepository interface)
 - Security hardening (encrypted storage, R8, HTTPS validation, network config)
 - Bug fixes (CancellationException, try/finally, date parsing, defaults, log levels)
 - Convention cleanup (Timber specifiers, redundant calls, unused flows)
 - Test quality improvements (fix assertions, remove duplicates, add coverage)
+- CI infrastructure (GitHub Actions workflow for PR test/build gating)
 
 **Out of Scope:**
 - HEA-54 (Canceled): API key in UI state — must be there for settings editing
