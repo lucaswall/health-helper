@@ -77,6 +77,9 @@ dependencies {
     // DataStore
     implementation(libs.datastore.preferences)
 
+    // Encrypted SharedPreferences
+    implementation(libs.security.crypto)
+
     // WorkManager
     implementation(libs.work.runtime.ktx)
     implementation(libs.hilt.work)

@@ -316,6 +316,24 @@ class SyncViewModelTest {
     }
 
     @Test
+    fun `triggerSync resets isSyncing and sets error message on unexpected exception`() = runTest {
+        coEvery { syncNutritionUseCase.invoke(any()) } throws RuntimeException("unexpected")
+
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.triggerSync()
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertFalse(state.isSyncing)
+            assertEquals("Unexpected error: unexpected", state.lastSyncResult)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
     fun `initial permissionGranted is false`() = runTest {
         viewModel = createViewModel()
         advanceUntilIdle()
