@@ -37,6 +37,12 @@ The `INTERNET` permission IS declared (`AndroidManifest.xml:6`) and granted. The
 
 `CameraCaptureScreen.kt` uses CameraX `PreviewView` with a custom capture button. This has no photo preview/confirm after capture (sends image directly to API), no gallery option, and adds 5 CameraX dependencies.
 
+#### Bug 3: Image format fallback sends raw non-JPEG bytes with JPEG media type
+
+`CameraCaptureViewModel.kt:139-141` — if `BitmapFactory` fails to decode an image (corrupt file, unsupported format), the catch block falls back to sending the **original raw bytes** to the API with `mediaType: "image/jpeg"` hardcoded in `AnthropicApiClient.kt:70`. For an HEIC or WEBP file from the gallery (or via share), this sends non-JPEG bytes labeled as JPEG, causing the API to reject the image silently.
+
+The happy path works: `BitmapFactory` decodes HEIC/WEBP/PNG successfully, and `compress(JPEG, 85%)` converts to JPEG. But the error fallback is wrong — it should fail with a user-facing error rather than sending garbage to the API.
+
 #### Related Code
 - `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt:86` — `HttpClient(OkHttp)` engine configuration
 - `gradle/libs.versions.toml:18,52` — `ktor = "3.1.1"`, `ktor-client-okhttp` dependency
@@ -44,12 +50,15 @@ The `INTERNET` permission IS declared (`AndroidManifest.xml:6`) and granted. The
 - `app/build.gradle.kts:85-90` — 5 CameraX implementation dependencies
 - `app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt` — full 200-line CameraX implementation
 - `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/CameraCaptureViewModel.kt:54-96` — photo capture handling
-- `app/src/main/kotlin/com/healthhelper/app/data/api/AnthropicApiClient.kt:83-88` — Ktor HTTP POST via OkHttp engine
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/CameraCaptureViewModel.kt:108-143` — `resizeImageIfNeeded` with raw-bytes fallback
+- `app/src/main/kotlin/com/healthhelper/app/data/api/AnthropicApiClient.kt:70,83-88` — hardcoded `image/jpeg` media type, Ktor HTTP POST
+- `app/src/main/kotlin/com/healthhelper/app/MainActivity.kt` — single-activity entry point, no intent handling
 
 ### Impact
 - App crashes when network is unavailable/transitioning during any HTTP call (BP scan or food sync)
 - Same OkHttp vulnerability affects `FoodScannerApiClient`
 - Poor camera UX: no preview, no retake, no gallery option
+- Undecodable images silently sent as wrong format, causing confusing API errors
 - 5 unnecessary CameraX dependencies add APK size and complexity
 
 ## Fix Plan (TDD Approach)
@@ -72,39 +81,81 @@ The `INTERNET` permission IS declared (`AndroidManifest.xml:6`) and granted. The
 2. All existing `FoodScannerApiClientTest` tests pass (uses Ktor mock engine)
 3. All existing `CameraCaptureViewModelTest` tests pass (mocks API client)
 
-### Step 2: Replace CameraCaptureScreen with system camera + gallery picker
+### Step 2: Fix image decode fallback — fail instead of sending raw bytes
+**File:** `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/CameraCaptureViewModel.kt` (modify)
+**Test:** `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/CameraCaptureViewModelTest.kt` (modify)
+
+**Behavior:**
+- Rename `resizeImageIfNeeded` to `prepareImageForApi` to reflect its broader responsibility
+- Change the catch block: instead of returning the original raw bytes on decode failure, return `null`
+- In `onPhotoCaptured`, check for `null` from `prepareImageForApi`. If null, set error state: "Could not process image. Please try a different photo."
+- This ensures only valid JPEG bytes are ever sent to the API, regardless of input format (HEIC, WEBP, PNG, or corrupt data)
+
+**Tests:**
+1. New test: `prepareImageForApi` returns null for undecodable bytes → ViewModel sets error message "Could not process image. Please try a different photo." and clears `isProcessing`
+2. Existing tests: all pass (they use `testImageBytes = byteArrayOf(1, 2, 3)` which won't decode, but the mock bypasses `prepareImageForApi` since `anthropicApiClient.parseBloodPressureImage` is mocked). Verify this is still the case — if the test calls the real resize path, the mock needs adjustment.
+
+### Step 3: Replace CameraCaptureScreen with system camera only
 **File:** `app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt` (rewrite)
 **Pattern:** Follow `SyncScreen.kt:65-72` for `rememberLauncherForActivityResult` usage
 
 **Behavior:**
 
-Rewrite the screen to use system intents instead of CameraX viewfinder:
+Rewrite the screen to use the system camera intent instead of CameraX viewfinder:
 
-- **Initial state:** Screen with title "Scan Blood Pressure", a "Take Photo" button, and a "Choose from Gallery" button. No camera viewfinder.
-- **"Take Photo"** uses `ActivityResultContracts.TakePicture()` — launches the system camera app with a `FileProvider` temp URI. The system camera handles preview, retake, and confirm natively. On success, reads image bytes from the URI via `contentResolver.openInputStream()` and calls `viewModel.onPhotoCaptured(bytes)`.
-- **"Choose from Gallery"** uses `ActivityResultContracts.PickVisualMedia(ImageOnly)` — launches the system photo picker. On image selected, reads bytes from the content URI and calls `viewModel.onPhotoCaptured(bytes)`.
+- **Initial state:** Screen with title "Scan Blood Pressure" and a single "Take Photo" button centered on screen. No camera viewfinder.
+- **"Take Photo"** uses `ActivityResultContracts.TakePicture()` — launches the system camera app with a `FileProvider` temp URI. The system camera handles preview, retake, and confirm natively. On success, reads image bytes from the URI via `context.contentResolver.openInputStream()` and calls `viewModel.onPhotoCaptured(bytes)`.
 - **Processing state:** Shows `CircularProgressIndicator` and "Analyzing..." text while `isProcessing == true`.
 - **Error state:** Shows error message and "Try Again" button (same behavior as current).
 - **Navigation:** On success, navigates to `BpConfirmationScreen` via existing `navigateToConfirmation` SharedFlow.
 - **Uri-to-bytes conversion** happens in the Composable layer (using `LocalContext.current`), keeping the ViewModel clean with no `Context` dependency. The existing `onPhotoCaptured(imageBytes: ByteArray)` signature is unchanged.
+- Remove the `capturePhoto()` private helper function and all CameraX imports.
 
 **Tests:**
 1. All existing `CameraCaptureViewModelTest` tests pass unchanged (they call `onPhotoCaptured(bytes)` directly)
 
-### Step 3: Add FileProvider for camera temp files
+### Step 4: Add share receiver for image sharing into BP flow
+**File:** `app/src/main/AndroidManifest.xml` (modify)
+**File:** `app/src/main/kotlin/com/healthhelper/app/MainActivity.kt` (modify)
+**File:** `app/src/main/kotlin/com/healthhelper/app/presentation/ui/AppNavigation.kt` (modify)
+
+**Behavior:**
+
+Add an `ACTION_SEND` intent filter so users can share photos from any app (Gallery, Google Photos, WhatsApp, file managers) to HealthHelper for BP scanning.
+
+**Manifest changes:**
+- Add a second `<intent-filter>` on `MainActivity` for `android.intent.action.SEND` with `<data android:mimeType="image/*" />`
+- Add `android:label="Scan Blood Pressure"` on the intent filter — this is what appears in the share sheet. Designed for future extensibility (can add "Scan Glucose" later as a separate filter).
+
+**MainActivity changes:**
+- In `onCreate`, after `enableEdgeToEdge()`, check if `intent.action == Intent.ACTION_SEND` and `intent.type?.startsWith("image/") == true`
+- If it's a share intent, extract the image URI from `intent.getParcelableExtra(Intent.EXTRA_STREAM)` (use the compat version for API 33+)
+- Pass the URI as a string to `AppNavigation` so it can route directly to the processing flow
+
+**AppNavigation changes:**
+- Accept an optional `sharedImageUri: String?` parameter
+- If `sharedImageUri` is non-null, set it as the start destination argument or use a `LaunchedEffect` to navigate to the camera-bp route with the pre-loaded image URI
+- The `CameraCaptureScreen` accepts an optional `sharedImageUri` parameter. When present, it skips the "Take Photo" button and immediately reads bytes from the URI and calls `viewModel.onPhotoCaptured(bytes)` — going straight to processing → confirmation.
+
+**Tests:**
+1. No unit tests for intent handling — verified by manual test
+2. Existing navigation tests (if any) pass
+
+### Step 5: Add FileProvider for camera temp files
 **File:** `app/src/main/AndroidManifest.xml` (modify)
 **File:** `app/src/main/res/xml/file_paths.xml` (create)
 
 **Behavior:**
 - `TakePicture()` requires a `Uri` for the system camera to write the photo to
-- Register a `FileProvider` in the manifest with authority `${applicationId}.fileprovider`
+- Register a `FileProvider` in the manifest under `<application>` with authority `${applicationId}.fileprovider`
 - Create `file_paths.xml` with a `<cache-path name="bp_images" path="bp_images/" />` entry
 - The screen creates a temp file in `cacheDir/bp_images/`, gets a FileProvider URI, passes it to `TakePicture()`
+- Temp files are cleaned up after processing
 
 **Tests:**
 1. No unit tests needed — manifest/XML configuration verified by build + manual test
 
-### Step 4: Remove CameraX dependencies
+### Step 6: Remove CameraX dependencies
 **File:** `gradle/libs.versions.toml` (modify)
 **File:** `app/build.gradle.kts` (modify)
 
@@ -118,18 +169,22 @@ Rewrite the screen to use system intents instead of CameraX viewfinder:
 1. `./gradlew assembleDebug` succeeds with no CameraX references
 2. No import errors in remaining source files
 
-### Step 5: Verify
+### Step 7: Verify
+- [ ] All new tests pass
 - [ ] All existing tests pass (`./gradlew test`)
 - [ ] Kotlin compiles without errors (`./gradlew assembleDebug`)
 - [ ] Lint passes
 - [ ] Build succeeds
 - [ ] Manual test: Take photo via system camera → processes → shows confirmation
-- [ ] Manual test: Pick from gallery → processes → shows confirmation
+- [ ] Manual test: Share photo from gallery → app opens → processes → shows confirmation
+- [ ] Manual test: Share HEIC from gallery → decoded and processed correctly
 - [ ] Manual test: Airplane mode → take photo → shows error message (NOT crash)
+- [ ] Manual test: Share sheet shows "Scan Blood Pressure" label for HealthHelper
 
 ## Notes
 - The CIO engine uses Java's SSLEngine instead of OkHttp's TLS stack. For standard HTTPS to `api.anthropic.com`, this is transparent. `network_security_config.xml` already has `cleartextTrafficPermitted="false"`.
 - The CAMERA permission remains needed — system camera apps on some devices check caller permissions.
-- `PickVisualMedia` is available from `activity-compose` (already a transitive dependency via Compose).
 - Existing `FoodScannerApiClient` also benefits from the CIO engine switch — same crash vulnerability existed there.
 - The `onCaptureError` callback and `capturePhoto()` helper function are removed since the system camera handles capture errors internally.
+- The share intent filter label "Scan Blood Pressure" is designed for future extensibility — a glucose scanner could add a second filter labeled "Scan Glucose" on the same activity.
+- `IntentCompat.getParcelableExtra()` should be used for API 33+ compatibility when extracting the shared image URI.
