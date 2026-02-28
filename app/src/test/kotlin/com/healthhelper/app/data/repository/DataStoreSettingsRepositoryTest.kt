@@ -6,6 +6,8 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
+import com.healthhelper.app.domain.model.MealType
+import com.healthhelper.app.domain.model.SyncedMealSummary
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
@@ -249,6 +251,43 @@ class DataStoreSettingsRepositoryTest {
         repository = DataStoreSettingsRepository(dataStore, encryptedPrefs)
         repository.setBaseUrl("https://food.example.com")
         assertTrue(repository.isConfigured())
+    }
+
+    // --- lastSyncedMeals tests ---
+
+    @Test
+    @DisplayName("lastSyncedMealsFlow emits empty list by default")
+    fun lastSyncedMealsFlowEmitsEmptyListByDefault() = testScope.runTest {
+        assertEquals(emptyList(), repository.lastSyncedMealsFlow.first())
+    }
+
+    @Test
+    @DisplayName("setLastSyncedMeals stores meals and emits them")
+    fun setLastSyncedMealsStoresMealsAndEmitsThem() = testScope.runTest {
+        val meals = listOf(
+            SyncedMealSummary(foodName = "Oatmeal", mealType = MealType.BREAKFAST, calories = 300),
+            SyncedMealSummary(foodName = "Salad", mealType = MealType.LUNCH, calories = 450),
+        )
+        repository.setLastSyncedMeals(meals)
+        val result = repository.lastSyncedMealsFlow.first()
+        assertEquals(2, result.size)
+        assertEquals("Oatmeal", result[0].foodName)
+        assertEquals(MealType.BREAKFAST, result[0].mealType)
+        assertEquals(300, result[0].calories)
+        assertEquals("Salad", result[1].foodName)
+        assertEquals(MealType.LUNCH, result[1].mealType)
+        assertEquals(450, result[1].calories)
+    }
+
+    @Test
+    @DisplayName("setLastSyncedMeals with empty list clears stored meals")
+    fun setLastSyncedMealsWithEmptyListClearsStoredMeals() = testScope.runTest {
+        val meals = listOf(
+            SyncedMealSummary(foodName = "Pizza", mealType = MealType.DINNER, calories = 800),
+        )
+        repository.setLastSyncedMeals(meals)
+        repository.setLastSyncedMeals(emptyList())
+        assertEquals(emptyList(), repository.lastSyncedMealsFlow.first())
     }
 
     @Test

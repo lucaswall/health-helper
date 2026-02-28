@@ -27,6 +27,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.health.connect.client.PermissionController
 import androidx.health.connect.client.permission.HealthPermission
@@ -112,6 +113,21 @@ fun SyncScreen(
 
             uiState.lastSyncResult?.let { result ->
                 Text("Last result: $result")
+            }
+
+            if (uiState.lastSyncedMeals.isNotEmpty()) {
+                Text(
+                    text = "Recent syncs:",
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                uiState.lastSyncedMeals.forEach { meal ->
+                    Text(
+                        text = "${meal.foodName} · ${meal.mealType.name.lowercase().replaceFirstChar { it.uppercase() }} · ${meal.calories} cal",
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
 
             if (uiState.isSyncing) {

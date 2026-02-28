@@ -3,8 +3,10 @@ package com.healthhelper.app.presentation.viewmodel
 import app.cash.turbine.test
 import androidx.health.connect.client.HealthConnectClient
 import com.healthhelper.app.data.sync.SyncScheduler
+import com.healthhelper.app.domain.model.MealType
 import com.healthhelper.app.domain.model.SyncProgress
 import com.healthhelper.app.domain.model.SyncResult
+import com.healthhelper.app.domain.model.SyncedMealSummary
 import com.healthhelper.app.domain.repository.SettingsRepository
 import com.healthhelper.app.domain.usecase.SyncNutritionUseCase
 import io.mockk.coEvery
@@ -48,6 +50,7 @@ class SyncViewModelTest {
         every { settingsRepository.syncIntervalFlow } returns flowOf(30)
         every { settingsRepository.lastSyncedDateFlow } returns flowOf("")
         every { settingsRepository.lastSyncTimestampFlow } returns flowOf(0L)
+        every { settingsRepository.lastSyncedMealsFlow } returns flowOf(emptyList())
         coEvery { settingsRepository.isConfigured() } returns true
         coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.NeedsConfiguration
     }
@@ -380,6 +383,42 @@ class SyncViewModelTest {
         viewModel.uiState.test {
             val state = awaitItem()
             assertFalse(state.permissionGranted)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `lastSyncedMeals is empty list by default`() = runTest {
+        every { settingsRepository.lastSyncedMealsFlow } returns flowOf(emptyList())
+
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals(emptyList(), state.lastSyncedMeals)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `lastSyncedMeals populated from repository flow`() = runTest {
+        val meals = listOf(
+            SyncedMealSummary(foodName = "Oatmeal", mealType = MealType.BREAKFAST, calories = 300),
+            SyncedMealSummary(foodName = "Salad", mealType = MealType.LUNCH, calories = 450),
+            SyncedMealSummary(foodName = "Pasta", mealType = MealType.DINNER, calories = 700),
+        )
+        every { settingsRepository.lastSyncedMealsFlow } returns flowOf(meals)
+
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals(3, state.lastSyncedMeals.size)
+            assertEquals("Oatmeal", state.lastSyncedMeals[0].foodName)
+            assertEquals("Salad", state.lastSyncedMeals[1].foodName)
+            assertEquals("Pasta", state.lastSyncedMeals[2].foodName)
             cancelAndIgnoreRemainingEvents()
         }
     }
