@@ -8,6 +8,7 @@ import com.healthhelper.app.domain.model.SyncedMealSummary
 import com.healthhelper.app.domain.repository.FoodLogRepository
 import com.healthhelper.app.domain.repository.NutritionRepository
 import com.healthhelper.app.domain.repository.SettingsRepository
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import timber.log.Timber
@@ -23,13 +24,22 @@ class SyncNutritionUseCase @Inject constructor(
     private val settingsRepository: SettingsRepository,
 ) {
     suspend fun invoke(onProgress: (SyncProgress) -> Unit = {}): SyncResult {
-        if (!settingsRepository.isConfigured()) {
-            return SyncResult.NeedsConfiguration
+        val apiKey: String
+        val baseUrl: String
+        val lastSyncedDate: String
+        try {
+            if (!settingsRepository.isConfigured()) {
+                return SyncResult.NeedsConfiguration
+            }
+            apiKey = settingsRepository.apiKeyFlow.first()
+            baseUrl = settingsRepository.baseUrlFlow.first()
+            lastSyncedDate = settingsRepository.lastSyncedDateFlow.first()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to read sync settings")
+            return SyncResult.Error(e.message ?: "Failed to read settings")
         }
-
-        val apiKey = settingsRepository.apiKeyFlow.first()
-        val baseUrl = settingsRepository.baseUrlFlow.first()
-        val lastSyncedDate = settingsRepository.lastSyncedDateFlow.first()
 
         val today = LocalDate.now()
         val maxPastDate = today.minusDays(365)
@@ -69,11 +79,12 @@ class SyncNutritionUseCase @Inject constructor(
                                 entries.forEach { entry -> syncedEntries.add(Pair(dateStr, entry)) }
                             }
                         }
+                        Unit
                     }
                     is FoodLogResult.NotModified -> {
                         Timber.d("getFoodLog(%s) not modified, skipping HC write", dateStr)
                     }
-                }
+                }.let {}
                 successfulDays++
                 if (date != today) {
                     pastDateResults[date] = true

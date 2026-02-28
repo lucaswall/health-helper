@@ -65,6 +65,8 @@ class DataStoreSettingsRepository @Inject constructor(
             withContext(Dispatchers.IO) {
                 val existingKey = encryptedPrefs.getString(ENCRYPTED_API_KEY, "")
                 if (!existingKey.isNullOrEmpty()) {
+                    // Clean residual plaintext key from DataStore (crash recovery)
+                    dataStore.edit { it.remove(API_KEY) }
                     migrationComplete = true
                     return@withContext
                 }

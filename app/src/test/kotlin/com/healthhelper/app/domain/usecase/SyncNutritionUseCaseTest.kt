@@ -13,8 +13,10 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
+import java.io.IOException
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
@@ -364,10 +366,36 @@ class SyncNutritionUseCaseTest {
         // API returns empty list so we get a clean Success(0) result
         coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } returns Result.success(FoodLogResult.Data(emptyList()))
 
-        // Should NOT throw DateTimeParseException; result should be Success or Error, never an exception
+        // Should NOT throw DateTimeParseException; corrupt date triggers full 366-day fallback
         val result = useCase.invoke()
 
-        assertTrue(result is SyncResult.Success || result is SyncResult.Error)
+        assertTrue(result is SyncResult.Success)
+        assertEquals(366, (result as SyncResult.Success).daysProcessed)
+    }
+
+    // --- Settings read exception handling tests ---
+
+    @Test
+    @DisplayName("isConfigured throws IOException: returns SyncResult.Error instead of propagating")
+    fun isConfiguredThrowsReturnsError() = runTest {
+        coEvery { settingsRepository.isConfigured() } throws IOException("DataStore corrupted")
+
+        val result = useCase.invoke()
+
+        assertTrue(result is SyncResult.Error)
+    }
+
+    @Test
+    @DisplayName("apiKeyFlow.first() throws: returns SyncResult.Error instead of propagating")
+    fun apiKeyFlowThrowsReturnsError() = runTest {
+        coEvery { settingsRepository.isConfigured() } returns true
+        every { settingsRepository.apiKeyFlow } returns flow { throw IOException("DataStore IO error") }
+        every { settingsRepository.baseUrlFlow } returns flowOf("https://food.example.com")
+        every { settingsRepository.lastSyncedDateFlow } returns flowOf("")
+
+        val result = useCase.invoke()
+
+        assertTrue(result is SyncResult.Error)
     }
 
     // --- setLastSyncTimestamp correctness tests ---

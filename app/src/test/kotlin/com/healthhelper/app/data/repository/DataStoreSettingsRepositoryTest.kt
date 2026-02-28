@@ -112,19 +112,21 @@ class DataStoreSettingsRepositoryTest {
     }
 
     @Test
-    @DisplayName("migration skips if encryptedPrefs already has the key")
-    fun migrationSkipsIfEncryptedPrefsAlreadyHasKey() = testScope.runTest {
-        // Pre-populate both DataStore and encryptedPrefs
+    @DisplayName("migration cleans residual plaintext key from DataStore when encryptedPrefs already has key")
+    fun migrationCleansResidualPlaintextKey() = testScope.runTest {
+        // Simulate crash recovery: EncryptedPrefs has the key (write succeeded)
+        // but DataStore still has the plaintext key (remove didn't complete)
         dataStore.edit { it[stringPreferencesKey("api_key")] = "datastore_key" }
         encryptedStore["api_key"] = "encrypted_key"
 
         val freshRepo = DataStoreSettingsRepository(dataStore, encryptedPrefs)
         val key = freshRepo.apiKeyFlow.first()
 
-        // Should use encryptedPrefs value, DataStore not touched
+        // Should use encryptedPrefs value
         assertEquals("encrypted_key", key)
+        // DataStore plaintext key should be cleaned up
         val prefs = dataStore.data.first()
-        assertEquals("datastore_key", prefs[stringPreferencesKey("api_key")])
+        assertNull(prefs[stringPreferencesKey("api_key")])
     }
 
     @Test
