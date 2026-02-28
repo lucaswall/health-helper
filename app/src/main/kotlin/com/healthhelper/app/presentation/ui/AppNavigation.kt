@@ -3,9 +3,11 @@ package com.healthhelper.app.presentation.ui
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.runtime.Composable
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 
 @Composable
 fun AppNavigation() {
@@ -22,11 +24,40 @@ fun AppNavigation() {
         composable("sync") {
             SyncScreen(
                 onNavigateToSettings = { navController.navigate("settings") },
+                onNavigateToCamera = { navController.navigate("camera-bp") },
             )
         }
         composable("settings") {
             SettingsScreen(
                 onNavigateBack = { navController.popBackStack() },
+            )
+        }
+        composable("camera-bp") {
+            CameraCaptureScreen(
+                onNavigateToConfirmation = { sys, dia ->
+                    navController.navigate("bp-confirm/$sys/$dia")
+                },
+                onNavigateBack = { navController.popBackStack() },
+            )
+        }
+        composable(
+            route = "bp-confirm/{systolic}/{diastolic}",
+            arguments = listOf(
+                navArgument("systolic") { type = NavType.IntType },
+                navArgument("diastolic") { type = NavType.IntType },
+            ),
+        ) {
+            BpConfirmationScreen(
+                onNavigateHome = { snackbarMsg ->
+                    navController.navigate("sync") {
+                        popUpTo("sync") { inclusive = true }
+                    }
+                },
+                onCancel = {
+                    navController.navigate("sync") {
+                        popUpTo("sync") { inclusive = true }
+                    }
+                },
             )
         }
     }

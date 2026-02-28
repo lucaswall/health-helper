@@ -87,6 +87,7 @@ dependencies {
     implementation(libs.camera.camera2)
     implementation(libs.camera.lifecycle)
     implementation(libs.camera.compose)
+    implementation(libs.camera.view)
 
     // WorkManager
     implementation(libs.work.runtime.ktx)
