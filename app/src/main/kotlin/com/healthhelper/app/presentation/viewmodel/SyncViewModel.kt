@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.healthhelper.app.data.sync.SyncScheduler
 import com.healthhelper.app.domain.model.SyncProgress
 import com.healthhelper.app.domain.model.SyncResult
+import com.healthhelper.app.domain.model.SyncedMealSummary
 import com.healthhelper.app.domain.repository.SettingsRepository
 import com.healthhelper.app.domain.usecase.SyncNutritionUseCase
 import androidx.health.connect.client.HealthConnectClient
@@ -29,6 +30,7 @@ data class SyncUiState(
     val lastSyncedDate: String = "",
     val healthConnectAvailable: Boolean = false,
     val permissionGranted: Boolean = false,
+    val lastSyncedMeals: List<SyncedMealSummary> = emptyList(),
 )
 
 @HiltViewModel
@@ -65,6 +67,13 @@ class SyncViewModel @Inject constructor(
                         lastSyncedDate = lastSyncedDate,
                     )
                 }
+            }
+        }
+
+        // Collect lastSyncedMealsFlow separately
+        viewModelScope.launch {
+            settingsRepository.lastSyncedMealsFlow.collect { meals ->
+                _uiState.update { it.copy(lastSyncedMeals = meals) }
             }
         }
 

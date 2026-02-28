@@ -1,7 +1,9 @@
 package com.healthhelper.app.domain.usecase
 
+import com.healthhelper.app.domain.model.FoodLogEntry
 import com.healthhelper.app.domain.model.SyncProgress
 import com.healthhelper.app.domain.model.SyncResult
+import com.healthhelper.app.domain.model.SyncedMealSummary
 import com.healthhelper.app.domain.repository.FoodLogRepository
 import com.healthhelper.app.domain.repository.NutritionRepository
 import com.healthhelper.app.domain.repository.SettingsRepository
@@ -45,6 +47,8 @@ class SyncNutritionUseCase @Inject constructor(
         var successfulDays = 0
         // Track per-date success for contiguous lastSyncedDate calculation
         val pastDateResults = mutableMapOf<LocalDate, Boolean>()
+        // Accumulate synced entries with their date for meal summary
+        val syncedEntries = mutableListOf<Pair<String, FoodLogEntry>>()
 
         for (date in dates) {
             val dateStr = date.format(DateTimeFormatter.ISO_LOCAL_DATE)
@@ -58,6 +62,7 @@ class SyncNutritionUseCase @Inject constructor(
                     if (written) {
                         totalRecordsSynced += entries.size
                     }
+                    entries.forEach { entry -> syncedEntries.add(Pair(dateStr, entry)) }
                 }
                 successfulDays++
                 if (date != today) {
@@ -97,6 +102,26 @@ class SyncNutritionUseCase @Inject constructor(
         }
         if (contiguousEnd != null) {
             settingsRepository.setLastSyncedDate(contiguousEnd.format(DateTimeFormatter.ISO_LOCAL_DATE))
+        }
+
+        // Persist last 3 meals: sort by date desc, then time desc (null time sorts last)
+        try {
+            val summaries = syncedEntries
+                .sortedWith(
+                    compareByDescending<Pair<String, FoodLogEntry>> { it.first }
+                        .thenByDescending { it.second.time ?: "" },
+                )
+                .take(3)
+                .map { (_, entry) ->
+                    SyncedMealSummary(
+                        foodName = entry.foodName,
+                        mealType = entry.mealType,
+                        calories = entry.calories.toInt(),
+                    )
+                }
+            settingsRepository.setLastSyncedMeals(summaries)
+        } catch (e: Exception) {
+            // Non-critical — don't fail sync on meal summary persistence error
         }
 
         return when {

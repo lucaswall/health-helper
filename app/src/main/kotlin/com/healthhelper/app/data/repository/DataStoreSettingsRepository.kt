@@ -6,6 +6,8 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import com.healthhelper.app.domain.model.MealType
+import com.healthhelper.app.domain.model.SyncedMealSummary
 import com.healthhelper.app.domain.repository.SettingsRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
@@ -16,6 +18,9 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import timber.log.Timber
 import javax.inject.Inject
 
@@ -24,11 +29,19 @@ class DataStoreSettingsRepository @Inject constructor(
     private val encryptedPrefs: SharedPreferences,
 ) : SettingsRepository {
 
+    @Serializable
+    private data class SyncedMealDto(
+        val foodName: String,
+        val mealType: String,
+        val calories: Int,
+    )
+
     private companion object {
         val API_KEY = stringPreferencesKey("api_key")
         val BASE_URL = stringPreferencesKey("base_url")
         val SYNC_INTERVAL = intPreferencesKey("sync_interval")
         val LAST_SYNCED_DATE = stringPreferencesKey("last_synced_date")
+        val LAST_SYNCED_MEALS = stringPreferencesKey("last_synced_meals")
         const val DEFAULT_SYNC_INTERVAL = 5
         const val ENCRYPTED_API_KEY = "api_key"
     }
@@ -87,6 +100,27 @@ class DataStoreSettingsRepository @Inject constructor(
     override val lastSyncedDateFlow: Flow<String> =
         dataStore.data.map { it[LAST_SYNCED_DATE] ?: "" }
 
+    override val lastSyncedMealsFlow: Flow<List<SyncedMealSummary>> =
+        dataStore.data.map { prefs ->
+            val json = prefs[LAST_SYNCED_MEALS] ?: return@map emptyList()
+            try {
+                val dtos = Json.decodeFromString<List<SyncedMealDto>>(json)
+                dtos.map { dto ->
+                    SyncedMealSummary(
+                        foodName = dto.foodName,
+                        mealType = try {
+                            MealType.valueOf(dto.mealType)
+                        } catch (e: IllegalArgumentException) {
+                            MealType.UNKNOWN
+                        },
+                        calories = dto.calories,
+                    )
+                }
+            } catch (e: Exception) {
+                emptyList()
+            }
+        }
+
     override suspend fun setApiKey(value: String) {
         withContext(Dispatchers.IO) {
             encryptedPrefs.edit().putString(ENCRYPTED_API_KEY, value).commit()
@@ -103,6 +137,12 @@ class DataStoreSettingsRepository @Inject constructor(
 
     override suspend fun setLastSyncedDate(value: String) {
         dataStore.edit { it[LAST_SYNCED_DATE] = value }
+    }
+
+    override suspend fun setLastSyncedMeals(meals: List<SyncedMealSummary>) {
+        val dtos = meals.map { SyncedMealDto(it.foodName, it.mealType.name, it.calories) }
+        val json = Json.encodeToString(dtos)
+        dataStore.edit { it[LAST_SYNCED_MEALS] = json }
     }
 
     override suspend fun isConfigured(): Boolean {
