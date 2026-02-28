@@ -2,6 +2,9 @@ package com.healthhelper.app.presentation.viewmodel
 
 import app.cash.turbine.test
 import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.PermissionController
+import androidx.health.connect.client.permission.HealthPermission
+import androidx.health.connect.client.records.NutritionRecord
 import com.healthhelper.app.data.sync.SyncScheduler
 import com.healthhelper.app.domain.model.SyncProgress
 import com.healthhelper.app.domain.model.SyncResult
@@ -49,6 +52,7 @@ class SyncViewModelTest {
         every { settingsRepository.lastSyncedDateFlow } returns flowOf("")
         coEvery { settingsRepository.isConfigured() } returns true
         coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.NeedsConfiguration
+        every { syncScheduler.getNextSyncTimeFlow() } returns flowOf(null)
     }
 
     @AfterEach
@@ -313,6 +317,87 @@ class SyncViewModelTest {
         viewModel.uiState.test {
             val state = awaitItem()
             assertFalse(state.permissionGranted)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    // --- Task 2: Permission check on app launch ---
+
+    @Test
+    fun `permissionGranted is true on init when permission already granted`() = runTest {
+        val permController = mockk<PermissionController>()
+        every { healthConnectClient!!.permissionController } returns permController
+        coEvery { permController.getGrantedPermissions() } returns
+            setOf(HealthPermission.getWritePermission(NutritionRecord::class))
+
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            assertTrue(awaitItem().permissionGranted)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `permissionGranted stays false on init when permission not granted`() = runTest {
+        val permController = mockk<PermissionController>()
+        every { healthConnectClient!!.permissionController } returns permController
+        coEvery { permController.getGrantedPermissions() } returns emptySet()
+
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            assertFalse(awaitItem().permissionGranted)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `permissionGranted stays false when getGrantedPermissions throws`() = runTest {
+        val permController = mockk<PermissionController>()
+        every { healthConnectClient!!.permissionController } returns permController
+        coEvery { permController.getGrantedPermissions() } throws RuntimeException("HC error")
+
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            assertFalse(awaitItem().permissionGranted)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    // --- Task 9: Next scheduled sync time ---
+
+    @Test
+    fun `nextSyncTime shows formatted time when sync is scheduled`() = runTest {
+        val futureTimeMs = System.currentTimeMillis() + 10 * 60 * 1000L
+        every { syncScheduler.getNextSyncTimeFlow() } returns flowOf(futureTimeMs)
+
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertTrue(state.nextSyncTime.startsWith("Next sync in ~"))
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `nextSyncTime shows empty string when not configured`() = runTest {
+        every { settingsRepository.apiKeyFlow } returns flowOf("")
+        every { settingsRepository.baseUrlFlow } returns flowOf("")
+        every { syncScheduler.getNextSyncTimeFlow() } returns flowOf(null)
+
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals("", state.nextSyncTime)
             cancelAndIgnoreRemainingEvents()
         }
     }

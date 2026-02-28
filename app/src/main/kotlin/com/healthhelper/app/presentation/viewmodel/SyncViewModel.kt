@@ -1,5 +1,8 @@
 package com.healthhelper.app.presentation.viewmodel
 
+import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.permission.HealthPermission
+import androidx.health.connect.client.records.NutritionRecord
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.healthhelper.app.data.sync.SyncScheduler
@@ -7,11 +10,9 @@ import com.healthhelper.app.domain.model.SyncProgress
 import com.healthhelper.app.domain.model.SyncResult
 import com.healthhelper.app.domain.repository.SettingsRepository
 import com.healthhelper.app.domain.usecase.SyncNutritionUseCase
-import androidx.health.connect.client.HealthConnectClient
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
-import timber.log.Timber
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,6 +20,11 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
+import timber.log.Timber
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import javax.inject.Inject
 
 data class SyncUiState(
@@ -29,6 +35,7 @@ data class SyncUiState(
     val lastSyncedDate: String = "",
     val healthConnectAvailable: Boolean = false,
     val permissionGranted: Boolean = false,
+    val nextSyncTime: String = "",
 )
 
 @HiltViewModel
@@ -39,6 +46,10 @@ class SyncViewModel @Inject constructor(
     private val healthConnectClient: HealthConnectClient?,
 ) : ViewModel() {
 
+    companion object {
+        val WRITE_NUTRITION_PERMISSION = HealthPermission.getWritePermission(NutritionRecord::class)
+    }
+
     private val _uiState = MutableStateFlow(SyncUiState())
     val uiState: StateFlow<SyncUiState> = _uiState.asStateFlow()
 
@@ -47,6 +58,24 @@ class SyncViewModel @Inject constructor(
     init {
         _uiState.update {
             it.copy(healthConnectAvailable = healthConnectClient != null)
+        }
+
+        // Check Health Connect permission on launch
+        if (healthConnectClient != null) {
+            viewModelScope.launch {
+                try {
+                    val startTime = System.currentTimeMillis()
+                    val granted = withTimeout(10_000L) {
+                        healthConnectClient.permissionController.getGrantedPermissions()
+                    }
+                    val elapsed = System.currentTimeMillis() - startTime
+                    Timber.d("getGrantedPermissions() took ${elapsed}ms")
+                    _uiState.update { it.copy(permissionGranted = granted.contains(WRITE_NUTRITION_PERMISSION)) }
+                } catch (e: Exception) {
+                    Timber.e(e, "Failed to check Health Connect permissions")
+                    // Leave permissionGranted = false
+                }
+            }
         }
 
         // Observe all settings flows for UI state — isConfigured derived reactively
@@ -82,6 +111,37 @@ class SyncViewModel @Inject constructor(
                     syncScheduler.schedulePeriodic(interval)
                 }
             }
+        }
+
+        // Observe next sync time from WorkManager
+        viewModelScope.launch {
+            combine(
+                syncScheduler.getNextSyncTimeFlow(),
+                settingsRepository.apiKeyFlow,
+                settingsRepository.baseUrlFlow,
+            ) { nextSyncMs, apiKey, baseUrl ->
+                val configured = apiKey.isNotEmpty() && baseUrl.isNotEmpty()
+                when {
+                    !configured -> ""
+                    nextSyncMs == null -> "Sync pending..."
+                    else -> formatNextSyncTime(nextSyncMs)
+                }
+            }.collect { nextSyncText ->
+                _uiState.update { it.copy(nextSyncTime = nextSyncText) }
+            }
+        }
+    }
+
+    private fun formatNextSyncTime(nextSyncMs: Long): String {
+        val diffMs = nextSyncMs - System.currentTimeMillis()
+        val diffMinutes = diffMs / 60_000L
+        return if (diffMinutes < 60) {
+            "Next sync in ~${diffMinutes}m"
+        } else {
+            val localTime = Instant.ofEpochMilli(nextSyncMs)
+                .atZone(ZoneId.systemDefault())
+                .toLocalTime()
+            "Next sync at ${localTime.format(DateTimeFormatter.ofPattern("HH:mm"))}"
         }
     }
 

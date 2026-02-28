@@ -162,9 +162,9 @@ class DataStoreSettingsRepositoryTest {
     }
 
     @Test
-    @DisplayName("default sync interval is 5")
+    @DisplayName("default sync interval is 15")
     fun defaultSyncInterval() = testScope.runTest {
-        assertEquals(5, repository.syncIntervalFlow.first())
+        assertEquals(15, repository.syncIntervalFlow.first())
     }
 
     @Test

@@ -108,6 +108,14 @@ fun SyncScreen(
                 Text("Last synced: ${uiState.lastSyncedDate}")
             }
 
+            if (uiState.nextSyncTime.isNotEmpty()) {
+                Text(
+                    text = uiState.nextSyncTime,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
             uiState.lastSyncResult?.let { result ->
                 Text("Last result: $result")
             }
