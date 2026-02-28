@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.healthhelper.app.domain.repository.SettingsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -21,7 +22,12 @@ data class SettingsUiState(
     val isConfigured: Boolean = false,
     val hasUnsavedChanges: Boolean = false,
     val saveError: String? = null,
-)
+) {
+    override fun toString(): String =
+        "SettingsUiState(apiKey=***, anthropicApiKey=***, baseUrl=$baseUrl, " +
+            "syncInterval=$syncInterval, isConfigured=$isConfigured, " +
+            "hasUnsavedChanges=$hasUnsavedChanges, saveError=$saveError)"
+}
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
@@ -36,7 +42,10 @@ class SettingsViewModel @Inject constructor(
         val anthropicApiKey: String = "",
         val baseUrl: String = "",
         val syncInterval: Int = 15,
-    )
+    ) {
+        override fun toString(): String =
+            "PersistedSettings(apiKey=***, anthropicApiKey=***, baseUrl=$baseUrl, syncInterval=$syncInterval)"
+    }
 
     private var persistedSettings = PersistedSettings()
     private var isSaving = false
@@ -98,6 +107,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun save() {
+        if (isSaving) return
         val current = _uiState.value
         viewModelScope.launch {
             isSaving = true
@@ -106,6 +116,7 @@ class SettingsViewModel @Inject constructor(
                 settingsRepository.setApiKey(current.apiKey)
                 true
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
                 Timber.e(e, "Failed to save API key")
                 anyFailed = true
                 false
@@ -114,6 +125,7 @@ class SettingsViewModel @Inject constructor(
                 settingsRepository.setBaseUrl(current.baseUrl)
                 true
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
                 Timber.e(e, "Failed to save base URL")
                 anyFailed = true
                 false
@@ -122,6 +134,7 @@ class SettingsViewModel @Inject constructor(
                 settingsRepository.setSyncInterval(current.syncInterval)
                 true
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
                 Timber.e(e, "Failed to save sync interval")
                 anyFailed = true
                 false
@@ -130,6 +143,7 @@ class SettingsViewModel @Inject constructor(
                 settingsRepository.setAnthropicApiKey(current.anthropicApiKey)
                 true
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
                 Timber.e(e, "Failed to save Anthropic API key")
                 anyFailed = true
                 false

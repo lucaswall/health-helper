@@ -15,6 +15,7 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -27,7 +28,7 @@ import javax.inject.Inject
 
 class DataStoreSettingsRepository @Inject constructor(
     private val dataStore: DataStore<Preferences>,
-    private val encryptedPrefs: SharedPreferences,
+    private val encryptedPrefs: SharedPreferences?,
 ) : SettingsRepository {
 
     @Serializable
@@ -53,6 +54,7 @@ class DataStoreSettingsRepository @Inject constructor(
     private var migrationComplete = false
 
     private suspend fun migrateIfNeeded() {
+        if (encryptedPrefs == null) return
         migrationMutex.withLock {
             if (migrationComplete) return
             withContext(Dispatchers.IO) {
@@ -78,31 +80,39 @@ class DataStoreSettingsRepository @Inject constructor(
         }
     }
 
-    override val apiKeyFlow: Flow<String> = callbackFlow {
-        try {
-            migrateIfNeeded()
-        } catch (e: Exception) {
-            Timber.e(e, "API key migration failed")
-        }
-        trySend(encryptedPrefs.getString(ENCRYPTED_API_KEY, "") ?: "")
-        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-            if (key == ENCRYPTED_API_KEY) {
-                trySend(encryptedPrefs.getString(ENCRYPTED_API_KEY, "") ?: "")
+    override val apiKeyFlow: Flow<String> = if (encryptedPrefs == null) {
+        flowOf("")
+    } else {
+        callbackFlow {
+            try {
+                migrateIfNeeded()
+            } catch (e: Exception) {
+                Timber.e(e, "API key migration failed")
             }
+            trySend(encryptedPrefs.getString(ENCRYPTED_API_KEY, "") ?: "")
+            val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+                if (key == ENCRYPTED_API_KEY) {
+                    trySend(encryptedPrefs.getString(ENCRYPTED_API_KEY, "") ?: "")
+                }
+            }
+            encryptedPrefs.registerOnSharedPreferenceChangeListener(listener)
+            awaitClose { encryptedPrefs.unregisterOnSharedPreferenceChangeListener(listener) }
         }
-        encryptedPrefs.registerOnSharedPreferenceChangeListener(listener)
-        awaitClose { encryptedPrefs.unregisterOnSharedPreferenceChangeListener(listener) }
     }
 
-    override val anthropicApiKeyFlow: Flow<String> = callbackFlow {
-        trySend(encryptedPrefs.getString(ENCRYPTED_ANTHROPIC_KEY, "") ?: "")
-        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-            if (key == ENCRYPTED_ANTHROPIC_KEY) {
-                trySend(encryptedPrefs.getString(ENCRYPTED_ANTHROPIC_KEY, "") ?: "")
+    override val anthropicApiKeyFlow: Flow<String> = if (encryptedPrefs == null) {
+        flowOf("")
+    } else {
+        callbackFlow {
+            trySend(encryptedPrefs.getString(ENCRYPTED_ANTHROPIC_KEY, "") ?: "")
+            val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+                if (key == ENCRYPTED_ANTHROPIC_KEY) {
+                    trySend(encryptedPrefs.getString(ENCRYPTED_ANTHROPIC_KEY, "") ?: "")
+                }
             }
+            encryptedPrefs.registerOnSharedPreferenceChangeListener(listener)
+            awaitClose { encryptedPrefs.unregisterOnSharedPreferenceChangeListener(listener) }
         }
-        encryptedPrefs.registerOnSharedPreferenceChangeListener(listener)
-        awaitClose { encryptedPrefs.unregisterOnSharedPreferenceChangeListener(listener) }
     }
 
     override val baseUrlFlow: Flow<String> =
@@ -144,12 +154,20 @@ class DataStoreSettingsRepository @Inject constructor(
         }
 
     override suspend fun setApiKey(value: String) {
+        if (encryptedPrefs == null) {
+            Timber.w("Cannot save API key: encrypted prefs unavailable")
+            return
+        }
         withContext(Dispatchers.IO) {
             encryptedPrefs.edit().putString(ENCRYPTED_API_KEY, value).commit()
         }
     }
 
     override suspend fun setAnthropicApiKey(value: String) {
+        if (encryptedPrefs == null) {
+            Timber.w("Cannot save Anthropic API key: encrypted prefs unavailable")
+            return
+        }
         withContext(Dispatchers.IO) {
             encryptedPrefs.edit().putString(ENCRYPTED_ANTHROPIC_KEY, value).commit()
         }
@@ -180,7 +198,7 @@ class DataStoreSettingsRepository @Inject constructor(
     override suspend fun isConfigured(): Boolean {
         migrateIfNeeded()
         return withContext(Dispatchers.IO) {
-            val apiKey = encryptedPrefs.getString(ENCRYPTED_API_KEY, "") ?: ""
+            val apiKey = encryptedPrefs?.getString(ENCRYPTED_API_KEY, "") ?: ""
             val prefs = dataStore.data.first()
             val baseUrl = prefs[BASE_URL] ?: ""
             apiKey.isNotEmpty() && baseUrl.isNotEmpty()

@@ -49,29 +49,13 @@ object AppModule {
     @Singleton
     fun provideEncryptedSharedPreferences(
         @ApplicationContext context: Context,
-    ): SharedPreferences {
-        return try {
-            val masterKey = MasterKey.Builder(context)
-                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-                .build()
-            EncryptedSharedPreferences.create(
-                context,
-                "encrypted_settings",
-                masterKey,
-                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-            )
-        } catch (e: Exception) {
-            Timber.w(e, "Keystore unavailable, falling back to plain SharedPreferences")
-            context.getSharedPreferences("settings_fallback", Context.MODE_PRIVATE)
-        }
-    }
+    ): SharedPreferences? = createEncryptedSharedPreferences(context)
 
     @Provides
     @Singleton
     fun provideSettingsRepository(
         dataStore: DataStore<Preferences>,
-        encryptedPrefs: SharedPreferences,
+        encryptedPrefs: SharedPreferences?,
     ): SettingsRepository = DataStoreSettingsRepository(dataStore, encryptedPrefs)
 
     @Provides
@@ -131,4 +115,28 @@ object AppModule {
     @Singleton
     fun provideSyncScheduler(workManager: WorkManager): SyncScheduler =
         SyncScheduler(workManager)
+
+    internal fun createEncryptedSharedPreferences(context: Context): SharedPreferences? =
+        createEncryptedSharedPreferences(context) { ctx ->
+            val masterKey = MasterKey.Builder(ctx)
+                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                .build()
+            EncryptedSharedPreferences.create(
+                ctx,
+                "encrypted_settings",
+                masterKey,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+            )
+        }
+
+    internal fun createEncryptedSharedPreferences(
+        context: Context,
+        creator: (Context) -> SharedPreferences,
+    ): SharedPreferences? = try {
+        creator(context)
+    } catch (e: Exception) {
+        Timber.w(e, "Keystore unavailable, encrypted prefs not available")
+        null
+    }
 }
