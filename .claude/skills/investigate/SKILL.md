@@ -76,8 +76,8 @@ Based on $ARGUMENTS, determine what you're investigating:
 3. Check dependency versions in `gradle/libs.versions.toml`
 4. Look for version conflicts or missing dependencies
 
-**For Runtime Issues (if logs available):**
-1. Check Logcat output for stack traces
+**For Runtime Issues (crashes, ANRs, unexpected behavior):**
+1. Pull device logs using the ADB commands in the section below
 2. Trace the execution flow through the codebase
 3. Check ViewModel/StateFlow logic
 4. Look for coroutine scope issues
@@ -87,6 +87,63 @@ Based on $ARGUMENTS, determine what you're investigating:
 - Check repository implementations
 - Trace data flow from Health Connect/network to UI
 - Look for transformation errors in mappers
+
+### ADB Device Debugging
+
+When investigating runtime issues, use the following commands **in this order**. Do NOT trial-and-error with random grep filters. The app package is `com.healthhelper.app`.
+
+**Run all three of these in parallel first** to get a comprehensive snapshot:
+
+#### 1. Crash logs (MOST IMPORTANT — start here)
+```bash
+adb shell "dumpsys dropbox --print" 2>/dev/null | grep -B5 -A 60 "Process: com.healthhelper.app"
+```
+- Persists across app restarts — captures crashes even if the app was killed and restarted
+- Shows full stack traces, timestamps, UID, PID, process runtime, foreground state
+- Categories: `data_app_crash` (Java/Kotlin), `data_app_native_crash` (NDK), `data_app_anr` (ANR)
+- Parse the `Caused by:` chain to find the root exception
+
+#### 2. App metadata (permissions, version, UID)
+```bash
+adb shell "dumpsys package com.healthhelper.app" 2>/dev/null | grep -E "versionCode|versionName|targetSdk|userId|granted|requested permissions|install permissions|INTERNET|CAMERA|health\." | head -30
+```
+- Verify installed version matches what you expect
+- Check all permissions are granted (especially INTERNET, CAMERA, Health Connect)
+- Note the UID — compare with crash log UIDs to confirm crashes are from current install
+
+#### 3. Recent logcat (app-specific)
+```bash
+adb logcat -d -t 500 --pid=$(adb shell pidof -s com.healthhelper.app 2>/dev/null) 2>/dev/null | grep -v "ResourcesManager\|VRI\[Main\|OplusPredictive\|surfaceControl\|Camera2Presence\|OplusCamera\|setClientInfo" | tail -80
+```
+- Only useful if the app is **currently running** — logcat is ephemeral
+- The `--pid` filter requires the app to be alive; falls back gracefully if not
+- Exclusion filter removes noisy system messages common on OnePlus/Oppo devices
+- If the app is not running, skip this and rely on dropbox
+
+#### When logcat PID filter fails (app not running)
+```bash
+adb logcat -d -b crash -t 50 2>/dev/null
+```
+- The crash buffer persists longer than the main buffer
+- Shows recent crash stack traces across all apps — grep for `healthhelper`
+
+#### Permission deep-dive (when permissions are suspected)
+```bash
+adb shell "dumpsys package com.healthhelper.app" 2>/dev/null | grep -A 30 "runtime permissions"
+```
+
+#### Health Connect specific
+```bash
+adb shell "dumpsys package com.healthhelper.app" 2>/dev/null | grep -E "health\.|HEALTH"
+```
+
+**Key principles:**
+- **Always start with `dumpsys dropbox`** — it's the most reliable source for crashes. Logcat may have rotated away.
+- **Compare UIDs** between crash logs and current install — if they differ, the app was reinstalled and old crashes may not be relevant to the current build.
+- **Parse the full `Caused by:` chain** — the top-level exception (e.g., `SecurityException`) is often misleading; the root cause is at the bottom (e.g., `ErrnoException: EPERM`).
+- **Check `Process-Runtime`** in dropbox output — short runtimes (< 5s) indicate crash-on-startup or crash-restart loops.
+- **Never use `adb logcat -uall`** — can cause memory issues on large repos.
+- **Run parallel** — all three primary commands above are independent and should be called simultaneously.
 
 ### Step 3: Form Conclusions
 
@@ -113,7 +170,7 @@ Write findings to the conversation (NOT to a file):
 - **MCPs used:** [list MCPs accessed]
 - **Environment queried:** [production | staging | N/A]
 - **Files examined:** [list key files checked]
-- **Logs reviewed:** [build output, logcat, etc. if applicable]
+- **Logs reviewed:** [build output, dumpsys dropbox, logcat, dumpsys package, etc. if applicable]
 
 ### Evidence
 [What you found - be specific with data points, log excerpts, file contents]
@@ -148,6 +205,9 @@ When investigating build issues:
 | File/resource not found | Document in report (may be relevant) |
 | Cannot reproduce issue | Document steps taken, request more context |
 | Logs unavailable | Note in report, suggest alternative approaches |
+| No device connected | Skip ADB commands, note in report. Investigate codebase only. |
+| App not running on device | Use `dumpsys dropbox` and crash buffer instead of logcat PID filter |
+| Dropbox empty for app | App hasn't crashed recently. Check logcat and codebase analysis instead |
 
 ## Rules
 
