@@ -1,6 +1,5 @@
 package com.healthhelper.app.data.api
 
-import android.util.Base64
 import com.healthhelper.app.data.api.dto.AnthropicContentItem
 import com.healthhelper.app.data.api.dto.AnthropicImageSource
 import com.healthhelper.app.data.api.dto.AnthropicMessage
@@ -111,7 +110,7 @@ Do not include any other text."""
                 ?.text
                 ?: return BloodPressureParseResult.Error("No text content in response")
 
-            Timber.d("parseBloodPressureImage completed in ${elapsed}ms, response: $textContent")
+            Timber.d("parseBloodPressureImage completed in ${elapsed}ms")
 
             parseResponseText(textContent)
         } catch (e: CancellationException) {

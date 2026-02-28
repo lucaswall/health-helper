@@ -1,7 +1,6 @@
 package com.healthhelper.app.presentation.ui
 
 import android.content.Context
-import android.util.Log
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
@@ -24,6 +23,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -39,7 +39,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.healthhelper.app.presentation.viewmodel.CameraCaptureViewModel
-import java.io.ByteArrayOutputStream
+import timber.log.Timber
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -56,6 +56,10 @@ fun CameraCaptureScreen(
 
     var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
     val cameraExecutor: ExecutorService = remember { Executors.newSingleThreadExecutor() }
+
+    DisposableEffect(Unit) {
+        onDispose { cameraExecutor.shutdown() }
+    }
 
     LaunchedEffect(Unit) {
         viewModel.navigateToConfirmation.collect { (systolic, diastolic) ->
@@ -94,7 +98,7 @@ fun CameraCaptureScreen(
                                 it.surfaceProvider = previewView.surfaceProvider
                             }
                             val capture = ImageCapture.Builder()
-                                .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                                .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
                                 .build()
                             imageCapture = capture
                             try {
@@ -106,7 +110,7 @@ fun CameraCaptureScreen(
                                     capture,
                                 )
                             } catch (e: Exception) {
-                                Log.e("CameraCaptureScreen", "Camera bind failed", e)
+                                Timber.e(e, "Camera bind failed")
                             }
                         },
                         ContextCompat.getMainExecutor(ctx),
@@ -125,7 +129,7 @@ fun CameraCaptureScreen(
                 }
             }
 
-            if (uiState.error != null) {
+            uiState.error?.let { error ->
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -136,7 +140,7 @@ fun CameraCaptureScreen(
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
                         Text(
-                            text = uiState.error!!,
+                            text = error,
                             color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodyLarge,
                         )
@@ -156,8 +160,10 @@ fun CameraCaptureScreen(
                         capturePhoto(
                             imageCapture = imageCapture,
                             context = context,
-                            executor = cameraExecutor,
                             onImageCaptured = viewModel::onPhotoCaptured,
+                            onError = { errorMsg ->
+                                viewModel.onCaptureError(errorMsg)
+                            },
                         )
                     },
                     modifier = Modifier
@@ -174,13 +180,10 @@ fun CameraCaptureScreen(
 private fun capturePhoto(
     imageCapture: ImageCapture?,
     context: Context,
-    executor: ExecutorService,
     onImageCaptured: (ByteArray) -> Unit,
+    onError: (String) -> Unit,
 ) {
     val capture = imageCapture ?: return
-    val outputOptions = ImageCapture.OutputFileOptions.Builder(
-        ByteArrayOutputStream(),
-    ).build()
     capture.takePicture(
         ContextCompat.getMainExecutor(context),
         object : ImageCapture.OnImageCapturedCallback() {
@@ -193,7 +196,8 @@ private fun capturePhoto(
             }
 
             override fun onError(exception: ImageCaptureException) {
-                Log.e("CameraCaptureScreen", "Photo capture failed", exception)
+                Timber.e(exception, "Photo capture failed")
+                onError("Camera capture failed. Please try again.")
             }
         },
     )

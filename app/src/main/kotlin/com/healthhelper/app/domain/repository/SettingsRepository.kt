@@ -11,7 +11,6 @@ interface SettingsRepository {
     val lastSyncedDateFlow: Flow<String>
     val lastSyncTimestampFlow: Flow<Long>
     val lastSyncedMealsFlow: Flow<List<SyncedMealSummary>>
-    val anthropicApiKeyFlow: Flow<String>
     suspend fun setApiKey(value: String)
     suspend fun setAnthropicApiKey(value: String)
     suspend fun setBaseUrl(value: String)

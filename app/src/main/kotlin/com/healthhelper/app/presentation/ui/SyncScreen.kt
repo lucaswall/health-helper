@@ -61,12 +61,16 @@ fun SyncScreen(
         viewModel.onCameraPermissionResult(granted)
     }
 
-    // Request both HC permissions and camera permission on first launch
+    // Request camera permission independently of Health Connect
+    LaunchedEffect(Unit) {
+        cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+    }
+
+    // Request HC permissions when available
     LaunchedEffect(uiState.healthConnectAvailable) {
         if (uiState.healthConnectAvailable && !permissionRequested) {
             permissionRequested = true
             permissionLauncher.launch(SyncViewModel.REQUIRED_HC_PERMISSIONS)
-            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
         }
     }
 

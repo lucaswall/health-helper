@@ -547,3 +547,90 @@
 - Image quality (~18% rejection rate in research) means good error UX is critical
 - Anthropic API key needs to be obtained by user separately — clear guidance in settings UI
 - CameraX `camera-compose` API may vary between versions — verify against actual stable release
+
+---
+
+## Iteration 1
+
+**Implemented:** 2026-02-28
+**Method:** Agent team (4 workers, worktree-isolated)
+
+### Tasks Completed This Iteration
+- Task 1: Add CameraX dependencies and camera feature declaration (HEA-98, worker-1)
+- Task 2: BloodPressureReading domain model and enums (HEA-99, worker-1)
+- Task 3: Blood pressure Health Connect repository (HEA-100, worker-1)
+- Task 4: Anthropic API key in settings (HEA-101, worker-2)
+- Task 5: AnthropicApiClient for blood pressure image analysis (HEA-102, worker-2)
+- Task 6: Blood pressure use cases (HEA-103, worker-1)
+- Task 7: Update AndroidManifest permissions and upfront permission request (HEA-104, worker-3)
+- Task 8: Restructure home screen with fixed sections and last BP reading (HEA-105, worker-3)
+- Task 9: Camera capture screen with CameraX and Haiku integration (HEA-106, worker-4)
+- Task 10: Blood pressure confirmation screen (HEA-107, worker-4)
+- Task 11: Navigation integration and wiring (HEA-108, worker-4)
+- Task 12: Integration & Verification (HEA-109, lead)
+
+### Files Modified
+- `gradle/libs.versions.toml` — Added CameraX 1.5.1 with camera-compose and camera-view
+- `app/build.gradle.kts` — Added CameraX dependencies
+- `app/src/main/AndroidManifest.xml` — Added CAMERA permission, camera uses-feature, WRITE/READ_BLOOD_PRESSURE permissions
+- `app/src/main/kotlin/.../domain/model/BodyPosition.kt` — Created enum
+- `app/src/main/kotlin/.../domain/model/MeasurementLocation.kt` — Created enum
+- `app/src/main/kotlin/.../domain/model/BloodPressureReading.kt` — Created domain model with validation
+- `app/src/main/kotlin/.../domain/model/BloodPressureParseResult.kt` — Created sealed class
+- `app/src/main/kotlin/.../domain/repository/BloodPressureRepository.kt` — Created repository interface
+- `app/src/main/kotlin/.../domain/repository/SettingsRepository.kt` — Added anthropicApiKeyFlow, setAnthropicApiKey
+- `app/src/main/kotlin/.../domain/usecase/WriteBloodPressureReadingUseCase.kt` — Created use case
+- `app/src/main/kotlin/.../domain/usecase/GetLastBloodPressureReadingUseCase.kt` — Created use case
+- `app/src/main/kotlin/.../data/repository/HealthConnectBloodPressureRepository.kt` — Created HC repository
+- `app/src/main/kotlin/.../data/repository/BloodPressureRecordMapper.kt` — Created record mapper
+- `app/src/main/kotlin/.../data/repository/DataStoreSettingsRepository.kt` — Added Anthropic API key storage
+- `app/src/main/kotlin/.../data/api/AnthropicApiClient.kt` — Created Anthropic Messages API client
+- `app/src/main/kotlin/.../data/api/dto/AnthropicDtos.kt` — Created DTO classes
+- `app/src/main/kotlin/.../di/AppModule.kt` — Added BP repository and API client providers
+- `app/src/main/kotlin/.../presentation/viewmodel/SettingsViewModel.kt` — Added Anthropic API key support
+- `app/src/main/kotlin/.../presentation/viewmodel/SyncViewModel.kt` — Added BP reading display, camera permission, HC permission set
+- `app/src/main/kotlin/.../presentation/viewmodel/CameraCaptureViewModel.kt` — Created camera capture ViewModel
+- `app/src/main/kotlin/.../presentation/viewmodel/BpConfirmationViewModel.kt` — Created BP confirmation ViewModel
+- `app/src/main/kotlin/.../presentation/ui/SyncScreen.kt` — Restructured with Nutrition Sync + Blood Pressure cards
+- `app/src/main/kotlin/.../presentation/ui/SettingsScreen.kt` — Added Anthropic API Key field
+- `app/src/main/kotlin/.../presentation/ui/CameraCaptureScreen.kt` — Created camera capture screen
+- `app/src/main/kotlin/.../presentation/ui/BpConfirmationScreen.kt` — Created BP confirmation screen
+- `app/src/main/kotlin/.../presentation/ui/AppNavigation.kt` — Added camera-bp and bp-confirm routes
+- 8 new test files + 4 modified test files (284 total tests)
+
+### Linear Updates
+- HEA-98 through HEA-109: Todo → In Progress → Review
+
+### Pre-commit Verification
+- bug-hunter: Found 12 bugs (2 critical, 5 high, 4 medium, 1 low), all fixed before committing
+- verifier: All 284 tests pass, build successful, zero warnings
+
+### Work Partition
+- Worker 1: Tasks 1, 2, 3, 6 (domain + data foundation — models, enums, HC repository, use cases, CameraX deps)
+- Worker 2: Tasks 4, 5 (settings + API client — Anthropic key storage, Anthropic API client)
+- Worker 3: Tasks 7, 8 (permissions + home screen — manifest, permission request, SyncScreen restructuring)
+- Worker 4: Tasks 9, 10, 11 (screens + navigation — camera capture, BP confirmation, route wiring)
+
+### Merge Summary
+- Worker 1: fast-forward (first merge, no conflicts)
+- Worker 2: 1 conflict in BloodPressureParseResult.kt (both workers created it), resolved keeping worker-2's version
+- Worker 3: 5 conflicts in domain model stubs + AndroidManifest (resolved keeping worker-1's authoritative implementations, merging manifest additions)
+- Worker 4: Multiple stub conflicts + CameraX version conflict (resolved stubs with checkout --ours, kept CameraX 1.5.1)
+- Post-merge fix: duplicate anthropicApiKeyFlow declaration in SettingsRepository.kt (both worker-2 and worker-3 added it)
+
+### Bug Fixes Applied
+- Removed duplicate `anthropicApiKeyFlow` in SettingsRepository interface
+- Fixed `GetLastBloodPressureReadingUseCase` swallowing CancellationException
+- Removed dead `OutputFileOptions` code and unused `ByteArrayOutputStream` import in CameraCaptureScreen
+- Removed unused `android.util.Base64` import in AnthropicApiClient
+- Stopped logging health data (BP values) in AnthropicApiClient debug output
+- Separated camera permission request from Health Connect availability gate in SyncScreen
+- Replaced `!!` force-unwraps with safe `?.let` in BpConfirmationScreen
+- Added `DisposableEffect` cleanup for `cameraExecutor` in CameraCaptureScreen
+- Removed unused `executor` parameter from `capturePhoto` function
+- Changed `CAPTURE_MODE_MINIMIZE_LATENCY` to `CAPTURE_MODE_MAXIMIZE_QUALITY` for better OCR accuracy
+- Added `onCaptureError` callback to surface camera failures to UI via ViewModel
+- Replaced `Log.e` with `Timber.e` in CameraCaptureScreen
+
+### Continuation Status
+All tasks completed.

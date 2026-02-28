@@ -105,17 +105,17 @@ fun BpConfirmationScreen(
                 onSelected = viewModel::updateMeasurementLocation,
             )
 
-            if (uiState.validationError != null) {
+            uiState.validationError?.let { validationError ->
                 Text(
-                    text = uiState.validationError!!,
+                    text = validationError,
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
 
-            if (uiState.error != null) {
+            uiState.error?.let { error ->
                 Text(
-                    text = uiState.error!!,
+                    text = error,
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall,
                 )

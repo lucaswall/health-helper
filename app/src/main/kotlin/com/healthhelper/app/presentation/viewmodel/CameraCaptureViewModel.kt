@@ -86,6 +86,10 @@ class CameraCaptureViewModel @Inject constructor(
         }
     }
 
+    fun onCaptureError(message: String) {
+        _uiState.update { it.copy(isProcessing = false, error = message) }
+    }
+
     fun onRetake() {
         processingJob?.cancel()
         _uiState.update { it.copy(isProcessing = false, error = null) }
