@@ -447,13 +447,13 @@ If the scope assessment chose single-agent mode (≤4 changed files) OR `TeamCre
 
 ### For Incomplete Plans
 1. Stage modified files: `git status --porcelain=v1`, then `git add <file> ...` — **skip** `.env*`, `*.key`, `*.pem`, `credentials*`, `secrets*`, `*.jks`, `*.keystore`, `local.properties`
-2. Commit (no `Co-Authored-By` tags): `plan: review iteration N - [issues found | no issues]`
+2. Commit with simple `-m` flag (no heredoc, no `$()`, no `Co-Authored-By` tags): `git commit -m "plan: review iteration N - [issues found | no issues]"`
 3. `git push`
 4. Inform user to run `/plan-implement`
 
 ### For Complete Plans
 1. Stage modified files: `git status --porcelain=v1`, then `git add <file> ...` — **skip** `.env*`, `*.key`, `*.pem`, `credentials*`, `secrets*`, `*.jks`, `*.keystore`, `local.properties`
-2. Commit (no `Co-Authored-By` tags): `plan: mark [plan-name] complete`
+2. Commit with simple `-m` flag (no heredoc, no `$()`, no `Co-Authored-By` tags): `git commit -m "plan: mark [plan-name] complete"`
 3. `git push`
 4. **Collect ALL Linear issue identifiers** managed during this session:
    - Original plan issues (from PLANS.md header)
