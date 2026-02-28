@@ -823,3 +823,85 @@ Summary: 14 issue(s) found, creating Fix Plan (Team: security, reliability, qual
 
 ### Continuation Status
 All tasks completed.
+
+### Review Findings
+
+Summary: 8 issue(s) found, creating Fix Plan (Team: security, reliability, quality reviewers)
+- FIX: 8 issue(s) — Linear issues created (HEA-121 through HEA-128)
+- DISCARDED: 2 finding(s) — false positives / not applicable
+
+**Issues requiring fix:**
+- [HIGH] BUG: getLastReading() propagates TimeoutCancellationException instead of returning null (`app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodPressureRepository.kt:75-82`) — `withTimeout` throws `TimeoutCancellationException` which extends `CancellationException`, re-thrown by the guard; inconsistent with `writeBloodPressureRecord` which catches it explicitly. No test covers this path. (HEA-121)
+- [MEDIUM] SECURITY: PHI (blood pressure values) logged in plaintext (`app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodPressureRepository.kt:33-37`) — actual systolic/diastolic values logged at DEBUG level; health data should not appear in logs (HEA-122)
+- [MEDIUM] COROUTINE: SettingsViewModel.save() isSaving guard has race window (`app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModel.kt:109-113`) — `isSaving` set inside launched coroutine body rather than synchronously before launch; fragile even with `Main.immediate` (HEA-123)
+- [MEDIUM] TEST: DataStoreSettingsRepositoryTest migration failure test doesn't exercise failure path (`app/src/test/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepositoryTest.kt:365-378`) — mock changed before flow collection, exception never thrown (HEA-124)
+- [LOW] SECURITY: EXIF/GPS metadata not stripped from images sent to Anthropic API (`app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/CameraCaptureViewModel.kt:113-116`) — early return bypasses re-encode path, preserving GPS coordinates in JPEG EXIF (HEA-125)
+- [LOW] CONVENTION: GetLastBloodPressureReadingUseCase missing `operator` on invoke (`app/src/main/kotlin/com/healthhelper/app/domain/usecase/GetLastBloodPressureReadingUseCase.kt:11`) — prevents idiomatic `useCase()` call syntax (HEA-126)
+- [LOW] TEST: Dead variable `fallbackCalled` in AppModuleTest (`app/src/test/kotlin/com/healthhelper/app/di/AppModuleTest.kt:36`) — never set or asserted, misleading (HEA-127)
+- [LOW] TEST: Missing onCaptureError test in CameraCaptureViewModelTest (`app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/CameraCaptureViewModelTest.kt`) — camera hardware failure path untested (HEA-128)
+
+**Discarded findings (not bugs):**
+- [DISCARDED] SECURITY: No TLS certificate pinning on HttpClient for Anthropic API (`app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt:86-93`) — infrastructure hardening, not a bug; most Android apps don't pin certificates; HTTPS provides sufficient transport security
+- [DISCARDED] CONVENTION: Timber string interpolation vs format specifiers (`AnthropicApiClient.kt:91`, `CameraCaptureViewModel.kt:78`) — style-only, no correctness impact; Timber.d stripped in release builds; not enforced by CLAUDE.md
+
+### Linear Updates
+- HEA-110 through HEA-120: Review → Merge (fix tasks completed)
+- HEA-121: Created in Todo (Fix: getLastReading TimeoutCancellationException — HIGH)
+- HEA-122: Created in Todo (Fix: PHI logged in plaintext — MEDIUM)
+- HEA-123: Created in Todo (Fix: save() isSaving race window — MEDIUM)
+- HEA-124: Created in Todo (Fix: migration failure test not exercised — MEDIUM)
+- HEA-125: Created in Todo (Fix: EXIF/GPS metadata not stripped — LOW)
+- HEA-126: Created in Todo (Fix: missing operator on invoke — LOW)
+- HEA-127: Created in Todo (Fix: dead variable in AppModuleTest — LOW)
+- HEA-128: Created in Todo (Fix: missing onCaptureError test — LOW)
+
+<!-- REVIEW COMPLETE -->
+
+---
+
+## Fix Plan
+
+**Source:** Review findings from Iteration 2
+**Linear Issues:** [HEA-121](https://linear.app/lw-claude/issue/HEA-121), [HEA-122](https://linear.app/lw-claude/issue/HEA-122), [HEA-123](https://linear.app/lw-claude/issue/HEA-123), [HEA-124](https://linear.app/lw-claude/issue/HEA-124), [HEA-125](https://linear.app/lw-claude/issue/HEA-125), [HEA-126](https://linear.app/lw-claude/issue/HEA-126), [HEA-127](https://linear.app/lw-claude/issue/HEA-127), [HEA-128](https://linear.app/lw-claude/issue/HEA-128)
+
+### Fix 1: getLastReading() propagates TimeoutCancellationException
+**Linear Issue:** [HEA-121](https://linear.app/lw-claude/issue/HEA-121)
+
+1. Write test in `HealthConnectBloodPressureRepositoryTest.kt` verifying `getLastReading()` returns null when `withTimeout` expires (use `coEvery { readRecords(...) } coAnswers { delay(15_000); ... }`)
+2. Add explicit `catch (e: TimeoutCancellationException)` block before `catch (e: Exception)` in `getLastReading()` at `HealthConnectBloodPressureRepository.kt:75-82`, returning null and logging `Timber.w("getLastReading timed out")`
+
+### Fix 2: PHI (blood pressure values) logged in plaintext
+**Linear Issue:** [HEA-122](https://linear.app/lw-claude/issue/HEA-122)
+
+1. Change log message at `HealthConnectBloodPressureRepository.kt:33-37` from `"writeBloodPressureRecord: wrote BP reading %d/%d in %dms"` to `"writeBloodPressureRecord: wrote BP reading in %dms"` — remove systolic/diastolic values
+
+### Fix 3: SettingsViewModel.save() isSaving guard race window
+**Linear Issue:** [HEA-123](https://linear.app/lw-claude/issue/HEA-123)
+
+1. Move `_uiState.update { it.copy(isSaving = true) }` from inside the `viewModelScope.launch` body to before the `launch` call at `SettingsViewModel.kt:109-113`, so the guard is set synchronously
+
+### Fix 4: DataStoreSettingsRepositoryTest migration failure test
+**Linear Issue:** [HEA-124](https://linear.app/lw-claude/issue/HEA-124)
+
+1. Restructure `apiKeyFlowHandlesMigrationFailure` test at `DataStoreSettingsRepositoryTest.kt:365-378` so the mock throws during flow collection, not before. Remove the `every { ... } returns ""` override that neuters the test.
+
+### Fix 5: EXIF/GPS metadata not stripped from images
+**Linear Issue:** [HEA-125](https://linear.app/lw-claude/issue/HEA-125)
+
+1. In `CameraCaptureViewModel.kt:113-116`, remove the early return when image is within `maxDimension`. Always decode to Bitmap and re-encode via `Bitmap.compress()`, which strips EXIF metadata as a side effect.
+
+### Fix 6: GetLastBloodPressureReadingUseCase missing operator on invoke
+**Linear Issue:** [HEA-126](https://linear.app/lw-claude/issue/HEA-126)
+
+1. Change `suspend fun invoke()` to `suspend operator fun invoke()` at `GetLastBloodPressureReadingUseCase.kt:11`
+2. Also check `WriteBloodPressureReadingUseCase` for same issue — add `operator` if missing
+
+### Fix 7: Dead variable in AppModuleTest
+**Linear Issue:** [HEA-127](https://linear.app/lw-claude/issue/HEA-127)
+
+1. Remove the unused `var fallbackCalled = false` at `AppModuleTest.kt:36`
+
+### Fix 8: Missing onCaptureError test
+**Linear Issue:** [HEA-128](https://linear.app/lw-claude/issue/HEA-128)
+
+1. Add test in `CameraCaptureViewModelTest.kt`: call `viewModel.onCaptureError("Camera capture failed")`, assert `state.isProcessing == false` and `state.error == "Camera capture failed"`
