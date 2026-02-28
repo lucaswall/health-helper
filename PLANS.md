@@ -387,4 +387,71 @@ Summary: 4 issue(s) found (Team: security, reliability, quality reviewers)
 ### Tasks Remaining
 None — all Fix Plan tasks completed.
 
-**Status: COMPLETE**
+### Review Findings
+
+Summary: 4 issue(s) found (Team: security, reliability, quality reviewers)
+- FIX: 4 issue(s) — Linear issues created
+- DISCARDED: 8 finding(s) — false positives / not applicable
+
+**Issues requiring fix:**
+- [MEDIUM] SECURITY: Partial migration leaves API key in plaintext DataStore (`app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt:66-69`) — early-return path skips DataStore cleanup after crash between EncryptedPrefs write and DataStore remove
+- [HIGH] ERROR: No exception handling around initial settings reads (`app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt:26-32`) — DataStore IO/corruption exceptions propagate instead of returning SyncResult.Error
+- [LOW] TYPE: `when` on FoodLogResult used as statement, not expression (`app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt:61`) — Kotlin won't enforce exhaustiveness; violates plan requirement for compile-time safety
+- [LOW] TEST: Meaningless assertion in malformedLastSyncedDateFallsBack (`app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt:370`) — `assertTrue(result is Success || result is Error)` doesn't verify fallback behavior
+
+**Discarded findings (not bugs):**
+- [DISCARDED] SECURITY: Meal data in plaintext DataStore (`DataStoreSettingsRepository.kt:199-202`) — DataStore is in app's private sandbox; standard Android practice for non-critical app data
+- [DISCARDED] SECURITY: ETag values stored without format validation (`FoodScannerApiClient.kt:88`) — Ktor/OkHttp validates header values (rejects CR/LF); server is trusted (user's own, authenticated)
+- [DISCARDED] TIMEOUT: No timeout at HTTP call site (`FoodScannerApiClient.kt:33`) — False positive: HttpClient has global `requestTimeoutMillis = 30_000L` in `AppModule.kt:90-92`
+- [DISCARDED] EDGE CASE: LocalDate.now() inside retryable DataStore edit (`DataStoreSettingsRepository.kt:231`) — Microsecond operation crossing midnight is practically impossible; negligible impact
+- [DISCARDED] TEST: Missing getETag/setETag tests in DataStoreSettingsRepositoryTest — False positive: tests exist in separate file `ETagStorageTest.kt` (6 tests)
+- [DISCARDED] CONVENTION: No API call duration logging (`FoodScannerApiClient.kt:33-98`) — Checklist suggestion, not CLAUDE.md requirement; pre-existing pattern
+- [DISCARDED] TEST: Weak `>=` assertions in multiDaySync (`SyncNutritionUseCaseTest.kt:114-115`) — Assertions verify expected minimum behavior; acceptable for multi-day aggregation
+- [DISCARDED] TEST: Unused ETag mock stubs in configureSettings (`SyncNutritionUseCaseTest.kt:73-74`) — Explicitly directed by plan; harmless defensive mocking
+
+### Linear Updates
+- HEA-134: Review → Merge
+- HEA-135: Review → Merge
+- HEA-136: Review → Merge
+- HEA-137: Review → Merge
+- HEA-138: Created in Todo (Fix: Partial migration leaves API key in plaintext)
+- HEA-139: Created in Todo (Fix: No exception handling around initial settings reads)
+- HEA-140: Created in Todo (Fix: when as statement, not expression)
+- HEA-141: Created in Todo (Fix: Meaningless test assertion)
+
+<!-- REVIEW COMPLETE -->
+
+---
+
+## Fix Plan
+
+**Source:** Review findings from Iteration 2
+**Linear Issues:** [HEA-138](https://linear.app/lw-claude/issue/HEA-138), [HEA-139](https://linear.app/lw-claude/issue/HEA-139), [HEA-140](https://linear.app/lw-claude/issue/HEA-140), [HEA-141](https://linear.app/lw-claude/issue/HEA-141)
+
+### Fix 1: Partial migration leaves API key in plaintext DataStore
+**Linear Issue:** [HEA-138](https://linear.app/lw-claude/issue/HEA-138)
+
+1. Write test in `app/src/test/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepositoryTest.kt`: simulate crash scenario — pre-populate both EncryptedPrefs (API key present) and DataStore (legacy API_KEY present), call `apiKeyFlow.first()`, verify DataStore no longer contains the plaintext API_KEY
+2. In `DataStoreSettingsRepository.kt:67-69`, after the `existingKey.isNullOrEmpty()` check succeeds, add `dataStore.edit { it.remove(API_KEY) }` to clean any residual plaintext key before returning
+3. Run verifier (expect pass)
+
+### Fix 2: No exception handling around initial settings reads
+**Linear Issue:** [HEA-139](https://linear.app/lw-claude/issue/HEA-139)
+
+1. Write test in `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt`: mock `settingsRepository.isConfigured()` to throw `IOException`, verify `invoke()` returns `SyncResult.Error(...)` instead of propagating the exception
+2. Write test: mock `apiKeyFlow` to throw on `.first()`, verify `SyncResult.Error(...)` returned
+3. Wrap lines 26-32 of `SyncNutritionUseCase.kt` in try-catch: catch `CancellationException` and rethrow, catch `Exception` and return `SyncResult.Error(e.message ?: "Failed to read settings")`
+4. Run verifier (expect pass)
+
+### Fix 3: when on FoodLogResult as statement, not expression
+**Linear Issue:** [HEA-140](https://linear.app/lw-claude/issue/HEA-140)
+
+1. No new test needed — this is a compile-time safety fix
+2. In `SyncNutritionUseCase.kt:61`, convert the `when` statement to an expression by wrapping in `val _: Unit = when (...) { ... }` or restructuring so the result is used
+3. Run verifier (expect pass)
+
+### Fix 4: Meaningless test assertion in malformedLastSyncedDateFallsBack
+**Linear Issue:** [HEA-141](https://linear.app/lw-claude/issue/HEA-141)
+
+1. In `SyncNutritionUseCaseTest.kt:370`, replace `assertTrue(result is SyncResult.Success || result is SyncResult.Error)` with `assertTrue(result is SyncResult.Success)` and add `assertEquals(366, (result as SyncResult.Success).daysProcessed)` to verify the full-range fallback
+2. Run verifier (expect pass)
