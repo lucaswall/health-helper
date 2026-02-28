@@ -12,8 +12,10 @@ import androidx.work.WorkManager
 import com.healthhelper.app.data.api.FoodScannerApiClient
 import com.healthhelper.app.data.repository.DataStoreSettingsRepository
 import com.healthhelper.app.data.repository.FoodScannerFoodLogRepository
+import com.healthhelper.app.data.repository.HealthConnectBloodPressureRepository
 import com.healthhelper.app.data.repository.HealthConnectNutritionRepository
 import com.healthhelper.app.data.sync.SyncScheduler
+import com.healthhelper.app.domain.repository.BloodPressureRepository
 import com.healthhelper.app.domain.repository.FoodLogRepository
 import com.healthhelper.app.domain.repository.NutritionRepository
 import com.healthhelper.app.domain.repository.SettingsRepository
@@ -85,6 +87,12 @@ object AppModule {
     fun provideNutritionRepository(
         healthConnectClient: HealthConnectClient?,
     ): NutritionRepository = HealthConnectNutritionRepository(healthConnectClient)
+
+    @Provides
+    @Singleton
+    fun provideBloodPressureRepository(
+        healthConnectClient: HealthConnectClient?,
+    ): BloodPressureRepository = HealthConnectBloodPressureRepository(healthConnectClient)
 
     @Provides
     @Singleton

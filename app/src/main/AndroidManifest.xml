@@ -5,6 +5,11 @@
     <!-- Network access for Food Scanner API -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Camera (required=false: app works without camera) -->
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
+
     <!-- Health Connect permissions -->
     <uses-permission android:name="android.permission.health.WRITE_NUTRITION" />
 
