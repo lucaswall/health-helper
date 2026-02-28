@@ -2,9 +2,15 @@ package com.healthhelper.app.presentation.viewmodel
 
 import app.cash.turbine.test
 import androidx.health.connect.client.HealthConnectClient
+import androidx.lifecycle.viewModelScope
+import androidx.health.connect.client.PermissionController
+import androidx.health.connect.client.permission.HealthPermission
+import androidx.health.connect.client.records.NutritionRecord
 import com.healthhelper.app.data.sync.SyncScheduler
+import com.healthhelper.app.domain.model.MealType
 import com.healthhelper.app.domain.model.SyncProgress
 import com.healthhelper.app.domain.model.SyncResult
+import com.healthhelper.app.domain.model.SyncedMealSummary
 import com.healthhelper.app.domain.repository.SettingsRepository
 import com.healthhelper.app.domain.usecase.SyncNutritionUseCase
 import io.mockk.coEvery
@@ -13,9 +19,11 @@ import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.StandardTestDispatcher
-import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
@@ -47,8 +55,11 @@ class SyncViewModelTest {
         every { settingsRepository.baseUrlFlow } returns flowOf("https://example.com")
         every { settingsRepository.syncIntervalFlow } returns flowOf(30)
         every { settingsRepository.lastSyncedDateFlow } returns flowOf("")
+        every { settingsRepository.lastSyncTimestampFlow } returns flowOf(0L)
+        every { settingsRepository.lastSyncedMealsFlow } returns flowOf(emptyList())
         coEvery { settingsRepository.isConfigured() } returns true
         coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.NeedsConfiguration
+        every { syncScheduler.getNextSyncTimeFlow() } returns flowOf(null)
     }
 
     @AfterEach
@@ -61,10 +72,25 @@ class SyncViewModelTest {
     private fun createViewModel(hcClient: HealthConnectClient? = healthConnectClient): SyncViewModel =
         SyncViewModel(syncNutritionUseCase, settingsRepository, syncScheduler, hcClient)
 
+    /**
+     * Wraps [runTest] to cancel viewModelScope after the test body,
+     * preventing runTest's internal advanceUntilIdle from hanging on
+     * the ViewModel's periodic refresh coroutine (while(isActive) { delay(30_000) }).
+     */
+    private fun viewModelTest(testBody: suspend TestScope.() -> Unit) = runTest {
+        try {
+            testBody()
+        } finally {
+            if (::viewModel.isInitialized) {
+                viewModel.viewModelScope.cancel()
+            }
+        }
+    }
+
     @Test
-    fun `initial state shows idle not syncing`() = runTest {
+    fun `initial state shows idle not syncing`() = viewModelTest {
         viewModel = createViewModel()
-        advanceUntilIdle()
+        advanceTimeBy(1_000)
 
         viewModel.uiState.test {
             val state = awaitItem()
@@ -76,15 +102,15 @@ class SyncViewModelTest {
     }
 
     @Test
-    fun `triggerSync sets isSyncing true then false on completion`() = runTest {
-        coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Success(5)
+    fun `triggerSync sets isSyncing true then false on completion`() = viewModelTest {
+        coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Success(5, 1)
         coEvery { settingsRepository.isConfigured() } returns true
 
         viewModel = createViewModel()
-        advanceUntilIdle()
+        advanceTimeBy(1_000)
 
         viewModel.triggerSync()
-        advanceUntilIdle()
+        advanceTimeBy(1_000)
 
         viewModel.uiState.test {
             val state = awaitItem()
@@ -94,65 +120,101 @@ class SyncViewModelTest {
     }
 
     @Test
-    fun `triggerSync calls use case`() = runTest {
-        coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Success(3)
+    fun `triggerSync calls use case`() = viewModelTest {
+        coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Success(3, 1)
         coEvery { settingsRepository.isConfigured() } returns true
 
         viewModel = createViewModel()
-        advanceUntilIdle()
+        advanceTimeBy(1_000)
 
         viewModel.triggerSync()
-        advanceUntilIdle()
+        advanceTimeBy(1_000)
 
         coVerify { syncNutritionUseCase.invoke(any()) }
     }
 
     @Test
-    fun `sync success updates lastSyncResult with record count`() = runTest {
-        coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Success(42)
+    fun `sync success updates lastSyncResult with record count`() = viewModelTest {
+        coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Success(42, 3)
         coEvery { settingsRepository.isConfigured() } returns true
 
         viewModel = createViewModel()
-        advanceUntilIdle()
+        advanceTimeBy(1_000)
 
         viewModel.triggerSync()
-        advanceUntilIdle()
+        advanceTimeBy(1_000)
 
         viewModel.uiState.test {
             val state = awaitItem()
-            assertEquals("Synced 42 records", state.lastSyncResult)
+            assertEquals("Synced 42 meals across 3 days", state.lastSyncResult)
             cancelAndIgnoreRemainingEvents()
         }
     }
 
     @Test
-    fun `sync error updates lastSyncResult with error message`() = runTest {
+    fun `sync success with zero records shows no new meals`() = viewModelTest {
+        coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Success(0, 1)
+        coEvery { settingsRepository.isConfigured() } returns true
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.triggerSync()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals("No new meals", state.lastSyncResult)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `sync success with one day uses singular day`() = viewModelTest {
+        coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Success(5, 1)
+        coEvery { settingsRepository.isConfigured() } returns true
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.triggerSync()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals("Synced 5 meals across 1 day", state.lastSyncResult)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `sync error updates lastSyncResult with error message`() = viewModelTest {
         coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Error("Network failure")
         coEvery { settingsRepository.isConfigured() } returns true
 
         viewModel = createViewModel()
-        advanceUntilIdle()
+        advanceTimeBy(1_000)
 
         viewModel.triggerSync()
-        advanceUntilIdle()
+        advanceTimeBy(1_000)
 
         viewModel.uiState.test {
             val state = awaitItem()
-            assertEquals("Error: Network failure", state.lastSyncResult)
+            assertEquals("Sync failed. Please try again.", state.lastSyncResult)
             cancelAndIgnoreRemainingEvents()
         }
     }
 
     @Test
-    fun `sync NeedsConfiguration updates state accordingly`() = runTest {
+    fun `sync NeedsConfiguration updates state accordingly`() = viewModelTest {
         coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.NeedsConfiguration
         coEvery { settingsRepository.isConfigured() } returns false
 
         viewModel = createViewModel()
-        advanceUntilIdle()
+        advanceTimeBy(1_000)
 
         viewModel.triggerSync()
-        advanceUntilIdle()
+        advanceTimeBy(1_000)
 
         viewModel.uiState.test {
             val state = awaitItem()
@@ -162,19 +224,19 @@ class SyncViewModelTest {
     }
 
     @Test
-    fun `syncProgress is null after sync completes`() = runTest {
+    fun `syncProgress is null after sync completes`() = viewModelTest {
         coEvery { syncNutritionUseCase.invoke(any()) } coAnswers {
             val onProgress = firstArg<(SyncProgress) -> Unit>()
             onProgress(SyncProgress("2024-01-01", 5, 1, 10))
-            SyncResult.Success(10)
+            SyncResult.Success(10, 5)
         }
         coEvery { settingsRepository.isConfigured() } returns true
 
         viewModel = createViewModel()
-        advanceUntilIdle()
+        advanceTimeBy(1_000)
 
         viewModel.triggerSync()
-        advanceUntilIdle()
+        advanceTimeBy(1_000)
 
         viewModel.uiState.test {
             val state = awaitItem()
@@ -184,18 +246,18 @@ class SyncViewModelTest {
     }
 
     @Test
-    fun `cannot trigger sync when isSyncing is true`() = runTest {
+    fun `cannot trigger sync when isSyncing is true`() = viewModelTest {
         // Test the guard: if isSyncing is true, triggerSync should not call use case again
         var callCount = 0
         coEvery { syncNutritionUseCase.invoke(any()) } coAnswers {
             callCount++
             kotlinx.coroutines.delay(1000L) // hold the coroutine
-            SyncResult.Success(1)
+            SyncResult.Success(1, 1)
         }
         coEvery { settingsRepository.isConfigured() } returns true
 
         viewModel = createViewModel()
-        advanceUntilIdle()
+        advanceTimeBy(1_000)
 
         // Start first sync (won't complete yet due to delay)
         viewModel.triggerSync()
@@ -210,13 +272,13 @@ class SyncViewModelTest {
     }
 
     @Test
-    fun `isConfigured updates when apiKey and baseUrl flows emit new values`() = runTest {
+    fun `isConfigured updates when apiKey and baseUrl flows emit new values`() = viewModelTest {
         // Start unconfigured
         every { settingsRepository.apiKeyFlow } returns flowOf("")
         every { settingsRepository.baseUrlFlow } returns flowOf("")
 
         viewModel = createViewModel()
-        advanceUntilIdle()
+        advanceTimeBy(1_000)
 
         viewModel.uiState.test {
             val state = awaitItem()
@@ -226,12 +288,12 @@ class SyncViewModelTest {
     }
 
     @Test
-    fun `isConfigured becomes true when both apiKey and baseUrl are non-empty`() = runTest {
+    fun `isConfigured becomes true when both apiKey and baseUrl are non-empty`() = viewModelTest {
         every { settingsRepository.apiKeyFlow } returns flowOf("fsk_key")
         every { settingsRepository.baseUrlFlow } returns flowOf("https://example.com")
 
         viewModel = createViewModel()
-        advanceUntilIdle()
+        advanceTimeBy(1_000)
 
         viewModel.uiState.test {
             val state = awaitItem()
@@ -241,18 +303,18 @@ class SyncViewModelTest {
     }
 
     @Test
-    fun `schedulePeriodic not called again when only lastSyncedDate changes`() = runTest {
+    fun `schedulePeriodic not called again when only lastSyncedDate changes`() = viewModelTest {
         viewModel = createViewModel()
-        advanceUntilIdle()
+        advanceTimeBy(1_000)
 
         // schedulePeriodic called once during init (interval=30, configured=true)
         io.mockk.verify(exactly = 1) { syncScheduler.schedulePeriodic(30) }
     }
 
     @Test
-    fun `healthConnectAvailable is false when HC client is null`() = runTest {
+    fun `healthConnectAvailable is false when HC client is null`() = viewModelTest {
         viewModel = createViewModel(hcClient = null)
-        advanceUntilIdle()
+        advanceTimeBy(1_000)
 
         viewModel.uiState.test {
             val state = awaitItem()
@@ -262,9 +324,9 @@ class SyncViewModelTest {
     }
 
     @Test
-    fun `healthConnectAvailable is true when HC client exists`() = runTest {
+    fun `healthConnectAvailable is true when HC client exists`() = viewModelTest {
         viewModel = createViewModel()
-        advanceUntilIdle()
+        advanceTimeBy(1_000)
 
         viewModel.uiState.test {
             val state = awaitItem()
@@ -274,9 +336,9 @@ class SyncViewModelTest {
     }
 
     @Test
-    fun `onPermissionResult updates permissionGranted state`() = runTest {
+    fun `onPermissionResult updates permissionGranted state`() = viewModelTest {
         viewModel = createViewModel()
-        advanceUntilIdle()
+        advanceTimeBy(1_000)
 
         viewModel.onPermissionResult(true)
 
@@ -288,14 +350,14 @@ class SyncViewModelTest {
     }
 
     @Test
-    fun `triggerSync resets isSyncing and sets error message on unexpected exception`() = runTest {
+    fun `triggerSync resets isSyncing and sets error message on unexpected exception`() = viewModelTest {
         coEvery { syncNutritionUseCase.invoke(any()) } throws RuntimeException("unexpected")
 
         viewModel = createViewModel()
-        advanceUntilIdle()
+        advanceTimeBy(1_000)
 
         viewModel.triggerSync()
-        advanceUntilIdle()
+        advanceTimeBy(1_000)
 
         viewModel.uiState.test {
             val state = awaitItem()
@@ -306,13 +368,160 @@ class SyncViewModelTest {
     }
 
     @Test
-    fun `initial permissionGranted is false`() = runTest {
+    fun `lastSyncTime is empty when timestamp is 0`() = viewModelTest {
+        every { settingsRepository.lastSyncTimestampFlow } returns flowOf(0L)
         viewModel = createViewModel()
-        advanceUntilIdle()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals("", state.lastSyncTime)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `lastSyncTime formats recent timestamp as relative time`() = viewModelTest {
+        val fiveMinAgo = System.currentTimeMillis() - 300_000L
+        every { settingsRepository.lastSyncTimestampFlow } returns flowOf(fiveMinAgo)
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertTrue(
+                state.lastSyncTime.contains("min ago"),
+                "Expected 'min ago' in '${state.lastSyncTime}'",
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `initial permissionGranted is false`() = viewModelTest {
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
 
         viewModel.uiState.test {
             val state = awaitItem()
             assertFalse(state.permissionGranted)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `lastSyncedMeals is empty list by default`() = viewModelTest {
+        every { settingsRepository.lastSyncedMealsFlow } returns flowOf(emptyList())
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals(emptyList(), state.lastSyncedMeals)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `lastSyncedMeals populated from repository flow`() = viewModelTest {
+        val meals = listOf(
+            SyncedMealSummary(foodName = "Oatmeal", mealType = MealType.BREAKFAST, calories = 300),
+            SyncedMealSummary(foodName = "Salad", mealType = MealType.LUNCH, calories = 450),
+            SyncedMealSummary(foodName = "Pasta", mealType = MealType.DINNER, calories = 700),
+        )
+        every { settingsRepository.lastSyncedMealsFlow } returns flowOf(meals)
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals(3, state.lastSyncedMeals.size)
+            assertEquals("Oatmeal", state.lastSyncedMeals[0].foodName)
+            assertEquals("Salad", state.lastSyncedMeals[1].foodName)
+            assertEquals("Pasta", state.lastSyncedMeals[2].foodName)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    // --- Task 2: Permission check on app launch ---
+
+    @Test
+    fun `permissionGranted is true on init when permission already granted`() = viewModelTest {
+        val permController = mockk<PermissionController>()
+        every { healthConnectClient!!.permissionController } returns permController
+        coEvery { permController.getGrantedPermissions() } returns
+            setOf(HealthPermission.getWritePermission(NutritionRecord::class))
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            assertTrue(awaitItem().permissionGranted)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `permissionGranted stays false on init when permission not granted`() = viewModelTest {
+        val permController = mockk<PermissionController>()
+        every { healthConnectClient!!.permissionController } returns permController
+        coEvery { permController.getGrantedPermissions() } returns emptySet()
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            assertFalse(awaitItem().permissionGranted)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `permissionGranted stays false when getGrantedPermissions throws`() = viewModelTest {
+        val permController = mockk<PermissionController>()
+        every { healthConnectClient!!.permissionController } returns permController
+        coEvery { permController.getGrantedPermissions() } throws RuntimeException("HC error")
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            assertFalse(awaitItem().permissionGranted)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    // --- Task 9: Next scheduled sync time ---
+
+    @Test
+    fun `nextSyncTime shows formatted time when sync is scheduled`() = viewModelTest {
+        val futureTimeMs = System.currentTimeMillis() + 10 * 60 * 1000L
+        every { syncScheduler.getNextSyncTimeFlow() } returns flowOf(futureTimeMs)
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertTrue(state.nextSyncTime.startsWith("Next sync in ~"))
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `nextSyncTime shows empty string when not configured`() = viewModelTest {
+        every { settingsRepository.apiKeyFlow } returns flowOf("")
+        every { settingsRepository.baseUrlFlow } returns flowOf("")
+        every { syncScheduler.getNextSyncTimeFlow() } returns flowOf(null)
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals("", state.nextSyncTime)
             cancelAndIgnoreRemainingEvents()
         }
     }

@@ -4,6 +4,7 @@ import com.healthhelper.app.domain.model.FoodLogEntry
 import com.healthhelper.app.domain.model.MealType
 import com.healthhelper.app.domain.model.SyncProgress
 import com.healthhelper.app.domain.model.SyncResult
+import com.healthhelper.app.domain.model.SyncedMealSummary
 import com.healthhelper.app.domain.repository.FoodLogRepository
 import com.healthhelper.app.domain.repository.NutritionRepository
 import com.healthhelper.app.domain.repository.SettingsRepository
@@ -63,7 +64,10 @@ class SyncNutritionUseCaseTest {
         every { settingsRepository.apiKeyFlow } returns flowOf(apiKey)
         every { settingsRepository.baseUrlFlow } returns flowOf(baseUrl)
         every { settingsRepository.lastSyncedDateFlow } returns flowOf(lastSyncedDate)
+        every { settingsRepository.lastSyncedMealsFlow } returns flowOf(emptyList())
         coEvery { settingsRepository.setLastSyncedDate(any()) } returns Unit
+        coEvery { settingsRepository.setLastSyncTimestamp(any()) } returns Unit
+        coEvery { settingsRepository.setLastSyncedMeals(any()) } returns Unit
     }
 
     @Test
@@ -88,6 +92,7 @@ class SyncNutritionUseCaseTest {
 
         assertTrue(result is SyncResult.Success)
         assertEquals(1, (result as SyncResult.Success).recordsSynced)
+        assertEquals(1, (result as SyncResult.Success).daysProcessed)
     }
 
     @Test
@@ -103,6 +108,7 @@ class SyncNutritionUseCaseTest {
 
         assertTrue(result is SyncResult.Success)
         assertTrue((result as SyncResult.Success).recordsSynced >= 2)
+        assertTrue((result as SyncResult.Success).daysProcessed >= 2)
     }
 
     @Test
@@ -123,6 +129,7 @@ class SyncNutritionUseCaseTest {
 
         assertTrue(result is SyncResult.Success)
         assertEquals(1, (result as SyncResult.Success).recordsSynced)
+        // today failed, but yesterday succeeded → 1 successful day
     }
 
     @Test
@@ -320,6 +327,30 @@ class SyncNutritionUseCaseTest {
     }
 
     @Test
+    @DisplayName("invoke sets lastSyncTimestamp on successful sync")
+    fun invokeSetsLastSyncTimestampOnSuccess() = runTest {
+        val today = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE)
+        configureSettings(lastSyncedDate = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), today) } returns Result.success(listOf(testEntry))
+        coEvery { nutritionRepository.writeNutritionRecords(today, any()) } returns true
+
+        useCase.invoke()
+
+        coVerify { settingsRepository.setLastSyncTimestamp(match { it > 0L }) }
+    }
+
+    @Test
+    @DisplayName("invoke does not set lastSyncTimestamp when all days fail")
+    fun invokeDoesNotSetLastSyncTimestampOnError() = runTest {
+        configureSettings(lastSyncedDate = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } returns Result.failure(Exception("fail"))
+
+        useCase.invoke()
+
+        coVerify(exactly = 0) { settingsRepository.setLastSyncTimestamp(any()) }
+    }
+
+    @Test
     @DisplayName("malformed lastSyncedDate falls back to maxPastDate and does not throw")
     fun malformedLastSyncedDateFallsBack() = runTest {
         // A corrupt date string that cannot be parsed as ISO_LOCAL_DATE
@@ -333,5 +364,105 @@ class SyncNutritionUseCaseTest {
         val result = useCase.invoke()
 
         assertTrue(result is SyncResult.Success || result is SyncResult.Error)
+    }
+
+    // --- Meal collection tests ---
+
+    @Test
+    @DisplayName("invoke persists last 3 meals sorted by date descending then time descending")
+    fun persistsLast3MealsSortedByDateThenTime() = runTest {
+        val today = LocalDate.now()
+        val yesterday = today.minusDays(1)
+        configureSettings(lastSyncedDate = today.minusDays(2).format(DateTimeFormatter.ISO_LOCAL_DATE))
+
+        val todayStr = today.format(DateTimeFormatter.ISO_LOCAL_DATE)
+        val yesterdayStr = yesterday.format(DateTimeFormatter.ISO_LOCAL_DATE)
+
+        val entry1 = testEntry.copy(foodName = "Breakfast Today", mealType = MealType.BREAKFAST, time = "08:00:00", calories = 300.0)
+        val entry2 = testEntry.copy(foodName = "Lunch Today", mealType = MealType.LUNCH, time = "12:00:00", calories = 500.0)
+        val entry3 = testEntry.copy(foodName = "Dinner Yesterday", mealType = MealType.DINNER, time = "19:00:00", calories = 700.0)
+        val entry4 = testEntry.copy(foodName = "Breakfast Yesterday", mealType = MealType.BREAKFAST, time = "07:00:00", calories = 250.0)
+
+        coEvery { foodLogRepository.getFoodLog(any(), any(), todayStr) } returns Result.success(listOf(entry1, entry2))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), yesterdayStr) } returns Result.success(listOf(entry3, entry4))
+        coEvery { nutritionRepository.writeNutritionRecords(any(), any()) } returns true
+
+        useCase.invoke()
+
+        // Most recent 3: today's lunch (12:00), today's breakfast (08:00), yesterday's dinner (19:00)
+        coVerify {
+            settingsRepository.setLastSyncedMeals(
+                withArg { meals ->
+                    assertEquals(3, meals.size)
+                    assertEquals("Lunch Today", meals[0].foodName)
+                    assertEquals("Breakfast Today", meals[1].foodName)
+                    assertEquals("Dinner Yesterday", meals[2].foodName)
+                },
+            )
+        }
+    }
+
+    @Test
+    @DisplayName("invoke persists fewer than 3 meals when fewer were synced")
+    fun persistsFewerThan3MealsWhenFewerSynced() = runTest {
+        val today = LocalDate.now()
+        val todayStr = today.format(DateTimeFormatter.ISO_LOCAL_DATE)
+        configureSettings(lastSyncedDate = today.format(DateTimeFormatter.ISO_LOCAL_DATE))
+
+        coEvery { foodLogRepository.getFoodLog(any(), any(), todayStr) } returns Result.success(listOf(testEntry))
+        coEvery { nutritionRepository.writeNutritionRecords(any(), any()) } returns true
+
+        useCase.invoke()
+
+        coVerify {
+            settingsRepository.setLastSyncedMeals(
+                withArg { meals ->
+                    assertEquals(1, meals.size)
+                },
+            )
+        }
+    }
+
+    @Test
+    @DisplayName("invoke sets empty meals list when no records synced")
+    fun setsEmptyMealsWhenNoRecordsSynced() = runTest {
+        val today = LocalDate.now()
+        val todayStr = today.format(DateTimeFormatter.ISO_LOCAL_DATE)
+        configureSettings(lastSyncedDate = today.format(DateTimeFormatter.ISO_LOCAL_DATE))
+
+        coEvery { foodLogRepository.getFoodLog(any(), any(), todayStr) } returns Result.success(emptyList())
+
+        useCase.invoke()
+
+        coVerify { settingsRepository.setLastSyncedMeals(emptyList()) }
+    }
+
+    @Test
+    @DisplayName("invoke maps FoodLogEntry to SyncedMealSummary correctly")
+    fun mapsFoodLogEntryToSyncedMealSummaryCorrectly() = runTest {
+        val today = LocalDate.now()
+        val todayStr = today.format(DateTimeFormatter.ISO_LOCAL_DATE)
+        configureSettings(lastSyncedDate = today.format(DateTimeFormatter.ISO_LOCAL_DATE))
+
+        val entry = testEntry.copy(
+            foodName = "Pasta",
+            mealType = MealType.DINNER,
+            calories = 499.7,
+        )
+        coEvery { foodLogRepository.getFoodLog(any(), any(), todayStr) } returns Result.success(listOf(entry))
+        coEvery { nutritionRepository.writeNutritionRecords(any(), any()) } returns true
+
+        useCase.invoke()
+
+        coVerify {
+            settingsRepository.setLastSyncedMeals(
+                withArg { meals ->
+                    assertEquals(1, meals.size)
+                    assertEquals("Pasta", meals[0].foodName)
+                    assertEquals(MealType.DINNER, meals[0].mealType)
+                    assertEquals(500, meals[0].calories) // roundToInt() rounds
+                },
+            )
+        }
     }
 }

@@ -16,7 +16,7 @@ import javax.inject.Inject
 data class SettingsUiState(
     val apiKey: String = "",
     val baseUrl: String = "",
-    val syncInterval: Int = 5,
+    val syncInterval: Int = 15,
     val isConfigured: Boolean = false,
     val hasUnsavedChanges: Boolean = false,
     val saveError: String? = null,
@@ -33,7 +33,7 @@ class SettingsViewModel @Inject constructor(
     private data class PersistedSettings(
         val apiKey: String = "",
         val baseUrl: String = "",
-        val syncInterval: Int = 5,
+        val syncInterval: Int = 15,
     )
 
     private var persistedSettings = PersistedSettings()

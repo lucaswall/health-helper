@@ -6,6 +6,8 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
+import com.healthhelper.app.domain.model.MealType
+import com.healthhelper.app.domain.model.SyncedMealSummary
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
@@ -162,9 +164,9 @@ class DataStoreSettingsRepositoryTest {
     }
 
     @Test
-    @DisplayName("default sync interval is 5")
+    @DisplayName("default sync interval is 15")
     fun defaultSyncInterval() = testScope.runTest {
-        assertEquals(5, repository.syncIntervalFlow.first())
+        assertEquals(15, repository.syncIntervalFlow.first())
     }
 
     @Test
@@ -230,12 +232,62 @@ class DataStoreSettingsRepositoryTest {
     }
 
     @Test
+    @DisplayName("lastSyncTimestampFlow emits 0L by default")
+    fun defaultLastSyncTimestamp() = testScope.runTest {
+        assertEquals(0L, repository.lastSyncTimestampFlow.first())
+    }
+
+    @Test
+    @DisplayName("setLastSyncTimestamp stores value and emits it")
+    fun storeAndRetrieveLastSyncTimestamp() = testScope.runTest {
+        repository.setLastSyncTimestamp(1_000_000L)
+        assertEquals(1_000_000L, repository.lastSyncTimestampFlow.first())
+    }
+
+    @Test
     @DisplayName("isConfigured returns true when API key exists only in DataStore (pre-migration)")
     fun isConfiguredReturnsTruePreMigration() = testScope.runTest {
         dataStore.edit { it[stringPreferencesKey("api_key")] = "legacy_key" }
         repository = DataStoreSettingsRepository(dataStore, encryptedPrefs)
         repository.setBaseUrl("https://food.example.com")
         assertTrue(repository.isConfigured())
+    }
+
+    // --- lastSyncedMeals tests ---
+
+    @Test
+    @DisplayName("lastSyncedMealsFlow emits empty list by default")
+    fun lastSyncedMealsFlowEmitsEmptyListByDefault() = testScope.runTest {
+        assertEquals(emptyList(), repository.lastSyncedMealsFlow.first())
+    }
+
+    @Test
+    @DisplayName("setLastSyncedMeals stores meals and emits them")
+    fun setLastSyncedMealsStoresMealsAndEmitsThem() = testScope.runTest {
+        val meals = listOf(
+            SyncedMealSummary(foodName = "Oatmeal", mealType = MealType.BREAKFAST, calories = 300),
+            SyncedMealSummary(foodName = "Salad", mealType = MealType.LUNCH, calories = 450),
+        )
+        repository.setLastSyncedMeals(meals)
+        val result = repository.lastSyncedMealsFlow.first()
+        assertEquals(2, result.size)
+        assertEquals("Oatmeal", result[0].foodName)
+        assertEquals(MealType.BREAKFAST, result[0].mealType)
+        assertEquals(300, result[0].calories)
+        assertEquals("Salad", result[1].foodName)
+        assertEquals(MealType.LUNCH, result[1].mealType)
+        assertEquals(450, result[1].calories)
+    }
+
+    @Test
+    @DisplayName("setLastSyncedMeals with empty list clears stored meals")
+    fun setLastSyncedMealsWithEmptyListClearsStoredMeals() = testScope.runTest {
+        val meals = listOf(
+            SyncedMealSummary(foodName = "Pizza", mealType = MealType.DINNER, calories = 800),
+        )
+        repository.setLastSyncedMeals(meals)
+        repository.setLastSyncedMeals(emptyList())
+        assertEquals(emptyList(), repository.lastSyncedMealsFlow.first())
     }
 
     @Test

@@ -111,8 +111,8 @@ fun SettingsScreen(
             Slider(
                 value = uiState.syncInterval.toFloat(),
                 onValueChange = { viewModel.updateSyncInterval(it.toInt()) },
-                valueRange = 5f..120f,
-                steps = 22,
+                valueRange = 15f..120f,
+                steps = 20,
                 modifier = Modifier.fillMaxWidth(),
             )
             Row(

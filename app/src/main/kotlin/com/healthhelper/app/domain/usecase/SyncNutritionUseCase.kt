@@ -1,15 +1,19 @@
 package com.healthhelper.app.domain.usecase
 
+import com.healthhelper.app.domain.model.FoodLogEntry
 import com.healthhelper.app.domain.model.SyncProgress
 import com.healthhelper.app.domain.model.SyncResult
+import com.healthhelper.app.domain.model.SyncedMealSummary
 import com.healthhelper.app.domain.repository.FoodLogRepository
 import com.healthhelper.app.domain.repository.NutritionRepository
 import com.healthhelper.app.domain.repository.SettingsRepository
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import timber.log.Timber
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
+import kotlin.math.roundToInt
 import javax.inject.Inject
 
 class SyncNutritionUseCase @Inject constructor(
@@ -45,6 +49,8 @@ class SyncNutritionUseCase @Inject constructor(
         var successfulDays = 0
         // Track per-date success for contiguous lastSyncedDate calculation
         val pastDateResults = mutableMapOf<LocalDate, Boolean>()
+        // Accumulate synced entries with their date for meal summary
+        val syncedEntries = mutableListOf<Pair<String, FoodLogEntry>>()
 
         for (date in dates) {
             val dateStr = date.format(DateTimeFormatter.ISO_LOCAL_DATE)
@@ -57,6 +63,7 @@ class SyncNutritionUseCase @Inject constructor(
                     val written = nutritionRepository.writeNutritionRecords(dateStr, entries)
                     if (written) {
                         totalRecordsSynced += entries.size
+                        entries.forEach { entry -> syncedEntries.add(Pair(dateStr, entry)) }
                     }
                 }
                 successfulDays++
@@ -99,11 +106,39 @@ class SyncNutritionUseCase @Inject constructor(
             settingsRepository.setLastSyncedDate(contiguousEnd.format(DateTimeFormatter.ISO_LOCAL_DATE))
         }
 
+        if (successfulDays > 0) {
+            try {
+                settingsRepository.setLastSyncTimestamp(System.currentTimeMillis())
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to save last sync timestamp")
+            }
+        }
+
+        // Persist last 3 meals: sort by date desc, then time desc (null time sorts last)
+        try {
+            val summaries = syncedEntries
+                .sortedWith(
+                    compareByDescending<Pair<String, FoodLogEntry>> { it.first }
+                        .thenByDescending { it.second.time ?: "" },
+                )
+                .take(3)
+                .map { (_, entry) ->
+                    SyncedMealSummary(
+                        foodName = entry.foodName,
+                        mealType = entry.mealType,
+                        calories = entry.calories.roundToInt().coerceAtLeast(0),
+                    )
+                }
+            settingsRepository.setLastSyncedMeals(summaries)
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to persist synced meal summaries")
+        }
+
         return when {
             successfulDays == 0 -> SyncResult.Error("All sync attempts failed")
             totalEntriesFetched > 0 && totalRecordsSynced == 0 ->
                 SyncResult.Error("Failed to write records to Health Connect")
-            else -> SyncResult.Success(totalRecordsSynced)
+            else -> SyncResult.Success(totalRecordsSynced, successfulDays)
         }
     }
 
