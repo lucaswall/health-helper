@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.healthhelper.app.domain.repository.SettingsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -15,12 +16,18 @@ import javax.inject.Inject
 
 data class SettingsUiState(
     val apiKey: String = "",
+    val anthropicApiKey: String = "",
     val baseUrl: String = "",
     val syncInterval: Int = 15,
     val isConfigured: Boolean = false,
     val hasUnsavedChanges: Boolean = false,
     val saveError: String? = null,
-)
+) {
+    override fun toString(): String =
+        "SettingsUiState(apiKey=***, anthropicApiKey=***, baseUrl=$baseUrl, " +
+            "syncInterval=$syncInterval, isConfigured=$isConfigured, " +
+            "hasUnsavedChanges=$hasUnsavedChanges, saveError=$saveError)"
+}
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
@@ -32,9 +39,13 @@ class SettingsViewModel @Inject constructor(
 
     private data class PersistedSettings(
         val apiKey: String = "",
+        val anthropicApiKey: String = "",
         val baseUrl: String = "",
         val syncInterval: Int = 15,
-    )
+    ) {
+        override fun toString(): String =
+            "PersistedSettings(apiKey=***, anthropicApiKey=***, baseUrl=$baseUrl, syncInterval=$syncInterval)"
+    }
 
     private var persistedSettings = PersistedSettings()
     private var isSaving = false
@@ -46,17 +57,19 @@ class SettingsViewModel @Inject constructor(
                     settingsRepository.apiKeyFlow,
                     settingsRepository.baseUrlFlow,
                     settingsRepository.syncIntervalFlow,
-                ) { apiKey, baseUrl, syncInterval ->
-                    Triple(apiKey, baseUrl, syncInterval)
-                }.collect { (apiKey, baseUrl, syncInterval) ->
-                    persistedSettings = PersistedSettings(apiKey, baseUrl, syncInterval)
+                    settingsRepository.anthropicApiKeyFlow,
+                ) { apiKey, baseUrl, syncInterval, anthropicApiKey ->
+                    PersistedSettings(apiKey, anthropicApiKey, baseUrl, syncInterval)
+                }.collect { settings ->
+                    persistedSettings = settings
                     if (!isSaving) {
-                        val configured = apiKey.isNotEmpty() && baseUrl.isNotEmpty()
+                        val configured = settings.apiKey.isNotEmpty() && settings.baseUrl.isNotEmpty()
                         _uiState.update {
                             it.copy(
-                                apiKey = apiKey,
-                                baseUrl = baseUrl,
-                                syncInterval = syncInterval,
+                                apiKey = settings.apiKey,
+                                anthropicApiKey = settings.anthropicApiKey,
+                                baseUrl = settings.baseUrl,
+                                syncInterval = settings.syncInterval,
                                 isConfigured = configured,
                                 hasUnsavedChanges = false,
                             )
@@ -87,49 +100,72 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    fun updateAnthropicApiKey(value: String) {
+        _uiState.update {
+            it.copy(anthropicApiKey = value).withDirtyFlag()
+        }
+    }
+
     fun save() {
+        if (isSaving) return
+        isSaving = true
         val current = _uiState.value
         viewModelScope.launch {
-            isSaving = true
-            var anyFailed = false
-            val apiKeySaved = try {
-                settingsRepository.setApiKey(current.apiKey)
-                true
-            } catch (e: Exception) {
-                Timber.e(e, "Failed to save API key")
-                anyFailed = true
-                false
-            }
-            val baseUrlSaved = try {
-                settingsRepository.setBaseUrl(current.baseUrl)
-                true
-            } catch (e: Exception) {
-                Timber.e(e, "Failed to save base URL")
-                anyFailed = true
-                false
-            }
-            val intervalSaved = try {
-                settingsRepository.setSyncInterval(current.syncInterval)
-                true
-            } catch (e: Exception) {
-                Timber.e(e, "Failed to save sync interval")
-                anyFailed = true
-                false
-            }
-            persistedSettings = PersistedSettings(
-                apiKey = if (apiKeySaved) current.apiKey else persistedSettings.apiKey,
-                baseUrl = if (baseUrlSaved) current.baseUrl else persistedSettings.baseUrl,
-                syncInterval = if (intervalSaved) current.syncInterval else persistedSettings.syncInterval,
-            )
-            isSaving = false
-            _uiState.update {
-                it.copy(
-                    saveError = if (anyFailed) {
-                        "Some settings could not be saved. Please try again."
-                    } else {
-                        null
-                    },
-                ).withDirtyFlag()
+            try {
+                var anyFailed = false
+                val apiKeySaved = try {
+                    settingsRepository.setApiKey(current.apiKey)
+                    true
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    Timber.e(e, "Failed to save API key")
+                    anyFailed = true
+                    false
+                }
+                val baseUrlSaved = try {
+                    settingsRepository.setBaseUrl(current.baseUrl)
+                    true
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    Timber.e(e, "Failed to save base URL")
+                    anyFailed = true
+                    false
+                }
+                val intervalSaved = try {
+                    settingsRepository.setSyncInterval(current.syncInterval)
+                    true
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    Timber.e(e, "Failed to save sync interval")
+                    anyFailed = true
+                    false
+                }
+                val anthropicApiKeySaved = try {
+                    settingsRepository.setAnthropicApiKey(current.anthropicApiKey)
+                    true
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    Timber.e(e, "Failed to save Anthropic API key")
+                    anyFailed = true
+                    false
+                }
+                persistedSettings = PersistedSettings(
+                    apiKey = if (apiKeySaved) current.apiKey else persistedSettings.apiKey,
+                    anthropicApiKey = if (anthropicApiKeySaved) current.anthropicApiKey else persistedSettings.anthropicApiKey,
+                    baseUrl = if (baseUrlSaved) current.baseUrl else persistedSettings.baseUrl,
+                    syncInterval = if (intervalSaved) current.syncInterval else persistedSettings.syncInterval,
+                )
+                _uiState.update {
+                    it.copy(
+                        saveError = if (anyFailed) {
+                            "Some settings could not be saved. Please try again."
+                        } else {
+                            null
+                        },
+                    ).withDirtyFlag()
+                }
+            } finally {
+                isSaving = false
             }
         }
     }
@@ -140,6 +176,7 @@ class SettingsViewModel @Inject constructor(
                 persistedSettings.baseUrl.isNotEmpty()
             it.copy(
                 apiKey = persistedSettings.apiKey,
+                anthropicApiKey = persistedSettings.anthropicApiKey,
                 baseUrl = persistedSettings.baseUrl,
                 syncInterval = persistedSettings.syncInterval,
                 isConfigured = configured,
@@ -150,6 +187,7 @@ class SettingsViewModel @Inject constructor(
 
     private fun SettingsUiState.withDirtyFlag(): SettingsUiState {
         val dirty = apiKey != persistedSettings.apiKey ||
+            anthropicApiKey != persistedSettings.anthropicApiKey ||
             baseUrl != persistedSettings.baseUrl ||
             syncInterval != persistedSettings.syncInterval
         return copy(hasUnsavedChanges = dirty)

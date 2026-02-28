@@ -9,11 +9,14 @@ import androidx.health.connect.client.HealthConnectClient
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import androidx.work.WorkManager
+import com.healthhelper.app.data.api.AnthropicApiClient
 import com.healthhelper.app.data.api.FoodScannerApiClient
 import com.healthhelper.app.data.repository.DataStoreSettingsRepository
 import com.healthhelper.app.data.repository.FoodScannerFoodLogRepository
+import com.healthhelper.app.data.repository.HealthConnectBloodPressureRepository
 import com.healthhelper.app.data.repository.HealthConnectNutritionRepository
 import com.healthhelper.app.data.sync.SyncScheduler
+import com.healthhelper.app.domain.repository.BloodPressureRepository
 import com.healthhelper.app.domain.repository.FoodLogRepository
 import com.healthhelper.app.domain.repository.NutritionRepository
 import com.healthhelper.app.domain.repository.SettingsRepository
@@ -27,6 +30,8 @@ import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.serialization.kotlinx.json.json
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.serialization.json.Json
 import timber.log.Timber
 import javax.inject.Singleton
@@ -46,29 +51,13 @@ object AppModule {
     @Singleton
     fun provideEncryptedSharedPreferences(
         @ApplicationContext context: Context,
-    ): SharedPreferences {
-        return try {
-            val masterKey = MasterKey.Builder(context)
-                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-                .build()
-            EncryptedSharedPreferences.create(
-                context,
-                "encrypted_settings",
-                masterKey,
-                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-            )
-        } catch (e: Exception) {
-            Timber.w(e, "Keystore unavailable, falling back to plain SharedPreferences")
-            context.getSharedPreferences("settings_fallback", Context.MODE_PRIVATE)
-        }
-    }
+    ): SharedPreferences? = createEncryptedSharedPreferences(context)
 
     @Provides
     @Singleton
     fun provideSettingsRepository(
         dataStore: DataStore<Preferences>,
-        encryptedPrefs: SharedPreferences,
+        encryptedPrefs: SharedPreferences?,
     ): SettingsRepository = DataStoreSettingsRepository(dataStore, encryptedPrefs)
 
     @Provides
@@ -88,6 +77,12 @@ object AppModule {
 
     @Provides
     @Singleton
+    fun provideBloodPressureRepository(
+        healthConnectClient: HealthConnectClient?,
+    ): BloodPressureRepository = HealthConnectBloodPressureRepository(healthConnectClient)
+
+    @Provides
+    @Singleton
     fun provideHttpClient(): HttpClient = HttpClient(OkHttp) {
         install(ContentNegotiation) {
             json(Json { ignoreUnknownKeys = true })
@@ -104,6 +99,11 @@ object AppModule {
 
     @Provides
     @Singleton
+    fun provideAnthropicApiClient(httpClient: HttpClient): AnthropicApiClient =
+        AnthropicApiClient(httpClient)
+
+    @Provides
+    @Singleton
     fun provideFoodLogRepository(
         apiClient: FoodScannerApiClient,
     ): FoodLogRepository = FoodScannerFoodLogRepository(apiClient)
@@ -117,4 +117,32 @@ object AppModule {
     @Singleton
     fun provideSyncScheduler(workManager: WorkManager): SyncScheduler =
         SyncScheduler(workManager)
+
+    @Provides
+    @DefaultDispatcher
+    fun provideDefaultDispatcher(): CoroutineDispatcher = Dispatchers.Default
+
+    internal fun createEncryptedSharedPreferences(context: Context): SharedPreferences? =
+        createEncryptedSharedPreferences(context) { ctx ->
+            val masterKey = MasterKey.Builder(ctx)
+                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                .build()
+            EncryptedSharedPreferences.create(
+                ctx,
+                "encrypted_settings",
+                masterKey,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+            )
+        }
+
+    internal fun createEncryptedSharedPreferences(
+        context: Context,
+        creator: (Context) -> SharedPreferences,
+    ): SharedPreferences? = try {
+        creator(context)
+    } catch (e: Exception) {
+        Timber.w(e, "Keystore unavailable, encrypted prefs not available")
+        null
+    }
 }

@@ -290,20 +290,94 @@ class DataStoreSettingsRepositoryTest {
         assertEquals(emptyList(), repository.lastSyncedMealsFlow.first())
     }
 
+    // --- anthropicApiKey (encrypted prefs) tests ---
+
+    @Test
+    @DisplayName("default anthropic API key is empty string")
+    fun defaultAnthropicApiKey() = testScope.runTest {
+        assertEquals("", repository.anthropicApiKeyFlow.first())
+    }
+
+    @Test
+    @DisplayName("anthropicApiKeyFlow reads from encryptedPrefs")
+    fun anthropicApiKeyFlowReadsFromEncryptedPrefs() = testScope.runTest {
+        encryptedStore["anthropic_api_key"] = "sk-ant-test"
+        assertEquals("sk-ant-test", repository.anthropicApiKeyFlow.first())
+    }
+
+    @Test
+    @DisplayName("setAnthropicApiKey writes to encryptedPrefs with commit for durability")
+    fun setAnthropicApiKeyWritesToEncryptedPrefs() = testScope.runTest {
+        repository.setAnthropicApiKey("sk-ant-abc123")
+        verify { encryptedEditor.putString("anthropic_api_key", "sk-ant-abc123") }
+        verify { encryptedEditor.commit() }
+    }
+
+    // --- null encryptedPrefs tests (Fix 1: HEA-110) ---
+
+    @Test
+    @DisplayName("apiKeyFlow emits empty string when encryptedPrefs is null")
+    fun apiKeyFlowEmitsEmptyWhenEncryptedPrefsNull() = testScope.runTest {
+        val repoNullPrefs = DataStoreSettingsRepository(dataStore, null)
+        assertEquals("", repoNullPrefs.apiKeyFlow.first())
+    }
+
+    @Test
+    @DisplayName("anthropicApiKeyFlow emits empty string when encryptedPrefs is null")
+    fun anthropicApiKeyFlowEmitsEmptyWhenEncryptedPrefsNull() = testScope.runTest {
+        val repoNullPrefs = DataStoreSettingsRepository(dataStore, null)
+        assertEquals("", repoNullPrefs.anthropicApiKeyFlow.first())
+    }
+
+    @Test
+    @DisplayName("setApiKey is no-op when encryptedPrefs is null")
+    fun setApiKeyIsNoOpWhenEncryptedPrefsNull() = testScope.runTest {
+        val repoNullPrefs = DataStoreSettingsRepository(dataStore, null)
+        // Should not throw
+        repoNullPrefs.setApiKey("should-be-ignored")
+        assertEquals("", repoNullPrefs.apiKeyFlow.first())
+    }
+
+    @Test
+    @DisplayName("setAnthropicApiKey is no-op when encryptedPrefs is null")
+    fun setAnthropicApiKeyIsNoOpWhenEncryptedPrefsNull() = testScope.runTest {
+        val repoNullPrefs = DataStoreSettingsRepository(dataStore, null)
+        // Should not throw
+        repoNullPrefs.setAnthropicApiKey("should-be-ignored")
+        assertEquals("", repoNullPrefs.anthropicApiKeyFlow.first())
+    }
+
+    @Test
+    @DisplayName("migration is skipped when encryptedPrefs is null")
+    fun migrationSkippedWhenEncryptedPrefsNull() = testScope.runTest {
+        // Put a legacy key in DataStore
+        dataStore.edit { it[stringPreferencesKey("api_key")] = "legacy_key" }
+        val repoNullPrefs = DataStoreSettingsRepository(dataStore, null)
+        // Should not crash, returns empty
+        assertEquals("", repoNullPrefs.apiKeyFlow.first())
+        // Legacy key remains in DataStore (migration was skipped)
+        val prefs = dataStore.data.first()
+        assertEquals("legacy_key", prefs[stringPreferencesKey("api_key")])
+    }
+
     @Test
     @DisplayName("apiKeyFlow handles migration failure gracefully")
     fun apiKeyFlowHandlesMigrationFailure() = testScope.runTest {
         dataStore.edit { it[stringPreferencesKey("api_key")] = "legacy_key" }
 
-        // Make getString throw on first call to simulate Keystore failure
-        every { encryptedPrefs.getString("api_key", any<String>()) } throws
-            RuntimeException("Keystore unavailable")
+        // First getString call (migration check) throws, second (post-migration read) returns ""
+        var callCount = 0
+        every { encryptedPrefs.getString("api_key", any<String>()) } answers {
+            callCount++
+            if (callCount == 1) throw RuntimeException("Keystore unavailable")
+            ""
+        }
 
         val freshRepo = DataStoreSettingsRepository(dataStore, encryptedPrefs)
 
-        // Should not crash — returns empty default
-        every { encryptedPrefs.getString("api_key", any<String>()) } returns ""
+        // Should not crash — migration failure is caught, returns empty default
         val key = freshRepo.apiKeyFlow.first()
         assertEquals("", key)
+        assertEquals(2, callCount, "getString should be called exactly twice: once in migration (throws), once in post-migration read")
     }
 }
