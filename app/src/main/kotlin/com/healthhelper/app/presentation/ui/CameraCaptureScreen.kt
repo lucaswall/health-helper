@@ -26,6 +26,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -35,8 +36,31 @@ import androidx.core.content.FileProvider
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.healthhelper.app.presentation.viewmodel.CameraCaptureViewModel
+import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import timber.log.Timber
 import java.io.File
+import java.io.InputStream
+
+private const val MAX_IMAGE_BYTES = 20 * 1024 * 1024 // 20MB
+
+private fun readBytesLimited(inputStream: InputStream, maxSize: Int): ByteArray {
+    val buffer = ByteArray(8192)
+    var totalRead = 0
+    val output = java.io.ByteArrayOutputStream()
+    while (true) {
+        val bytesRead = inputStream.read(buffer)
+        if (bytesRead == -1) break
+        totalRead += bytesRead
+        if (totalRead > maxSize) {
+            throw IllegalArgumentException("Image exceeds maximum size of ${maxSize / (1024 * 1024)}MB")
+        }
+        output.write(buffer, 0, bytesRead)
+    }
+    return output.toByteArray()
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -48,8 +72,9 @@ fun CameraCaptureScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
-    var photoUri by remember { mutableStateOf<Uri?>(null) }
+    var tempFile by remember { mutableStateOf<File?>(null) }
 
     LaunchedEffect(Unit) {
         viewModel.navigateToConfirmation.collect { (systolic, diastolic) ->
@@ -60,22 +85,36 @@ fun CameraCaptureScreen(
     val takePictureLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicture(),
     ) { success ->
-        val uri = photoUri
-        try {
-            if (success && uri != null) {
-                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                if (bytes != null) {
-                    viewModel.onPhotoCaptured(bytes)
-                } else {
-                    viewModel.onCaptureError("Could not read captured photo.")
+        scope.launch {
+            try {
+                if (success && tempFile != null) {
+                    val bytes = withContext(Dispatchers.IO) {
+                        context.contentResolver.openInputStream(
+                            FileProvider.getUriForFile(
+                                context,
+                                "${context.packageName}.fileprovider",
+                                tempFile!!,
+                            ),
+                        )?.use { readBytesLimited(it, MAX_IMAGE_BYTES) }
+                    }
+                    if (bytes != null) {
+                        viewModel.onPhotoCaptured(bytes)
+                    } else {
+                        viewModel.onCaptureError("Could not read captured photo.")
+                    }
                 }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: IllegalArgumentException) {
+                Timber.e(e, "Image too large")
+                viewModel.onCaptureError("Image is too large. Please choose a smaller photo.")
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to read captured photo")
+                viewModel.onCaptureError("Could not read captured photo.")
+            } finally {
+                tempFile?.delete()
+                tempFile = null
             }
-        } catch (e: Exception) {
-            Timber.e(e, "Failed to read captured photo")
-            viewModel.onCaptureError("Could not read captured photo.")
-        } finally {
-            // Clean up temp file — runs even if user cancels camera
-            uri?.path?.let { File(it).delete() }
         }
     }
 
@@ -84,12 +123,25 @@ fun CameraCaptureScreen(
         if (sharedImageUri != null) {
             try {
                 val uri = Uri.parse(sharedImageUri)
-                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                if (uri.scheme != "content") {
+                    viewModel.onCaptureError("Unsupported image source.")
+                    return@LaunchedEffect
+                }
+                val bytes = withContext(Dispatchers.IO) {
+                    context.contentResolver.openInputStream(uri)?.use {
+                        readBytesLimited(it, MAX_IMAGE_BYTES)
+                    }
+                }
                 if (bytes != null) {
                     viewModel.onPhotoCaptured(bytes)
                 } else {
                     viewModel.onCaptureError("Could not read shared image.")
                 }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: IllegalArgumentException) {
+                Timber.e(e, "Shared image too large")
+                viewModel.onCaptureError("Image is too large. Please choose a smaller photo.")
             } catch (e: Exception) {
                 Timber.e(e, "Failed to read shared image")
                 viewModel.onCaptureError("Could not read shared image.")
@@ -153,13 +205,13 @@ fun CameraCaptureScreen(
                             try {
                                 val imageDir = File(context.cacheDir, "bp_images")
                                 imageDir.mkdirs()
-                                val tempFile = File.createTempFile("bp_", ".jpg", imageDir)
+                                val file = File.createTempFile("bp_", ".jpg", imageDir)
+                                tempFile = file
                                 val uri = FileProvider.getUriForFile(
                                     context,
                                     "${context.packageName}.fileprovider",
-                                    tempFile,
+                                    file,
                                 )
-                                photoUri = uri
                                 takePictureLauncher.launch(uri)
                             } catch (e: Exception) {
                                 Timber.e(e, "Failed to launch camera")

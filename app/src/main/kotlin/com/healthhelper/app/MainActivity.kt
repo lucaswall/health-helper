@@ -17,7 +17,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        val sharedImageUri = extractSharedImageUri(intent)
+        // Only process share intent on fresh launch, not on recreation (config change / process restore)
+        val sharedImageUri = if (savedInstanceState == null) extractSharedImageUri(intent) else null
 
         setContent {
             HealthHelperTheme {

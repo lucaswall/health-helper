@@ -379,7 +379,7 @@ All tasks completed.
 
 ---
 
-## Fix Plan
+## Fix Plan (Review Iteration 1)
 
 **Source:** Review findings from Iteration 1
 **Linear Issues:** [HEA-144](https://linear.app/lw-claude/issue/HEA-144), [HEA-145](https://linear.app/lw-claude/issue/HEA-145), [HEA-146](https://linear.app/lw-claude/issue/HEA-146), [HEA-147](https://linear.app/lw-claude/issue/HEA-147), [HEA-148](https://linear.app/lw-claude/issue/HEA-148)
@@ -421,3 +421,35 @@ All tasks completed.
 1. In `MainActivity.kt`, after extracting `sharedImageUri` from the intent, call `intent.removeExtra(Intent.EXTRA_STREAM)` to consume the share data
 2. This prevents the same URI from being re-extracted on activity recreation (config change / process death + restore)
 3. Verify existing tests pass
+
+---
+
+## Iteration 2
+
+**Implemented:** 2026-02-28
+**Method:** Single-agent (user requested fly solo)
+
+### Tasks Completed This Iteration
+- Fix 1: Temp file leak — store File reference for cleanup (HEA-144)
+- Fix 2: URI scheme validation for shared images (HEA-145)
+- Fix 3: Move IO reads off Main dispatcher (HEA-146)
+- Fix 4: Add size limit on image reads (HEA-147)
+- Fix 5: Consume share intent to prevent re-navigation (HEA-148)
+
+### Files Modified
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt` — Rewrote with: `tempFile` state for proper cleanup, `content://` scheme validation, `withContext(Dispatchers.IO)` for all reads, `readBytesLimited()` with 20MB cap, `CancellationException` rethrown in all catch blocks
+- `app/src/main/kotlin/com/healthhelper/app/MainActivity.kt` — Gate share intent on `savedInstanceState == null` instead of `removeExtra`
+
+### Linear Updates
+- HEA-144: Todo → In Progress → Review
+- HEA-145: Todo → In Progress → Review
+- HEA-146: Todo → In Progress → Review
+- HEA-147: Todo → In Progress → Review
+- HEA-148: Todo → In Progress → Review
+
+### Pre-commit Verification
+- bug-hunter: Found 3 bugs — all fixed (CancellationException swallowed in 2 catch blocks, intent.removeExtra doesn't survive process death)
+- verifier: All tests pass, zero warnings
+
+### Continuation Status
+All tasks completed.
