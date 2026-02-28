@@ -5,7 +5,6 @@
 | Feature | Summary |
 |---------|---------|
 | [Blood Glucose Scanner](#blood-glucose-scanner) | Photograph a glucometer screen and write the reading to Health Connect |
-| [Blood Pressure Scanner](#blood-pressure-scanner) | Photograph a blood pressure monitor screen and write systolic/diastolic to Health Connect |
 | [Measurement Reminders](#measurement-reminders) | Scheduled alarms to remind users to take glucose and blood pressure readings |
 
 
@@ -90,85 +89,6 @@ After saving, return to the home screen with a brief success snackbar showing th
 
 ---
 
-## Blood Pressure Scanner
-
-### Problem
-
-Users with home blood pressure monitors must manually record systolic and diastolic readings. The monitor screen already shows both values, but transcribing two numbers into a health app is tedious enough that many users skip it. Incomplete blood pressure logs make it harder to track trends.
-
-### Goal
-
-Let users photograph their blood pressure monitor screen and have both systolic and diastolic values automatically extracted and written to Health Connect as a `BloodPressureRecord`, with optional body position and measurement location metadata.
-
-### Design
-
-#### Capture Flow
-
-1. User taps "Log Blood Pressure" from the home screen.
-2. Camera opens in a simple viewfinder mode.
-3. User takes a photo of the blood pressure monitor display.
-4. Photo is sent to Claude Haiku to extract systolic and diastolic values in mmHg.
-5. Haiku returns both values or an error - both systolic and diastolic must be successfully read, or the entire parse is an error.
-
-#### Haiku Response Contract
-
-- **Success:** Returns systolic and diastolic as integers in mmHg (e.g., `120` / `80`). Most monitors also display pulse - Haiku should ignore it.
-- **Error:** Returns an error if either value can't be read. Partial reads (only systolic, only diastolic) are treated as errors - the user must retake the photo.
-- Plausible ranges: systolic 60-300 mmHg, diastolic 30-200 mmHg. Systolic must be greater than diastolic.
-
-#### Confirmation Screen
-
-After a successful parse, the user sees a confirmation screen with:
-
-- **Systolic** (mmHg) - displayed prominently, editable.
-- **Diastolic** (mmHg) - displayed prominently, editable.
-- **Body Position** dropdown (optional): Standing Up, Sitting Down, Lying Down, Reclining, Unknown.
-- **Measurement Location** dropdown (optional): Left Upper Arm, Right Upper Arm, Left Wrist, Right Wrist, Unknown.
-- **Timestamp** - defaults to now, editable.
-- **Save button** - writes to Health Connect.
-- **Retake button** - goes back to camera.
-
-#### Post-Save
-
-After saving, return to the home screen with a brief success snackbar showing the logged values (e.g., "120/80 mmHg saved").
-
-### Architecture
-
-- **Camera:** Same CameraX setup as [Blood Glucose Scanner](#blood-glucose-scanner). Shared camera infrastructure.
-- **AI parsing:** Call Claude Haiku with the photo and a system prompt instructing it to extract systolic and diastolic values in mmHg. The prompt must specify that both values are required and that pulse/heart rate should be ignored.
-- **Health Connect record:** `BloodPressureRecord` with fields:
-  - `systolic`: `Pressure.millimetersOfMercury(value)` (required)
-  - `diastolic`: `Pressure.millimetersOfMercury(value)` (required)
-  - `bodyPosition`: Maps to `BODY_POSITION_STANDING_UP`, `BODY_POSITION_SITTING_DOWN`, `BODY_POSITION_LYING_DOWN`, `BODY_POSITION_RECLINING`, or `BODY_POSITION_UNKNOWN`
-  - `measurementLocation`: Maps to `MEASUREMENT_LOCATION_LEFT_UPPER_ARM`, `MEASUREMENT_LOCATION_RIGHT_UPPER_ARM`, `MEASUREMENT_LOCATION_LEFT_WRIST`, `MEASUREMENT_LOCATION_RIGHT_WRIST`, or `MEASUREMENT_LOCATION_UNKNOWN`
-  - `time`: User-selected Instant
-  - `zoneOffset`: Device's current zone offset
-  - `metadata`: `Metadata.manualEntry()` with clientRecordId
-- **Permissions:** `WRITE_BLOOD_PRESSURE` added to AndroidManifest.xml
-- **Domain model:** `BloodPressureReading` data class with systolic, diastolic, and optional metadata. Use case validates ranges and the systolic > diastolic invariant.
-
-### Edge Cases
-
-- Photo only shows one number clearly - Haiku returns error, user must retake. No partial writes.
-- Monitor displays pulse alongside BP values - Haiku ignores it per prompt instructions.
-- Systolic <= diastolic after manual edit - Save button disabled with validation message.
-- Values outside plausible range - same as glucose: reject with message.
-- Wrist monitor vs arm cuff - Haiku doesn't need to distinguish; user selects measurement location manually.
-- Monitor displays error code (e.g., "Err") instead of values - Haiku reports parse error.
-
-### Implementation Order
-
-1. Shared camera infrastructure with [Blood Glucose Scanner](#blood-glucose-scanner) (if not already built)
-2. Haiku API client for BP image analysis (system prompt, dual-value response parsing)
-3. `BloodPressureReading` domain model and `WriteBloodPressureReadingUseCase`
-4. Health Connect `BloodPressureRecord` writing in repository layer
-5. Confirmation screen UI (dual value display, dropdowns, timestamp picker)
-6. Capture flow screen (camera viewfinder, loading state, error display)
-7. Navigation integration and home screen entry point
-8. AndroidManifest.xml permission additions
-
----
-
 ## Measurement Reminders
 
 ### Problem
@@ -177,7 +97,7 @@ Glucose and blood pressure readings are most useful when taken consistently at s
 
 ### Prerequisites
 
-- [Blood Glucose Scanner](#blood-glucose-scanner) or [Blood Pressure Scanner](#blood-pressure-scanner) (at least one must exist for reminders to be useful)
+- [Blood Glucose Scanner](#blood-glucose-scanner) or Blood Pressure Scanner (at least one must exist for reminders to be useful)
 
 ### Goal
 
