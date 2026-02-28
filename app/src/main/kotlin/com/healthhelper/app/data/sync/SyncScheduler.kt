@@ -7,6 +7,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import timber.log.Timber
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 
@@ -20,6 +21,7 @@ class SyncScheduler @Inject constructor(
 
     fun schedulePeriodic(intervalMinutes: Int) {
         val clampedInterval = maxOf(intervalMinutes.toLong(), MIN_INTERVAL_MINUTES)
+        Timber.d("SyncScheduler: scheduling periodic sync every %d min (requested %d)", clampedInterval, intervalMinutes)
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build()
@@ -34,6 +36,7 @@ class SyncScheduler @Inject constructor(
     }
 
     fun cancelSync() {
+        Timber.d("SyncScheduler: cancelling periodic sync")
         workManager.cancelUniqueWork(WORK_NAME)
     }
 

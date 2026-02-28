@@ -22,6 +22,7 @@ class HealthHelperApp : Application(), Configuration.Provider {
         super.onCreate()
         if (BuildConfig.DEBUG) {
             Timber.plant(Timber.DebugTree())
+            Timber.d("HealthHelperApp: started (debug build)")
         }
     }
 }

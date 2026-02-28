@@ -74,6 +74,7 @@ class SyncViewModel @Inject constructor(
     private var lastSyncTimestamp = 0L
 
     init {
+        Timber.d("SyncViewModel: init, healthConnectAvailable=%b", healthConnectClient != null)
         _uiState.update {
             it.copy(healthConnectAvailable = healthConnectClient != null)
         }
@@ -88,7 +89,9 @@ class SyncViewModel @Inject constructor(
                     }
                     val elapsed = System.currentTimeMillis() - startTime
                     Timber.d("getGrantedPermissions() took ${elapsed}ms")
-                    _uiState.update { it.copy(permissionGranted = granted.containsAll(REQUIRED_HC_PERMISSIONS)) }
+                    val hasAll = granted.containsAll(REQUIRED_HC_PERMISSIONS)
+                    Timber.d("SyncViewModel: HC permissions granted=%b (have %d/%d)", hasAll, granted.size, REQUIRED_HC_PERMISSIONS.size)
+                    _uiState.update { it.copy(permissionGranted = hasAll) }
                 } catch (e: Exception) {
                     Timber.e(e, "Failed to check Health Connect permissions")
                     // Leave permissionGranted = false
@@ -162,6 +165,7 @@ class SyncViewModel @Inject constructor(
                 val configured = apiKey.isNotEmpty() && baseUrl.isNotEmpty()
                 Pair(interval, configured)
             }.distinctUntilChanged().collect { (interval, configured) ->
+                Timber.d("SyncViewModel: config changed — configured=%b, interval=%d min", configured, interval)
                 if (configured) {
                     syncScheduler.schedulePeriodic(interval)
                 } else {
@@ -226,15 +230,21 @@ class SyncViewModel @Inject constructor(
     }
 
     fun onPermissionResult(granted: Boolean) {
+        Timber.d("SyncViewModel: HC permission result=%b", granted)
         _uiState.update { it.copy(permissionGranted = granted) }
     }
 
     fun onCameraPermissionResult(granted: Boolean) {
+        Timber.d("SyncViewModel: camera permission result=%b", granted)
         _uiState.update { it.copy(cameraPermissionGranted = granted) }
     }
 
     fun triggerSync() {
-        if (_uiState.value.isSyncing) return
+        if (_uiState.value.isSyncing) {
+            Timber.d("SyncViewModel: triggerSync ignored, already syncing")
+            return
+        }
+        Timber.d("SyncViewModel: triggerSync started")
         syncJob?.cancel()
         _uiState.update { it.copy(isSyncing = true, syncProgress = null) }
         syncJob = viewModelScope.launch {
@@ -243,16 +253,23 @@ class SyncViewModel @Inject constructor(
                     _uiState.update { it.copy(syncProgress = progress) }
                 }
                 val resultMessage = when (result) {
-                    is SyncResult.Success -> when {
-                        result.recordsSynced == 0 -> "No new meals"
-                        result.daysProcessed == 1 -> "Synced ${result.recordsSynced} meals across 1 day"
-                        else -> "Synced ${result.recordsSynced} meals across ${result.daysProcessed} days"
+                    is SyncResult.Success -> {
+                        val msg = when {
+                            result.recordsSynced == 0 -> "No new meals"
+                            result.daysProcessed == 1 -> "Synced ${result.recordsSynced} meals across 1 day"
+                            else -> "Synced ${result.recordsSynced} meals across ${result.daysProcessed} days"
+                        }
+                        Timber.d("SyncViewModel: sync completed — %s", msg)
+                        msg
                     }
                     is SyncResult.Error -> {
-                        Timber.e("Sync error: ${result.message}")
+                        Timber.e("SyncViewModel: sync error — %s", result.message)
                         "Sync failed. Please try again."
                     }
-                    is SyncResult.NeedsConfiguration -> "Please configure API settings"
+                    is SyncResult.NeedsConfiguration -> {
+                        Timber.w("SyncViewModel: sync skipped — needs configuration")
+                        "Please configure API settings"
+                    }
                 }
                 _uiState.update { it.copy(lastSyncResult = resultMessage) }
             } catch (e: CancellationException) {

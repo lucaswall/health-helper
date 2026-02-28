@@ -18,7 +18,7 @@ class SyncWorker @AssistedInject constructor(
 ) : CoroutineWorker(context, workerParams) {
 
     override suspend fun doWork(): Result {
-        Timber.d("SyncWorker: starting nutrition sync")
+        Timber.d("SyncWorker: starting nutrition sync (attempt %d)", runAttemptCount)
         return when (val result = syncNutritionUseCase.invoke()) {
             is SyncResult.Success -> {
                 Timber.d("SyncWorker: success, synced %d records", result.recordsSynced)

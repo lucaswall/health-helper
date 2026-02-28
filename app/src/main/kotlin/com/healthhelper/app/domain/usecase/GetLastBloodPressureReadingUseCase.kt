@@ -2,6 +2,7 @@ package com.healthhelper.app.domain.usecase
 
 import com.healthhelper.app.domain.model.BloodPressureReading
 import com.healthhelper.app.domain.repository.BloodPressureRepository
+import timber.log.Timber
 import javax.inject.Inject
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -13,6 +14,7 @@ class GetLastBloodPressureReadingUseCase @Inject constructor(
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
+        Timber.e(e, "GetLastBloodPressureReading: failed")
         null
     }
 }

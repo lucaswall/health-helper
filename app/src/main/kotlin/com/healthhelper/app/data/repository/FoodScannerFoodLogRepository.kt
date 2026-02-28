@@ -23,11 +23,19 @@ class FoodScannerFoodLogRepository @Inject constructor(
             Timber.w(e, "Failed to read ETag for %s, proceeding without", date)
             null
         }
+        Timber.d("FoodLogRepo: fetching %s, etag=%s", date, etag ?: "(none)")
         val result = apiClient.getFoodLog(baseUrl, apiKey, date, etag)
         return result.map { apiResponse ->
             if (apiResponse.notModified) {
+                Timber.d("FoodLogRepo: %s → 304 Not Modified", date)
                 FoodLogResult.NotModified
             } else {
+                Timber.d(
+                    "FoodLogRepo: %s → %d entries, newEtag=%s",
+                    date,
+                    apiResponse.entries.size,
+                    apiResponse.etag ?: "(none)",
+                )
                 if (apiResponse.etag != null) {
                     try {
                         settingsRepository.setETag(date, apiResponse.etag)

@@ -54,6 +54,13 @@ class SyncNutritionUseCase @Inject constructor(
         }
 
         val totalDays = dates.size
+        Timber.d(
+            "SyncNutrition: starting sync of %d days (%s → %s), lastSyncedDate=%s",
+            totalDays,
+            startDate.format(DateTimeFormatter.ISO_LOCAL_DATE),
+            today.format(DateTimeFormatter.ISO_LOCAL_DATE),
+            lastSyncedDate.ifEmpty { "(none)" },
+        )
         var completedDays = 0
         var totalRecordsSynced = 0
         var totalEntriesFetched = 0
@@ -77,12 +84,17 @@ class SyncNutritionUseCase @Inject constructor(
                             if (written) {
                                 totalRecordsSynced += entries.size
                                 entries.forEach { entry -> syncedEntries.add(Pair(dateStr, entry)) }
+                                Timber.d("SyncNutrition: %s → wrote %d entries to HC", dateStr, entries.size)
+                            } else {
+                                Timber.w("SyncNutrition: %s → HC write failed for %d entries", dateStr, entries.size)
                             }
+                        } else {
+                            Timber.d("SyncNutrition: %s → no entries from API", dateStr)
                         }
                         Unit
                     }
                     is FoodLogResult.NotModified -> {
-                        Timber.d("getFoodLog(%s) not modified, skipping HC write", dateStr)
+                        Timber.d("SyncNutrition: %s → ETag match, skipping HC write", dateStr)
                     }
                 }.let {}
                 successfulDays++
@@ -90,6 +102,7 @@ class SyncNutritionUseCase @Inject constructor(
                     pastDateResults[date] = true
                 }
             } else {
+                Timber.w("SyncNutrition: %s → API error: %s", dateStr, result.exceptionOrNull()?.message)
                 if (date != today) {
                     pastDateResults[date] = false
                 }
@@ -156,12 +169,21 @@ class SyncNutritionUseCase @Inject constructor(
             }
         }
 
-        return when {
+        val syncResult = when {
             successfulDays == 0 -> SyncResult.Error("All sync attempts failed")
             totalEntriesFetched > 0 && totalRecordsSynced == 0 ->
                 SyncResult.Error("Failed to write records to Health Connect")
             else -> SyncResult.Success(totalRecordsSynced, successfulDays)
         }
+        Timber.d(
+            "SyncNutrition: finished — %d/%d days ok, %d entries fetched, %d records written, result=%s",
+            successfulDays,
+            totalDays,
+            totalEntriesFetched,
+            totalRecordsSynced,
+            syncResult::class.simpleName,
+        )
+        return syncResult
     }
 
     private fun parseSyncStartDate(lastSyncedDate: String, maxPastDate: LocalDate): LocalDate {
