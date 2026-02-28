@@ -1,667 +1,549 @@
 # Implementation Plan
 
-**Status:** COMPLETE
-**Branch:** feat/HEA-90-sync-ux-improvements
-**Issues:** HEA-90, HEA-91, HEA-92, HEA-93, HEA-94, HEA-95
-**Created:** 2026-02-27
-**Last Updated:** 2026-02-27
+**Created:** 2026-02-28
+**Source:** Inline request: Blood Pressure Scanner — photograph BP monitor, extract readings via Claude Haiku, write BloodPressureRecord to Health Connect
+**Linear Issues:** [HEA-98](https://linear.app/lw-claude/issue/HEA-98), [HEA-99](https://linear.app/lw-claude/issue/HEA-99), [HEA-100](https://linear.app/lw-claude/issue/HEA-100), [HEA-101](https://linear.app/lw-claude/issue/HEA-101), [HEA-102](https://linear.app/lw-claude/issue/HEA-102), [HEA-103](https://linear.app/lw-claude/issue/HEA-103), [HEA-104](https://linear.app/lw-claude/issue/HEA-104), [HEA-105](https://linear.app/lw-claude/issue/HEA-105), [HEA-106](https://linear.app/lw-claude/issue/HEA-106), [HEA-107](https://linear.app/lw-claude/issue/HEA-107), [HEA-108](https://linear.app/lw-claude/issue/HEA-108), [HEA-109](https://linear.app/lw-claude/issue/HEA-109)
 
-## Summary
+## Context Gathered
 
-Six improvements to the sync experience: fix the misleading sync interval slider (bug), check Health Connect permission on launch (bug), enrich sync result summaries, store and display when sync actually ran, show next scheduled sync time, and show the last 3 synced meals on the main screen.
+### Codebase Analysis
+- **Health Connect pattern:** `HealthConnectNutritionRepository` writes records via `healthConnectClient.insertRecords()`, returns Boolean, catches SecurityException and CancellationException — follow this exactly for BP records
+- **API client pattern:** `FoodScannerApiClient` (Ktor-based, `HttpClient` with OkHttp engine, 30s timeout, kotlinx-serialization) — follow for Anthropic API client
+- **Record mapper pattern:** `NutritionRecordMapper.kt` — standalone `mapTo*Record()` function, uses `Metadata.manualEntry(clientRecordId = "...")`, handles time zones
+- **Settings pattern:** API key in encrypted `SharedPreferences` via `ENCRYPTED_API_KEY`, non-sensitive settings in `DataStore` — follow for Anthropic API key
+- **ViewModel pattern:** `SyncViewModel` uses `MutableStateFlow` + `StateFlow`, `viewModelScope.launch`, collects repository flows in `init`
+- **Screen pattern:** `SyncScreen` uses `Scaffold` + `Column`, `collectAsStateWithLifecycle()`, `hiltViewModel()`
+- **Navigation:** `AppNavigation.kt` — `NavHost` with string routes ("sync", "settings"), simple `composable()` blocks
+- **Test pattern:** JUnit 5 + MockK + Turbine, `viewModelTest` wrapper cancels `viewModelScope`, `StandardTestDispatcher`, `advanceTimeBy`
+- **Domain model pattern:** `FoodLogEntry` — data class with `init` block `require()` validation
+- **Existing permissions:** Only `WRITE_NUTRITION` and `INTERNET` in AndroidManifest
+- **No CameraX or Anthropic dependencies exist** — need to add both
 
-## Issues
+### MCP Context
+- **MCPs used:** Linear (Health Helper team, ID `7b911426-efe2-48cb-93a4-4d69cd4592a6`)
+- **Findings:** No existing BP-related Linear issues. No glucose scanner issues either — all scanner features are in ROADMAP.md only.
 
-### HEA-90: Sync interval slider allows values below WorkManager 15-minute minimum
+## Original Plan
 
-**Priority:** Medium
-**Labels:** Bug
-**Description:** The Settings screen slider allows 5–120 minutes, but WorkManager enforces a 15-minute minimum. Values under 15 are silently clamped by `SyncScheduler.MIN_INTERVAL_MINUTES`, misleading users into thinking sync runs every 5 minutes.
+### Task 1: Add CameraX dependencies and camera feature declaration
+**Linear Issue:** [HEA-98](https://linear.app/lw-claude/issue/HEA-98)
 
-**Acceptance Criteria:**
-- [ ] Slider range is 15–120 minutes with 5-minute increments
-- [ ] Default sync interval is 15 (not 5) in SettingsUiState, PersistedSettings, and DataStoreSettingsRepository
-- [ ] Existing users with interval < 15 stored in DataStore see 15 on the slider (clamped to range start)
+1. Add CameraX version (`1.5.1` or latest stable) to `gradle/libs.versions.toml` under `[versions]`
+2. Add library entries under `[libraries]`: `camera-core`, `camera-camera2`, `camera-lifecycle`, `camera-compose`
+3. Add `implementation` dependencies to `app/build.gradle.kts`
+4. Add `<uses-feature android:name="android.hardware.camera" android:required="false" />` to `app/src/main/AndroidManifest.xml` — `required="false"` because the app functions without camera (nutrition sync still works)
+5. Run verifier — build must compile successfully
 
-### HEA-91: Health Connect permission status not checked on app launch
+**Notes:**
+- CameraX `camera-compose` provides `CameraXViewfinder` composable for Compose-native preview (no `AndroidView` wrapper needed)
+- All CameraX artifacts should use the same version
+- `camera-camera2` is the Camera2 implementation backend
 
-**Priority:** High
-**Labels:** —
-**Description:** `SyncUiState.permissionGranted` defaults to `false` and is only updated when the user taps the permission button. On every app launch, users see "Write Nutrition permission is required" and the Sync Now button is disabled — even when permission has already been granted.
+---
 
-**Acceptance Criteria:**
-- [ ] Permission status checked in `SyncViewModel.init` via `HealthConnectClient.permissionController.getGrantedPermissions()`
-- [ ] If already granted, Sync Now button is immediately enabled on launch
-- [ ] If check fails (exception), falls back to current behavior (show permission prompt)
-- [ ] If HC client is null, `permissionGranted` stays false
+### Task 2: BloodPressureReading domain model and enums
+**Linear Issue:** [HEA-99](https://linear.app/lw-claude/issue/HEA-99)
 
-### HEA-92: Store and display last sync timestamp
-
-**Priority:** Medium
-**Labels:** Feature
-**Description:** Currently shows "Last synced: 2026-02-27" (calendar date range), not when sync actually ran. Users can't tell if sync ran 5 minutes ago or 5 hours ago.
-
-**Acceptance Criteria:**
-- [ ] Actual sync completion timestamp (epoch millis) stored in DataStore
-- [ ] Displayed as relative time: "Just now", "5 min ago", "2 hr ago", "3 days ago"
-- [ ] Refreshes periodically (~30s) while screen is visible
-- [ ] Persisted across app restarts
-- [ ] Timestamp set for both manual sync (via SyncNutritionUseCase) and background sync (SyncWorker calls the same use case)
-
-### HEA-93: Improve sync result summary line
-
-**Priority:** Low
-**Labels:** Improvement
-**Description:** Sync result shows "Synced 12 records" with no context on how many days were covered. The day count is available in `SyncProgress` but discarded after sync completes.
-
-**Acceptance Criteria:**
-- [ ] Success format: "Synced X meals across Y days" (or "1 day" singular)
-- [ ] Zero records format: "No new meals"
-- [ ] Day count comes from `SyncResult.Success` (enriched model), not from transient progress
-
-### HEA-94: Show next scheduled sync time
-
-**Priority:** Low
-**Labels:** Feature
-**Description:** Users don't know when the next background sync will run. No visibility into the WorkManager schedule.
-
-**Acceptance Criteria:**
-- [ ] Shows "Next sync in ~Xm" or "Next sync at HH:MM" on main screen
-- [ ] Shows "Auto-sync: off" when not configured or sync not scheduled
-- [ ] Updates after sync completes or interval changes
-- [ ] Works on API 28+ with fallback from `WorkInfo.nextScheduleTimeMillis`
-
-### HEA-95: Show last 3 synced meals on main screen
-
-**Priority:** Medium
-**Labels:** Feature
-**Description:** After sync, users see "Synced 12 records" with no detail about what was actually synced. Show the 3 most recent synced meals in a compact format, persisted across app restarts.
-
-**Acceptance Criteria:**
-- [ ] Compact format: "Chicken Salad · Lunch · 450 cal"
-- [ ] Shows max 3 meals, most recent first
-- [ ] Persisted in DataStore as JSON string
-- [ ] Visible immediately on app launch (loaded from storage)
-- [ ] Updated after each successful sync
-
-## Prerequisites
-
-- [ ] Build compiles: `./gradlew assembleDebug`
-- [ ] Tests pass: `./gradlew test`
-- [ ] On `main` branch with clean working tree
-
-## Implementation Tasks
-
-### Task 1: Fix sync interval slider minimum and defaults
-
-**Issue:** HEA-90
 **Files:**
-- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModel.kt` (modify — `SettingsUiState` and `PersistedSettings` defaults)
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` (modify — `DEFAULT_SYNC_INTERVAL`)
-- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SettingsScreen.kt` (modify — slider `valueRange` and `steps`)
+- `app/src/main/kotlin/com/healthhelper/app/domain/model/BodyPosition.kt` (create)
+- `app/src/main/kotlin/com/healthhelper/app/domain/model/MeasurementLocation.kt` (create)
+- `app/src/main/kotlin/com/healthhelper/app/domain/model/BloodPressureReading.kt` (create)
+- `app/src/main/kotlin/com/healthhelper/app/domain/model/BloodPressureParseResult.kt` (create)
+- `app/src/test/kotlin/com/healthhelper/app/domain/model/BloodPressureReadingTest.kt` (create)
+
+**TDD Steps:**
+
+1. **RED** — Write tests:
+   - Valid reading (120, 80) with defaults succeeds
+   - Systolic below 60 throws `IllegalArgumentException`
+   - Systolic above 300 throws `IllegalArgumentException`
+   - Diastolic below 30 throws `IllegalArgumentException`
+   - Diastolic above 200 throws `IllegalArgumentException`
+   - Systolic <= diastolic throws `IllegalArgumentException`
+   - All `BodyPosition` enum values exist: STANDING_UP, SITTING_DOWN, LYING_DOWN, RECLINING, UNKNOWN
+   - All `MeasurementLocation` enum values exist: LEFT_UPPER_ARM, RIGHT_UPPER_ARM, LEFT_WRIST, RIGHT_WRIST, UNKNOWN
+   - `BloodPressureParseResult.Success` holds systolic and diastolic integers
+   - `BloodPressureParseResult.Error` holds message string
+   - Run verifier (expect fail)
+
+2. **GREEN** — Implement:
+   - `BodyPosition` enum with values matching Health Connect constants
+   - `MeasurementLocation` enum with values matching Health Connect constants
+   - `BloodPressureReading` data class: `systolic: Int`, `diastolic: Int`, `bodyPosition: BodyPosition = BodyPosition.UNKNOWN`, `measurementLocation: MeasurementLocation = MeasurementLocation.UNKNOWN`, `timestamp: java.time.Instant = Instant.now()`
+   - `init` block with `require(systolic in 60..300)`, `require(diastolic in 30..200)`, `require(systolic > diastolic)`
+   - `BloodPressureParseResult` sealed class: `Success(systolic: Int, diastolic: Int)`, `Error(message: String)`
+   - Follow validation pattern from `FoodLogEntry.kt`
+   - Run verifier (expect pass)
+
+**Defensive Requirements:**
+- Domain models must be pure Kotlin (no Android imports) per CLAUDE.md
+- `timestamp` uses `java.time.Instant` (pure Java, not Android-specific)
+
+---
+
+### Task 3: Blood pressure Health Connect repository
+**Linear Issue:** [HEA-100](https://linear.app/lw-claude/issue/HEA-100)
+
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/domain/repository/BloodPressureRepository.kt` (create)
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodPressureRepository.kt` (create)
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/BloodPressureRecordMapper.kt` (create)
+- `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodPressureRepositoryTest.kt` (create)
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/BloodPressureRecordMapperTest.kt` (create)
+
+**TDD Steps:**
+
+1. **RED** — Write tests:
+   - Repository: `writeBloodPressureRecord` returns false when `HealthConnectClient` is null
+   - Repository: `writeBloodPressureRecord` returns true on successful insert
+   - Repository: `writeBloodPressureRecord` returns false on `SecurityException`
+   - Repository: `writeBloodPressureRecord` returns false on general `Exception`
+   - Repository: `CancellationException` propagates (not caught)
+   - Repository: `getLastReading` returns null when `HealthConnectClient` is null
+   - Repository: `getLastReading` returns null when no records exist
+   - Repository: `getLastReading` returns most recent reading
+   - Repository: `getLastReading` returns null on exception (does not throw)
+   - Mapper: maps `BloodPressureReading` to `BloodPressureRecord` with correct systolic/diastolic `Pressure.millimetersOfMercury()` values
+   - Mapper: maps `BodyPosition` enum values to Health Connect `BODY_POSITION_*` constants
+   - Mapper: maps `MeasurementLocation` enum values to Health Connect `MEASUREMENT_LOCATION_*` constants
+   - Mapper: sets `Metadata.manualEntry()` with clientRecordId prefix `"bloodpressure-"`
+   - Mapper: sets time and zoneOffset from the reading's timestamp
+   - Follow test pattern from `HealthConnectNutritionRepositoryTest.kt`
+   - Run verifier (expect fail)
+
+2. **GREEN** — Implement:
+   - `BloodPressureRepository` interface: `suspend fun writeBloodPressureRecord(reading: BloodPressureReading): Boolean`, `suspend fun getLastReading(): BloodPressureReading?`
+   - `HealthConnectBloodPressureRepository` with `@Inject constructor(healthConnectClient: HealthConnectClient?)` — follow `HealthConnectNutritionRepository` pattern exactly
+   - `getLastReading()`: use `healthConnectClient.readRecords(ReadRecordsRequest(BloodPressureRecord::class, TimeRangeFilter.after(...)))`, sort by time descending, take first, map back to domain model
+   - `mapToBloodPressureRecord()` function — follow `NutritionRecordMapper.kt` pattern
+   - Reverse mapper from `BloodPressureRecord` to `BloodPressureReading` for `getLastReading()`
+   - Add `provideBloodPressureRepository` to `AppModule.kt` — `@Provides @Singleton`
+   - Run verifier (expect pass)
+
+**Defensive Requirements:**
+- `getLastReading()` must catch all exceptions (including SecurityException) and return null — do not let read failures crash the app
+- Use `TimeRangeFilter.after(Instant.now().minus(30, ChronoUnit.DAYS))` for the read query — Health Connect limits reads to 30 days
+- Timeout: `readRecords` call should be wrapped in `withTimeout(10_000L)` to prevent blocking on HC IPC
+
+---
+
+### Task 4: Anthropic API key in settings
+**Linear Issue:** [HEA-101](https://linear.app/lw-claude/issue/HEA-101)
+
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/domain/repository/SettingsRepository.kt` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModel.kt` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SettingsScreen.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepositoryTest.kt` (modify)
 - `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModelTest.kt` (modify)
 
 **TDD Steps:**
 
-1. **RED** — Update default interval test:
-   - In `SettingsViewModelTest`, change the `default SettingsUiState has syncInterval of 5` test to assert `syncInterval == 15`
-   - Run: `./gradlew test --tests "com.healthhelper.app.presentation.viewmodel.SettingsViewModelTest"`
-   - Verify: fails (default is still 5)
-
-2. **GREEN** — Apply fixes:
-   - Change `SettingsUiState.syncInterval` default from `5` to `15`
-   - Change `SettingsViewModel.PersistedSettings.syncInterval` default from `5` to `15`
-   - Change `DataStoreSettingsRepository.DEFAULT_SYNC_INTERVAL` from `5` to `15`
-   - Change slider in `SettingsScreen.kt`: `valueRange = 15f..120f`, `steps = 20`
-   - Run tests: verify passes
-
-3. **REFACTOR** — Keep `SyncScheduler.MIN_INTERVAL_MINUTES` clamp as a defensive safety net. Do not remove it.
-
-**Defensive Requirements:**
-- Existing users with `syncInterval < 15` in DataStore will read a value < 15. The Compose Slider clamps displayed position to range start (15f). `SyncScheduler.MIN_INTERVAL_MINUTES` ensures WorkManager interval is never < 15 regardless.
-- No new error paths introduced.
-
-**Notes:**
-- Slider `steps = 20` gives 22 total discrete values: 15, 20, 25, ..., 120 (5-min increments). Formula: `(120 - 15) / 5 + 1 = 22 values`, `steps = 22 - 2 = 20`.
-- Reference: `SettingsScreen.kt:111-117` for current slider, `DataStoreSettingsRepository.kt:32` for default
-
----
-
-### Task 2: Check Health Connect permission on app launch
-
-**Issue:** HEA-91
-**Files:**
-- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` (modify — init block)
-- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt` (modify)
-
-**TDD Steps:**
-
-1. **RED** — Write tests for permission check on init:
-   - Test: `permissionGranted is true on init when permission already granted` — mock `healthConnectClient.permissionController.getGrantedPermissions()` to return a set containing the write NutritionRecord permission, create ViewModel, assert `permissionGranted == true`
-   - Test: `permissionGranted stays false on init when permission not granted` — mock `getGrantedPermissions()` to return empty set, assert `permissionGranted == false`
-   - Test: `permissionGranted stays false when getGrantedPermissions throws` — mock to throw RuntimeException, assert `permissionGranted == false` (graceful fallback)
-   - Run: `./gradlew test --tests "com.healthhelper.app.presentation.viewmodel.SyncViewModelTest"`
-   - Verify: new tests fail
-
-2. **GREEN** — Add permission check in `SyncViewModel.init`:
-   - After the existing `healthConnectAvailable` update, launch a new coroutine that:
-     - Guards on `healthConnectClient != null`
-     - Calls `healthConnectClient.permissionController.getGrantedPermissions()`
-     - Checks if result contains `HealthPermission.getWritePermission(NutritionRecord::class)`
-     - Updates `_uiState` with `permissionGranted = true` or `false`
-     - Wraps in try-catch: on any exception, log with `Timber.e` and leave `permissionGranted = false`
-   - Run tests: verify passes
-
-3. **REFACTOR** — Consider extracting the permission constant to a companion object on `SyncViewModel` to share with `SyncScreen.kt:38` (currently defined as `NUTRITION_PERMISSION` private val in SyncScreen)
-
-**Defensive Requirements:**
-- `getGrantedPermissions()` is a suspend function that can throw if Health Connect service is unavailable or the app process is in a bad state. Must wrap in try-catch.
-- If `healthConnectClient` is null, skip the check entirely — do not attempt any calls.
-- The permission check must not block other init work (settings flows, sync scheduling). Run in a separate coroutine.
-
-**Notes:**
-- Existing `onPermissionResult()` method remains — still needed for the launcher callback when user manually grants/revokes permission.
-- The HealthConnectClient mock in tests is already `mockk(relaxed = true)` — the `permissionController` mock needs explicit setup for `getGrantedPermissions()`.
-- Reference: `SyncScreen.kt:38` for the permission constant, `SyncViewModel.kt:47-86` for existing init coroutines
-
----
-
-### Task 3: Enrich sync result with day count
-
-**Issue:** HEA-93
-**Files:**
-- `app/src/main/kotlin/com/healthhelper/app/domain/model/SyncResult.kt` (modify)
-- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt` (modify)
-- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` (modify)
-- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt` (modify)
-- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt` (modify)
-
-**TDD Steps:**
-
-1. **RED** — Update model and tests:
-   - Add `daysProcessed: Int` parameter to `SyncResult.Success`
-   - All existing tests referencing `SyncResult.Success(recordCount)` will fail to compile — update them to `SyncResult.Success(recordCount, expectedDays)`
-   - Add use case test: `singleDaySync` asserts `result.daysProcessed == 1`
-   - Add use case test: `multiDaySync` with 2 past days asserts `result.daysProcessed == 2`
-   - Add ViewModel test: result formatted as "Synced X meals across Y days"
-   - Add ViewModel test: "No new meals" when `recordsSynced == 0` and result is Success
-   - Add ViewModel test: singular "1 day" when `daysProcessed == 1`
-   - Run: `./gradlew test`
-   - Verify: tests fail
+1. **RED** — Write tests:
+   - Repository: `anthropicApiKeyFlow` emits empty string by default
+   - Repository: `setAnthropicApiKey` stores value and emits it
+   - ViewModel: initial state has empty `anthropicApiKey`
+   - ViewModel: `updateAnthropicApiKey` sets `hasUnsavedChanges` to true
+   - ViewModel: `save()` calls `settingsRepository.setAnthropicApiKey()`
+   - ViewModel: `reset()` restores persisted anthropicApiKey
+   - All existing tests that mock `SettingsRepository` must add: `every { settingsRepository.anthropicApiKeyFlow } returns flowOf("")`
+   - Run verifier (expect fail)
 
 2. **GREEN** — Implement:
-   - Change `SyncResult.Success` from `data class Success(val recordsSynced: Int)` to `data class Success(val recordsSynced: Int, val daysProcessed: Int)`
-   - In `SyncNutritionUseCase.invoke()`, pass `successfulDays` as `daysProcessed` in the return: `SyncResult.Success(totalRecordsSynced, successfulDays)`
-   - In `SyncViewModel.triggerSync()`, update result message formatting:
-     - `recordsSynced == 0` → "No new meals"
-     - `daysProcessed == 1` → "Synced {recordsSynced} meals across 1 day"
-     - `daysProcessed > 1` → "Synced {recordsSynced} meals across {daysProcessed} days"
-   - Run tests: verify passes
-
-3. **REFACTOR** — Verify all test files updated consistently for the new `SyncResult.Success` constructor
+   - Add to `SettingsRepository` interface: `val anthropicApiKeyFlow: Flow<String>`, `suspend fun setAnthropicApiKey(value: String)`
+   - Add to `DataStoreSettingsRepository`: `ENCRYPTED_ANTHROPIC_KEY = "anthropic_api_key"` constant, `anthropicApiKeyFlow` using `callbackFlow` on `encryptedPrefs` (same pattern as `apiKeyFlow`), `setAnthropicApiKey` via `encryptedPrefs.edit().putString().commit()`
+   - Add `anthropicApiKey: String = ""` to `SettingsUiState`
+   - Add to `SettingsViewModel`: `updateAnthropicApiKey()` function, include in `save()` and `reset()`, add to `PersistedSettings`, include `anthropicApiKeyFlow` in the `combine` collector
+   - Add `OutlinedTextField` to `SettingsScreen` for "Anthropic API Key" with same password visibility toggle pattern as existing API Key field
+   - Run verifier (expect pass)
 
 **Defensive Requirements:**
-- `daysProcessed` is always >= 0. It represents days where the API returned successfully, not total days attempted.
-- No new error paths — purely a data enrichment change.
+- Anthropic API key stored in `EncryptedSharedPreferences` (same as Food Scanner API key) — never in plaintext DataStore
+- `callbackFlow` must register/unregister `OnSharedPreferenceChangeListener` — follow `apiKeyFlow` pattern exactly
+- `save()` must handle `setAnthropicApiKey` failure independently of other fields (same try-catch pattern as existing save)
 
 **Notes:**
-- The `successfulDays` variable already exists in `SyncNutritionUseCase.kt:44` — just needs to be passed to the return value.
-- Reference: `SyncNutritionUseCase.kt:102-107` for current return, `SyncViewModel.kt:101-105` for current formatting
+- All test files mocking `SettingsRepository` need the new flow mock added: `SyncViewModelTest`, `SyncNutritionUseCaseTest`, `SettingsViewModelTest`, `DataStoreSettingsRepositoryTest`
+- Reference: `DataStoreSettingsRepository.kt:80-94` for `apiKeyFlow` pattern, `SettingsViewModel.kt:90-135` for save pattern
 
 ---
 
-### Task 4: Store last sync timestamp in repository
+### Task 5: AnthropicApiClient for blood pressure image analysis
+**Linear Issue:** [HEA-102](https://linear.app/lw-claude/issue/HEA-102)
 
-**Issue:** HEA-92
 **Files:**
-- `app/src/main/kotlin/com/healthhelper/app/domain/repository/SettingsRepository.kt` (modify)
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` (modify)
-- `app/src/test/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepositoryTest.kt` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/data/api/AnthropicApiClient.kt` (create)
+- `app/src/main/kotlin/com/healthhelper/app/data/api/dto/AnthropicDtos.kt` (create)
+- `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/data/api/AnthropicApiClientTest.kt` (create)
 
 **TDD Steps:**
 
-1. **RED** — Write repository tests:
-   - Test: `lastSyncTimestampFlow emits 0L by default`
-   - Test: `setLastSyncTimestamp stores value and emits it`
-   - Run: `./gradlew test --tests "com.healthhelper.app.data.repository.DataStoreSettingsRepositoryTest"`
-   - Verify: fails (property doesn't exist)
+1. **RED** — Write tests:
+   - Returns `BloodPressureParseResult.Success(120, 80)` when Haiku responds with valid systolic/diastolic
+   - Returns `BloodPressureParseResult.Error` when Haiku response indicates unreadable display
+   - Returns `BloodPressureParseResult.Error` on HTTP 401 (bad API key)
+   - Returns `BloodPressureParseResult.Error` on HTTP 429 (rate limited)
+   - Returns `BloodPressureParseResult.Error` on network timeout
+   - Returns `BloodPressureParseResult.Error` on malformed response JSON
+   - Validates parsed systolic is in 60-300 range, diastolic in 30-200, systolic > diastolic — otherwise returns Error
+   - CancellationException propagates
+   - Use `ktor-client-mock` (already in test deps) to mock HTTP responses — follow `FoodScannerApiClientTest.kt` pattern
+   - Run verifier (expect fail)
 
 2. **GREEN** — Implement:
-   - Add to `SettingsRepository` interface:
-     - `val lastSyncTimestampFlow: Flow<Long>`
-     - `suspend fun setLastSyncTimestamp(value: Long)`
-   - Add to `DataStoreSettingsRepository`:
-     - `LAST_SYNC_TIMESTAMP = longPreferencesKey("last_sync_timestamp")` in companion object
-     - `lastSyncTimestampFlow = dataStore.data.map { it[LAST_SYNC_TIMESTAMP] ?: 0L }`
-     - `setLastSyncTimestamp` via `dataStore.edit { it[LAST_SYNC_TIMESTAMP] = value }`
-   - Run tests: verify passes
-
-3. **REFACTOR** — Update all mock setups across test files to provide a default for `lastSyncTimestampFlow`: `every { settingsRepository.lastSyncTimestampFlow } returns flowOf(0L)`
+   - Create `@Serializable` DTO classes for Anthropic Messages API request/response in `AnthropicDtos.kt`
+   - `AnthropicApiClient` with `@Inject constructor(httpClient: HttpClient)`:
+     - `suspend fun parseBloodPressureImage(apiKey: String, imageBytes: ByteArray): BloodPressureParseResult`
+     - POST to `https://api.anthropic.com/v1/messages`
+     - Headers: `x-api-key`, `anthropic-version: 2023-06-01`, `content-type: application/json`
+     - Body: model `claude-haiku-4-5-20251001`, max_tokens 256, messages with image (base64-encoded JPEG) and text prompt
+     - System prompt instructs Haiku to: identify systolic (largest/topmost number), diastolic (middle number), ignore pulse/heart rate, return JSON `{"systolic": N, "diastolic": N}` or `{"error": "reason"}`
+     - Parse response text as JSON, validate ranges, return `BloodPressureParseResult`
+   - Add `provideAnthropicApiClient` to `AppModule.kt`
+   - Run verifier (expect pass)
 
 **Defensive Requirements:**
-- `0L` as default clearly indicates "never synced" — the UI layer must treat 0L as "no timestamp available" and show nothing.
-- DataStore handles corruption internally; `dataStore.data.map` won't throw.
+- API key must never be logged — only log "Authentication failed" on 401, not the key value
+- Timeout: 30s (inherited from existing HttpClient config in AppModule)
+- CancellationException must propagate (follow `FoodScannerApiClient.kt` pattern)
+- Error messages returned to caller must be sanitized (generic user-facing text, raw error logged via Timber only)
+- Base64 encoding of image bytes should happen inside the client
+- Validate response JSON defensively — malformed/missing fields return Error, not crash
 
 **Notes:**
-- Follow exact pattern of `syncIntervalFlow` at `DataStoreSettingsRepository.kt:84-85`
-- Need `longPreferencesKey` import from `androidx.datastore.preferences.core`
-- All test files that mock `SettingsRepository` must be updated: `SyncViewModelTest`, `SyncNutritionUseCaseTest`, `SettingsViewModelTest`, `DataStoreSettingsRepositoryTest`
+- The existing `HttpClient` in AppModule has `ContentNegotiation` with `Json { ignoreUnknownKeys = true }` and `HttpTimeout { requestTimeoutMillis = 30_000L }` — reuse for Anthropic calls
+- Reference: `FoodScannerApiClient.kt` for error handling patterns, `FoodScannerApiClientTest.kt` for Ktor mock client testing
+- Image should be resized to max 1568px on long edge before sending (reduces tokens and latency without losing accuracy)
 
 ---
 
-### Task 5: Save sync timestamp and display relative time
+### Task 6: Blood pressure use cases
+**Linear Issue:** [HEA-103](https://linear.app/lw-claude/issue/HEA-103)
 
-**Issue:** HEA-92
 **Files:**
-- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt` (modify)
-- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` (modify — SyncUiState + init + helper)
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/WriteBloodPressureReadingUseCase.kt` (create)
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/GetLastBloodPressureReadingUseCase.kt` (create)
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/WriteBloodPressureReadingUseCaseTest.kt` (create)
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/GetLastBloodPressureReadingUseCaseTest.kt` (create)
+
+**TDD Steps:**
+
+1. **RED** — Write tests for `WriteBloodPressureReadingUseCase`:
+   - Returns true when repository write succeeds
+   - Returns false when repository write fails
+   - Passes the `BloodPressureReading` domain model to repository
+   - Test with various valid readings (different body positions, measurement locations)
+   - Run verifier (expect fail)
+
+2. **GREEN** — Implement `WriteBloodPressureReadingUseCase`:
+   - `@Inject constructor(bloodPressureRepository: BloodPressureRepository)`
+   - `suspend fun invoke(reading: BloodPressureReading): Boolean` — delegates to `repository.writeBloodPressureRecord(reading)`
+   - Run verifier (expect pass)
+
+3. **RED** — Write tests for `GetLastBloodPressureReadingUseCase`:
+   - Returns reading when repository has data
+   - Returns null when repository returns null
+   - Returns null when repository throws (does not propagate exception)
+   - Run verifier (expect fail)
+
+4. **GREEN** — Implement `GetLastBloodPressureReadingUseCase`:
+   - `@Inject constructor(bloodPressureRepository: BloodPressureRepository)`
+   - `suspend fun invoke(): BloodPressureReading?` — delegates to `repository.getLastReading()`, wraps in try-catch returning null on failure
+   - Run verifier (expect pass)
+
+**Defensive Requirements:**
+- `GetLastBloodPressureReadingUseCase` must not throw — catch all exceptions, log with Timber, return null
+- Both use cases are pure domain layer — no Android imports
+
+---
+
+### Task 7: Update AndroidManifest permissions and upfront permission request
+**Linear Issue:** [HEA-104](https://linear.app/lw-claude/issue/HEA-104)
+
+**Files:**
+- `app/src/main/AndroidManifest.xml` (modify)
 - `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SyncScreen.kt` (modify)
-- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` (modify)
 - `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt` (modify)
 
 **TDD Steps:**
 
 1. **RED** — Write tests:
-   - Use case test: `invoke sets lastSyncTimestamp on successful sync` — verify `settingsRepository.setLastSyncTimestamp()` is called with a value > 0
-   - Use case test: `invoke does not set lastSyncTimestamp when all days fail` — verify `setLastSyncTimestamp` is NOT called when result is Error (all days failed)
-   - ViewModel test: `lastSyncTime formats recent timestamp as relative time` — mock `lastSyncTimestampFlow` to emit `System.currentTimeMillis() - 300_000` (5 min ago), assert `lastSyncTime` contains "min ago"
-   - ViewModel test: `lastSyncTime is empty when timestamp is 0` — assert empty string when no sync has occurred
-   - Run: `./gradlew test`
-   - Verify: fails
+   - ViewModel: permission check on init verifies ALL Health Connect permissions (WRITE_NUTRITION, WRITE_BLOOD_PRESSURE, READ_BLOOD_PRESSURE)
+   - ViewModel: `permissionGranted` is true only when ALL required HC permissions are granted
+   - ViewModel: `cameraPermissionGranted` field tracks camera permission separately
+   - Run verifier (expect fail)
 
 2. **GREEN** — Implement:
-   - In `SyncNutritionUseCase.invoke()`, after the sync loop and before the return statement, call `settingsRepository.setLastSyncTimestamp(System.currentTimeMillis())` when `successfulDays > 0`
-   - Add `lastSyncTime: String = ""` to `SyncUiState`
-   - Create a private helper function `formatRelativeTime(timestampMillis: Long): String` in the SyncViewModel file:
-     - `0L` → `""`
-     - `< 60 seconds ago` → `"Just now"`
-     - `< 60 minutes` → `"X min ago"`
-     - `< 24 hours` → `"X hr ago"`
-     - `< 7 days` → `"X days ago"`
-     - `>= 7 days` → date string (e.g., "Feb 20")
-   - In `SyncViewModel.init`, collect `settingsRepository.lastSyncTimestampFlow` and format to relative time string in `_uiState.lastSyncTime`
-   - Add periodic refresh: launch a coroutine with `while(isActive) { delay(30_000); re-format the timestamp }` to keep "5 min ago" fresh
-   - In `SyncScreen`, display `uiState.lastSyncTime` when non-empty. This replaces or supplements the existing "Last synced: {lastSyncedDate}" display
-   - Run tests: verify passes
-
-3. **REFACTOR** — Ensure the periodic refresh coroutine is in `viewModelScope` for automatic cancellation
+   - Add to `AndroidManifest.xml`: `<uses-permission android:name="android.permission.health.WRITE_BLOOD_PRESSURE" />`, `<uses-permission android:name="android.permission.health.READ_BLOOD_PRESSURE" />`, `<uses-permission android:name="android.permission.CAMERA" />`
+   - Update `SyncViewModel` companion object: define all required HC permissions as a `Set` (WRITE_NUTRITION, WRITE_BLOOD_PRESSURE, READ_BLOOD_PRESSURE)
+   - Update permission check in `SyncViewModel.init`: check all HC permissions are granted (current check only verifies WRITE_NUTRITION)
+   - Add `cameraPermissionGranted: Boolean = false` to `SyncUiState`
+   - Update `SyncScreen`: request ALL HC permissions at once via `permissionLauncher.launch(allHcPermissions)`, add separate camera permission launcher using `ActivityResultContracts.RequestPermission()` for `CAMERA`, trigger both on first launch via `LaunchedEffect`
+   - Update `onPermissionResult` to accept the full set of granted permissions and check all required ones
+   - Run verifier (expect pass)
 
 **Defensive Requirements:**
-- `System.currentTimeMillis()` in the use case makes deterministic testing harder. Use `coVerify { setLastSyncTimestamp(match { it > 0 }) }` for assertions.
-- The periodic refresh coroutine must be in `viewModelScope` to auto-cancel when ViewModel is cleared.
-- Handle edge cases in `formatRelativeTime`: timestamp `0L` (never synced), future timestamps (clock skew — treat as "Just now"), very old timestamps (show date).
-- Wrap `setLastSyncTimestamp` in try-catch in the use case — do not let timestamp storage failure break the sync flow. Log with Timber on failure.
+- If any HC permission is denied, show which permissions are still needed
+- Camera permission failure should not block the rest of the app — only the "Log Blood Pressure" button should be disabled
+- Permission check in init must handle `getGrantedPermissions()` throwing — leave all permissions false on failure (existing pattern)
+- Both permission dialogs should show on first launch: HC permissions first, then camera permission
 
 **Notes:**
-- `formatRelativeTime` uses pure Kotlin (`System.currentTimeMillis()` and arithmetic) — no Android `DateUtils` dependency, so it's testable in JUnit.
-- The periodic refresh ensures "5 min ago" becomes "6 min ago" etc. while screen is visible.
-- Reference: `SyncViewModel.kt:47-69` for existing init flow collection pattern
-- Reference: `SyncNutritionUseCase.kt:98-100` for where to add the timestamp save (after contiguous date logic)
+- Health Connect permissions use `PermissionController.createRequestPermissionResultContract()` — supports requesting multiple HC permissions in one call
+- Camera permission uses standard Android `ActivityResultContracts.RequestPermission()`
+- Reference: `SyncScreen.kt:50-54` for current permission launcher, `SyncViewModel.kt:70-85` for current permission check
 
 ---
 
-### Task 6: Create SyncedMealSummary model and repository storage
+### Task 8: Restructure home screen with fixed sections and last BP reading
+**Linear Issue:** [HEA-105](https://linear.app/lw-claude/issue/HEA-105)
 
-**Issue:** HEA-95
 **Files:**
-- `app/src/main/kotlin/com/healthhelper/app/domain/model/SyncedMealSummary.kt` (create)
-- `app/src/main/kotlin/com/healthhelper/app/domain/repository/SettingsRepository.kt` (modify)
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` (modify)
-- `app/src/test/kotlin/com/healthhelper/app/domain/model/SyncedMealSummaryTest.kt` (create)
-- `app/src/test/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepositoryTest.kt` (modify)
-
-**TDD Steps:**
-
-1. **RED** — Write model and repository tests:
-   - Model test: `SyncedMealSummary holds foodName, mealType, and calories`
-   - Model test: `SyncedMealSummary requires non-negative calories` — verify `IllegalArgumentException` on negative calories
-   - Model test: `SyncedMealSummary requires non-blank foodName` — verify `IllegalArgumentException` on blank name
-   - Repository test: `lastSyncedMealsFlow emits empty list by default`
-   - Repository test: `setLastSyncedMeals stores meals and emits them`
-   - Repository test: `setLastSyncedMeals with empty list clears stored meals`
-   - Run: `./gradlew test`
-   - Verify: fails
-
-2. **GREEN** — Implement:
-   - Create `SyncedMealSummary` data class in `domain/model/`:
-     - `foodName: String` — name of the food item
-     - `mealType: MealType` — reuses existing `MealType` enum
-     - `calories: Int` — rounded from `FoodLogEntry.calories`
-     - `init` block: `require(calories >= 0)`, `require(foodName.isNotBlank())`
-   - Add to `SettingsRepository` interface:
-     - `val lastSyncedMealsFlow: Flow<List<SyncedMealSummary>>`
-     - `suspend fun setLastSyncedMeals(meals: List<SyncedMealSummary>)`
-   - In `DataStoreSettingsRepository`:
-     - Add `LAST_SYNCED_MEALS = stringPreferencesKey("last_synced_meals")` to companion object
-     - Create an internal `@Serializable` DTO data class (e.g., `SyncedMealDto`) with `foodName: String`, `mealType: String`, `calories: Int` for JSON serialization
-     - Implement `setLastSyncedMeals`: map domain models to DTOs, serialize to JSON via `Json.encodeToString()`, store in DataStore
-     - Implement `lastSyncedMealsFlow`: read from DataStore, deserialize JSON, map DTOs back to domain models. On parse failure, return empty list (try-catch around deserialization)
-   - Run tests: verify passes
-
-3. **REFACTOR** — Ensure JSON deserialization handles corrupt/empty data gracefully with try-catch returning `emptyList()`
-
-**Defensive Requirements:**
-- JSON deserialization must not throw on corrupt data. Wrap in try-catch and return empty list.
-- `SyncedMealSummary.calories` must be non-negative (validated in init block).
-- `SyncedMealSummary.foodName` must not be blank.
-- Empty string in DataStore → empty list (no meals stored yet).
-
-**Notes:**
-- `kotlinx-serialization-json` is already in `libs.versions.toml:55` and the `kotlin-serialization` plugin is declared at `libs.versions.toml:68`
-- The `@Serializable` DTO stays in the data layer (not the domain model), following the pattern in `data/api/dto/FoodLogResponse.kt`
-- `MealType` is serialized as its `name` string in the DTO, deserialized via `MealType.valueOf()`
-- Reference: `FoodLogEntry.kt` for domain model validation pattern, `FoodLogResponse.kt` for `@Serializable` DTO pattern
-- All test files mocking `SettingsRepository` must add: `every { settingsRepository.lastSyncedMealsFlow } returns flowOf(emptyList())`
-
----
-
-### Task 7: Collect and persist last 3 meals during sync
-
-**Issue:** HEA-95
-**Files:**
-- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt` (modify)
-- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt` (modify)
-
-**TDD Steps:**
-
-1. **RED** — Write use case tests for meal collection:
-   - Test: `invoke persists last 3 meals sorted by date descending then time descending` — sync 2 days with 2 entries each, verify `setLastSyncedMeals` called with the 3 most recent entries
-   - Test: `invoke persists fewer than 3 meals when fewer were synced` — sync with 1 entry total, verify list has 1 item
-   - Test: `invoke sets empty meals list when no records synced` — sync with 0 entries, verify `setLastSyncedMeals(emptyList())` called
-   - Test: `invoke maps FoodLogEntry to SyncedMealSummary correctly` — verify foodName, mealType, and `calories.toInt()` rounding
-   - Test: `invoke handles null time in FoodLogEntry for meal sorting` — entries without time sort after entries with time on the same date
-   - Run: `./gradlew test --tests "com.healthhelper.app.domain.usecase.SyncNutritionUseCaseTest"`
-   - Verify: fails
-
-2. **GREEN** — Implement:
-   - In `SyncNutritionUseCase.invoke()`, declare a list to accumulate synced entries with their date: `val syncedEntries = mutableListOf<Pair<String, FoodLogEntry>>()`
-   - Inside the sync loop, when `result.isSuccess && entries.isNotEmpty()`, add each entry paired with `dateStr`
-   - After the sync loop (before the return), sort `syncedEntries` by date descending then time descending, take first 3
-   - Map to `SyncedMealSummary(entry.foodName, entry.mealType, entry.calories.toInt())`
-   - Call `settingsRepository.setLastSyncedMeals(summaries)`
-   - Run tests: verify passes
-
-3. **REFACTOR** — Consider optimizing: since dates are processed newest-first, stop accumulating after collecting 3 entries to avoid holding all entries in memory for large syncs
-
-**Defensive Requirements:**
-- `FoodLogEntry.time` is nullable — entries without time should sort after entries with time for the same date
-- `FoodLogEntry.calories` is Double — round to Int with `toInt()` (truncation is acceptable for display)
-- Wrap `setLastSyncedMeals` in try-catch — do not let meal persistence failure break the sync flow. Log error with Timber.
-
-**Notes:**
-- The sync loop processes dates newest-first (today, then backwards), so the first day's entries are likely the most recent meals
-- Reference: `SyncNutritionUseCase.kt:49-86` for the sync loop where entries are available
-- `FoodLogEntry` fields needed: `foodName`, `mealType`, `calories`, `time`
-
----
-
-### Task 8: Display synced meals on main screen
-
-**Issue:** HEA-95
-**Files:**
-- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` (modify — SyncUiState)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` (modify)
 - `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SyncScreen.kt` (modify)
 - `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt` (modify)
+
+**TDD Steps:**
+
+1. **RED** — Write tests:
+   - ViewModel: `lastBpReading` is null by default
+   - ViewModel: `lastBpReading` populated after init loads from `GetLastBloodPressureReadingUseCase`
+   - ViewModel: `lastBpReadingDisplay` formats as "120/80 mmHg" when reading exists
+   - ViewModel: `lastBpReadingTime` formats as relative time (e.g., "2 hr ago") when reading exists
+   - ViewModel: `refreshLastBpReading()` reloads from use case (called after returning from BP flow)
+   - Run verifier (expect fail)
+
+2. **GREEN** — Implement:
+   - Add `GetLastBloodPressureReadingUseCase` as dependency to `SyncViewModel` constructor
+   - Add to `SyncUiState`: `lastBpReading: BloodPressureReading? = null`, `lastBpReadingDisplay: String = ""`, `lastBpReadingTime: String = ""`
+   - In `SyncViewModel.init`, launch coroutine to load last BP reading and format for display
+   - Add `refreshLastBpReading()` function that re-loads the last reading
+   - Restructure `SyncScreen` layout:
+     - Wrap content in `Column` with `verticalScroll(rememberScrollState())`
+     - **Section 1: Nutrition Sync** — wrap existing sync content in a `Card` or `Surface` with `Modifier.fillMaxWidth()` and a minimum height. Include: permission status, configuration status, last sync time, next sync time, sync result, recent meals, sync button
+     - **Section 2: Blood Pressure** — new `Card` or `Surface` with `Modifier.fillMaxWidth()` and minimum height. Include: last reading display ("120/80 mmHg · Sitting · 2 hr ago") or "No readings yet" placeholder, "Log Blood Pressure" button (enabled when HC permissions + camera permission granted)
+     - Both sections always visible with fixed vertical space allocation, even when empty
+   - Run verifier (expect pass)
+
+**Defensive Requirements:**
+- `GetLastBloodPressureReadingUseCase` is nullable in practice (returns null if no readings) — handle gracefully
+- Periodic refresh of `lastBpReadingTime` reuses existing `formatRelativeTime()` helper
+- "Log Blood Pressure" button enabled only when `permissionGranted && cameraPermissionGranted` — both HC and camera permissions required
+
+**Notes:**
+- The `SyncViewModel` constructor grows by one dependency (`GetLastBloodPressureReadingUseCase`) — update all test `createViewModel()` helpers
+- Consider `Modifier.defaultMinSize(minHeight = X.dp)` for section cards to maintain fixed space
+- Reference: `SyncScreen.kt` for existing layout, `SyncViewModel.kt` for existing state management
+
+---
+
+### Task 9: Camera capture screen with CameraX and Haiku integration
+**Linear Issue:** [HEA-106](https://linear.app/lw-claude/issue/HEA-106)
+
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/CameraCaptureViewModel.kt` (create)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt` (create)
+- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/CameraCaptureViewModelTest.kt` (create)
 
 **TDD Steps:**
 
 1. **RED** — Write ViewModel tests:
-   - Test: `lastSyncedMeals populated from repository flow` — mock `lastSyncedMealsFlow` to emit 3 meals, assert `SyncUiState.lastSyncedMeals` contains them
-   - Test: `lastSyncedMeals is empty list by default` — assert empty when no meals stored
-   - Run: `./gradlew test --tests "com.healthhelper.app.presentation.viewmodel.SyncViewModelTest"`
-   - Verify: fails
+   - Initial state: `isCapturing = false`, `isProcessing = false`, `error = null`
+   - `onPhotoCaptured(bytes)` sets `isProcessing = true`, calls `AnthropicApiClient`
+   - On `BloodPressureParseResult.Success`: sets `navigateToConfirmation` event with systolic/diastolic values
+   - On `BloodPressureParseResult.Error`: sets `error` with message, `isProcessing = false`
+   - `onRetake()` clears error, returns to camera state
+   - `onPhotoCaptured` while already processing is ignored (guard)
+   - API call failure (network error) shows generic error message, raw error logged
+   - CancellationException propagates
+   - Run verifier (expect fail)
 
 2. **GREEN** — Implement:
-   - Add `lastSyncedMeals: List<SyncedMealSummary> = emptyList()` to `SyncUiState`
-   - In `SyncViewModel.init`, collect `settingsRepository.lastSyncedMealsFlow` and update `_uiState` with the meals list
-   - In `SyncScreen`, add a "Recent syncs" section below the sync result area:
-     - Only display when `lastSyncedMeals` is non-empty
-     - Show header text: "Recent syncs:"
-     - For each meal, display: `"{foodName} · {MealType display name} · {calories} cal"`
-     - Format `MealType` for display: `name.lowercase().replaceFirstChar { it.uppercase() }` (e.g., "Breakfast", "Lunch")
-     - Use `Text` composables with `bodySmall` or `bodyMedium` typography
-   - Run tests: verify passes
-
-3. **REFACTOR** — Ensure the UI section is visually compact (no cards, no excessive padding)
+   - `CameraCaptureUiState` data class: `isProcessing: Boolean = false`, `error: String? = null`
+   - `CameraCaptureViewModel` with `@Inject constructor(anthropicApiClient: AnthropicApiClient, settingsRepository: SettingsRepository)`
+   - Navigation event: `navigateToConfirmation: SharedFlow<Pair<Int, Int>>` (systolic, diastolic) — one-shot event via `MutableSharedFlow`
+   - `onPhotoCaptured(imageBytes: ByteArray)`: guard on not already processing, set processing, launch coroutine to call `anthropicApiClient.parseBloodPressureImage(apiKey, imageBytes)`, handle result
+   - `onRetake()`: clear error state
+   - `CameraCaptureScreen` composable:
+     - CameraX preview using `CameraXViewfinder` composable (or `PreviewView` via `AndroidView` if `camera-compose` API differs)
+     - `ImageCapture` use case for photo capture
+     - Shutter button at bottom
+     - When processing: overlay with loading indicator
+     - When error: error message + "Retake" button
+     - Collect `navigateToConfirmation` flow for navigation
+   - Run verifier (expect pass)
 
 **Defensive Requirements:**
-- Empty list → section not displayed at all (no empty "Recent syncs:" header)
-- Long food names handled by Compose text overflow (single-line with ellipsis via `maxLines = 1` and `overflow = TextOverflow.Ellipsis`)
+- API key read from `settingsRepository.anthropicApiKeyFlow` — must be non-empty before calling API. If empty, show "Configure Anthropic API key in Settings"
+- Image bytes should be resized before sending to API (max 1568px on long edge) to control token cost
+- `isProcessing` guard prevents double-tap of shutter sending two API calls
+- Error messages shown to user must be generic — raw API errors logged via Timber only
+- CameraX lifecycle must be properly bound to the composable's lifecycle
 
 **Notes:**
-- The meals flow can be collected separately from the existing settings `combine` in `SyncViewModel.init`, or added to it. A separate collector is simpler and avoids changing the existing combine signature.
-- Reference: `SyncScreen.kt:107-113` for conditional display pattern
-- Reference: `SyncScreen.kt:84-101` for existing content layout structure
+- `CameraX` setup: `ProcessCameraProvider` → bind `Preview` + `ImageCapture` use cases
+- `ImageCapture.takePicture()` with `OutputFileOptions` for temp file, then read bytes
+- Navigation event pattern: `MutableSharedFlow<T>(replay = 0, extraBufferCapacity = 1)` with `tryEmit()` — one-shot navigation events
 
 ---
 
-### Task 9: Show next scheduled sync time
+### Task 10: Blood pressure confirmation screen
+**Linear Issue:** [HEA-107](https://linear.app/lw-claude/issue/HEA-107)
 
-**Issue:** HEA-94
 **Files:**
-- `app/src/main/kotlin/com/healthhelper/app/data/sync/SyncScheduler.kt` (modify)
-- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` (modify — SyncUiState + init)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/BpConfirmationViewModel.kt` (create)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/BpConfirmationScreen.kt` (create)
+- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/BpConfirmationViewModelTest.kt` (create)
+
+**TDD Steps:**
+
+1. **RED** — Write ViewModel tests:
+   - Initial state populated from constructor args (systolic, diastolic)
+   - `updateSystolic(value)` updates state, validates range 60-300
+   - `updateDiastolic(value)` updates state, validates range 30-200
+   - `isSaveEnabled` is false when systolic <= diastolic
+   - `isSaveEnabled` is false when systolic out of range
+   - `isSaveEnabled` is false when diastolic out of range
+   - `isSaveEnabled` is true when all validations pass
+   - `updateBodyPosition(position)` updates state
+   - `updateMeasurementLocation(location)` updates state
+   - `save()` calls `WriteBloodPressureReadingUseCase` with correct domain model
+   - `save()` on success emits `navigateHome` event
+   - `save()` on failure sets error message
+   - `save()` while already saving is ignored (guard)
+   - Run verifier (expect fail)
+
+2. **GREEN** — Implement:
+   - `BpConfirmationUiState` data class: `systolic: String`, `diastolic: String`, `bodyPosition: BodyPosition = UNKNOWN`, `measurementLocation: MeasurementLocation = UNKNOWN`, `timestamp: Instant = Instant.now()`, `isSaveEnabled: Boolean`, `isSaving: Boolean = false`, `error: String? = null`, `validationError: String? = null`
+   - `BpConfirmationViewModel` with `@HiltViewModel @Inject constructor(savedStateHandle: SavedStateHandle, writeBloodPressureReadingUseCase: WriteBloodPressureReadingUseCase)`
+   - Read systolic/diastolic from `savedStateHandle` (navigation arguments)
+   - Validation: parse string to Int, check ranges, check systolic > diastolic — update `isSaveEnabled` and `validationError` reactively
+   - `save()`: guard on not already saving, construct `BloodPressureReading`, call use case, emit `navigateHome` on success
+   - Navigation event: `navigateHome: SharedFlow<String>` emitting snackbar message like "120/80 mmHg saved"
+   - `BpConfirmationScreen` composable:
+     - Scaffold with TopAppBar "Confirm Reading"
+     - Systolic and Diastolic as `OutlinedTextField` with number keyboard type (`KeyboardType.Number`)
+     - Body Position dropdown using `ExposedDropdownMenuBox`
+     - Measurement Location dropdown using `ExposedDropdownMenuBox`
+     - Timestamp display (default now, tappable to edit — use `DatePickerDialog` + `TimePickerDialog` or simplified display)
+     - Validation error text when present
+     - Row with "Cancel" (`OutlinedButton`) and "Save" (`Button`, enabled by `isSaveEnabled && !isSaving`)
+     - Cancel navigates back to home
+   - Run verifier (expect pass)
+
+**Defensive Requirements:**
+- String-to-Int parsing must handle non-numeric input gracefully — show validation error, not crash
+- `save()` guard prevents double-tap writing duplicate records
+- Error on save shows generic message ("Failed to save reading"), raw error logged via Timber
+- Timestamp defaults to `Instant.now()` at the time the screen loads, not at save time
+
+**Notes:**
+- Use `SavedStateHandle` to receive navigation args — matches Compose Navigation pattern
+- Dropdowns: `BodyPosition.entries` and `MeasurementLocation.entries` for enum values, format display name as `name.replace("_", " ").lowercase().replaceFirstChar { it.uppercase() }`
+- Reference: `SettingsScreen.kt` for `OutlinedTextField` patterns
+
+---
+
+### Task 11: Navigation integration and wiring
+**Linear Issue:** [HEA-108](https://linear.app/lw-claude/issue/HEA-108)
+
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/AppNavigation.kt` (modify)
 - `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SyncScreen.kt` (modify)
-- `app/src/test/kotlin/com/healthhelper/app/data/sync/SyncSchedulerTest.kt` (modify)
-- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` (modify)
 
 **TDD Steps:**
 
 1. **RED** — Write tests:
-   - SyncScheduler test: `getNextSyncTimeFlow emits timestamp from WorkInfo` — mock WorkManager to return WorkInfo with a future `nextScheduleTimeMillis`
-   - SyncScheduler test: `getNextSyncTimeFlow emits null when no work is scheduled` — mock WorkManager to return empty list
-   - SyncScheduler test: `getNextSyncTimeFlow emits null when nextScheduleTimeMillis is MAX_VALUE` — treat unknown as null
-   - ViewModel test: `nextSyncTime shows formatted time when sync is scheduled` — mock SyncScheduler flow to emit a future timestamp
-   - ViewModel test: `nextSyncTime shows empty string when not configured` — assert empty/hidden
-   - ViewModel test: `nextSyncTime shows fallback estimate when SyncScheduler returns null` — compute from `lastSyncTimestamp + interval * 60_000`
-   - Run: `./gradlew test`
-   - Verify: fails
+   - ViewModel: `refreshLastBpReading()` is callable (used when returning from BP flow)
+   - Run verifier (expect fail — if any wiring issues)
 
 2. **GREEN** — Implement:
-   - In `SyncScheduler`, add `fun getNextSyncTimeFlow(): Flow<Long?>`:
-     - Use `workManager.getWorkInfosForUniqueWorkFlow(WORK_NAME)` → `Flow<List<WorkInfo>>`
-     - Map: extract `firstOrNull()?.nextScheduleTimeMillis`, return null if list is empty or value is `Long.MAX_VALUE`
-   - Add `nextSyncTime: String = ""` to `SyncUiState`
-   - In `SyncViewModel.init`, combine `syncScheduler.getNextSyncTimeFlow()`, `settingsRepository.lastSyncTimestampFlow`, `settingsRepository.syncIntervalFlow`, and `isConfigured` status to compute `nextSyncTime`:
-     - Not configured → `""`
-     - WorkManager provides valid future timestamp → format as "Next sync at HH:MM" (for > 1 hour) or "Next sync in ~Xm" (for < 1 hour)
-     - WorkManager returns null → estimate from `lastSyncTimestamp + interval * 60_000`:
-       - If estimate is in the future → format same as above
-       - If estimate is in the past or lastSyncTimestamp is 0 → "Sync pending..."
-     - If sync not scheduled at all and not configured → `""` (hidden)
-   - In `SyncScreen`, display `nextSyncTime` when non-empty, positioned near the sync status area
-   - Run tests: verify passes
-
-3. **REFACTOR** — Consider extracting time formatting helpers shared between Task 5 (relative time) and this task
+   - Add routes to `AppNavigation.kt`:
+     - `composable("camera-bp") { CameraCaptureScreen(onNavigateToConfirmation = { sys, dia -> navController.navigate("bp-confirm/$sys/$dia") }, onNavigateBack = { navController.popBackStack() }) }`
+     - `composable("bp-confirm/{systolic}/{diastolic}", arguments = listOf(navArgument("systolic") { type = NavType.IntType }, navArgument("diastolic") { type = NavType.IntType })) { BpConfirmationScreen(onNavigateHome = { snackbarMsg -> navController.navigate("sync") { popUpTo("sync") { inclusive = true } }; /* pass snackbar message */ }, onCancel = { navController.navigate("sync") { popUpTo("sync") { inclusive = true } } }) }`
+   - Wire `SyncScreen` "Log Blood Pressure" button to `onNavigateToCamera` callback → `navController.navigate("camera-bp")`
+   - Add `onNavigateToCamera: () -> Unit` parameter to `SyncScreen`
+   - Handle snackbar message: use `SnackbarHostState` in `SyncScreen`'s Scaffold, pass result via savedStateHandle or navigation result
+   - After returning from BP flow, call `viewModel.refreshLastBpReading()` to update the last reading display
+   - Run verifier (expect pass)
 
 **Defensive Requirements:**
-- `getWorkInfosForUniqueWorkFlow()` can emit empty list if work was never scheduled — handle as null.
-- `WorkInfo.nextScheduleTimeMillis` returns `Long.MAX_VALUE` when next run time is unknown — treat as unavailable, use fallback.
-- WorkManager Flow collection should not crash if WorkManager is not properly initialized — wrap in try-catch or use `catch` operator on the Flow.
-- The fallback calculation is approximate — WorkManager has flex time and system-imposed delays. The UI should indicate approximation with "~".
+- Navigation `popUpTo("sync") { inclusive = true }` ensures we don't stack multiple home screens
+- Snackbar message must survive navigation — use Scaffold's `SnackbarHostState` with `LaunchedEffect` on a navigation result
+- Back press from camera screen goes to home, not back through confirmation
 
 **Notes:**
-- `WorkManager.getWorkInfosForUniqueWorkFlow()` is available in WorkManager 2.7+ (project uses 2.10.1 at `libs.versions.toml:21`)
-- `WorkInfo.getNextScheduleTimeMillis()` is available in WorkManager 2.8+
-- For time formatting: use `java.time.Instant`, `java.time.ZoneId`, `java.time.format.DateTimeFormatter` for "HH:MM" format
-- Reference: `SyncScheduler.kt:15` for `WORK_NAME` constant
+- Reference: `AppNavigation.kt` for existing route pattern
+- Navigation arguments `{systolic}/{diastolic}` are typed as `NavType.IntType`
+- Consider adding `SnackbarHost` to the Scaffold in SyncScreen if not already present
 
 ---
 
-### Task 10: Integration & Verification
+### Task 12: Integration & Verification
+**Linear Issue:** [HEA-109](https://linear.app/lw-claude/issue/HEA-109)
 
-**Issue:** HEA-90, HEA-91, HEA-92, HEA-93, HEA-94, HEA-95
-**Files:** All modified files from Tasks 1–9
+**Files:** All modified files from Tasks 1–11
 
 **Steps:**
 
 1. Run full test suite: `./gradlew test`
 2. Build check: `./gradlew assembleDebug`
-3. Manual verification on device/emulator:
-   - [ ] Settings slider starts at 15, increments by 5, max 120
-   - [ ] App launch with previously granted permission → Sync Now button enabled immediately
-   - [ ] After sync, result shows "Synced X meals across Y days"
-   - [ ] After sync, "Last synced: X min ago" appears and refreshes over time
-   - [ ] After sync, last 3 meals displayed compactly below results
-   - [ ] Next sync time displayed and updates after sync or interval change
-   - [ ] App restart preserves last synced meals, timestamp, and next sync info
-   - [ ] All info hidden/defaults when app is freshly installed (no data stored)
+3. Run `bug-hunter` agent — review all changes for bugs
+4. Run `verifier` agent — verify all tests pass and zero warnings
 
-## MCP Usage During Implementation
+**Manual verification checklist:**
+- [ ] App launch requests all permissions at once (HC nutrition, HC BP read/write, camera)
+- [ ] Home screen has two fixed sections: Nutrition Sync and Blood Pressure
+- [ ] Blood Pressure section shows "No readings yet" initially
+- [ ] "Log Blood Pressure" button navigates to camera
+- [ ] Camera viewfinder displays, shutter button captures photo
+- [ ] Photo sent to Haiku, loading indicator shown
+- [ ] On parse success, confirmation screen shows systolic/diastolic
+- [ ] Confirmation screen dropdowns work (body position, measurement location)
+- [ ] Save writes to Health Connect, returns to home with snackbar "120/80 mmHg saved"
+- [ ] Home screen now shows last BP reading with relative time
+- [ ] Cancel from confirmation returns to home without saving
+- [ ] Parse error shows message with retake option
+- [ ] Retake returns to camera viewfinder
+- [ ] Anthropic API key configurable in Settings
+- [ ] App works without camera permission (nutrition sync unaffected, BP button disabled)
 
-| MCP Server | Tool | Purpose |
-|------------|------|---------|
-| Linear | `save_issue` | Move issues to "In Progress" when starting, "Done" when complete |
-
-## Error Handling
-
-| Error Scenario | Expected Behavior | Test Coverage |
-|---------------|-------------------|---------------|
-| `getGrantedPermissions()` throws | `permissionGranted` stays false, Timber.e logged | Unit test (Task 2) |
-| JSON deserialization of stored meals fails | Return empty list, no crash | Unit test (Task 6) |
-| WorkManager `getWorkInfosForUniqueWorkFlow` returns empty | `nextSyncTime` shows fallback estimate or empty | Unit test (Task 9) |
-| `setLastSyncTimestamp` throws during sync | Sync succeeds, timestamp not persisted, error logged | Unit test (Task 5) |
-| `setLastSyncedMeals` throws during sync | Sync succeeds, meals not persisted, error logged | Unit test (Task 7) |
-| Stored `syncInterval` is < 15 (legacy data) | Slider clamps to 15, `SyncScheduler` clamps to 15 | Defensive (Task 1) |
-
-## Risks & Open Questions
-
-- [ ] `WorkInfo.nextScheduleTimeMillis` accuracy on API 28–30 may vary. The fallback estimate (`lastSyncTimestamp + interval`) is approximate. Acceptable for a "next sync" indicator.
-- [ ] kotlinx-serialization-json is already a direct dependency (`libs.versions.toml:55`). Verify the `kotlin-serialization` plugin is applied in `app/build.gradle.kts` — the DTOs in `data/api/dto/` compile with `@Serializable`, so it should be.
-- [ ] Periodic refresh of relative time (Task 5) adds a long-lived coroutine in `viewModelScope`. This is fine — it auto-cancels when ViewModel is cleared.
-
-## Scope Boundaries
-
-**In Scope:**
-- Fix slider range and defaults (HEA-90)
-- Check permission on init (HEA-91)
-- Enrich sync result summary with day count (HEA-93)
-- Store and display last sync timestamp with relative formatting (HEA-92)
-- Show next scheduled sync time with fallback estimation (HEA-94)
-- Store and display last 3 synced meals (HEA-95)
-
-**Out of Scope:**
-- Full meal history or browsing all synced data
-- Push notifications for sync completion
-- Detailed sync error diagnostics
-- Sync conflict resolution UI
-- Room database for meal storage (DataStore JSON is sufficient for 3 items)
-- Removing `SyncScheduler.MIN_INTERVAL_MINUTES` clamp (kept as safety net)
+## Post-Implementation Checklist
+1. Run `bug-hunter` agent — Review changes for bugs
+2. Run `verifier` agent — Verify all tests pass and zero warnings
 
 ---
 
-## Iteration 1
+## Plan Summary
 
-**Implemented:** 2026-02-27
-**Method:** Agent team (3 workers, worktree-isolated)
+**Objective:** Add Blood Pressure Scanner — photograph a BP monitor, extract systolic/diastolic via Claude Haiku, write BloodPressureRecord to Health Connect
 
-### Tasks Completed This Iteration
-- Task 1: Fix sync interval slider minimum and defaults (worker-1)
-- Task 2: Check Health Connect permission on app launch (worker-1)
-- Task 3: Enrich sync result with day count (worker-2)
-- Task 4: Store last sync timestamp in repository (worker-2)
-- Task 5: Save sync timestamp and display relative time (worker-2)
-- Task 6: Create SyncedMealSummary model and repository storage (worker-3)
-- Task 7: Collect and persist last 3 meals during sync (worker-3)
-- Task 8: Display synced meals on main screen (worker-3)
-- Task 9: Show next scheduled sync time (worker-1)
-- Task 10: Integration & Verification (lead)
+**Request:** Build the BP Scanner feature from the roadmap: camera capture → Haiku image analysis → confirmation screen → Health Connect write. All permissions upfront, structured home screen with fixed sections, last reading displayed on home.
 
-### Files Modified
-- `app/src/main/kotlin/com/healthhelper/app/domain/model/SyncResult.kt` — Added `daysProcessed` to `Success`
-- `app/src/main/kotlin/com/healthhelper/app/domain/model/SyncedMealSummary.kt` — NEW: domain model for meal summaries
-- `app/src/main/kotlin/com/healthhelper/app/domain/repository/SettingsRepository.kt` — Added `lastSyncTimestampFlow`, `lastSyncedMealsFlow`, `setLastSyncTimestamp`, `setLastSyncedMeals`
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` — Implemented new repo methods, changed DEFAULT_SYNC_INTERVAL to 15, added SyncedMealDto
-- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt` — Save timestamp, collect meals after sync, safe calorie rounding
-- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` — Permission check on init, timestamp display with periodic refresh, meals collection, next sync time, sanitized error messages
-- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModel.kt` — Changed default syncInterval to 15
-- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SyncScreen.kt` — Added lastSyncTime, recent syncs section, next sync time display
-- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SettingsScreen.kt` — Slider range 15–120, steps=20
-- `app/src/main/kotlin/com/healthhelper/app/data/sync/SyncScheduler.kt` — Added `getNextSyncTimeFlow()`
-- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt` — 28 tests, viewModelTest wrapper for periodic refresh coroutine
-- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt` — Tests for timestamp, meals, day count
-- `app/src/test/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepositoryTest.kt` — Tests for timestamp and meals storage
-- `app/src/test/kotlin/com/healthhelper/app/data/sync/SyncSchedulerTest.kt` — Tests for getNextSyncTimeFlow
-- `app/src/test/kotlin/com/healthhelper/app/domain/model/SyncedMealSummaryTest.kt` — NEW: model validation tests
-- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModelTest.kt` — Updated default interval assertion
-- `.gitignore` — Added `_workers/`
+**Linear Issues:** HEA-98, HEA-99, HEA-100, HEA-101, HEA-102, HEA-103, HEA-104, HEA-105, HEA-106, HEA-107, HEA-108, HEA-109
 
-### Linear Updates
-- HEA-90: Todo → In Progress → Review
-- HEA-91: Todo → In Progress → Review
-- HEA-92: Todo → In Progress → Review
-- HEA-93: Todo → In Progress → Review
-- HEA-94: Todo → In Progress → Review
-- HEA-95: Todo → In Progress → Review
+**Approach:** Layer-by-layer implementation following existing Clean Architecture patterns. Start with domain models and dependencies, build up through repository/Health Connect integration, add Anthropic API client for Haiku image analysis, create use cases, then build the three new screens (restructured home, camera capture, BP confirmation). CameraX Compose-native integration for camera, Ktor for Haiku API calls, existing encrypted prefs pattern for API key storage.
 
-### Pre-commit Verification
-- bug-hunter: Found 5 bugs (1 HIGH, 4 MEDIUM), all fixed before commit:
-  1. Meal summaries included entries whose HC write failed — moved `syncedEntries.add()` inside `if (written)`
-  2. `formatNextSyncTime` displayed negative minutes when sync overdue — added `diffMs <= 0` guard
-  3. `calories.toInt()` overflow risk — changed to `roundToInt().coerceAtLeast(0)`
-  4. Single bad `foodName` in JSON dropped all stored meals — changed to `mapNotNull` with per-item validation
-  5. Raw error message leaked to UI — sanitized to generic message, raw logged via Timber
-- verifier: All tests pass, lint passed, build passed, zero warnings
-- Post-bug-fix: SyncViewModelTest hang fixed (viewModelTest wrapper cancels viewModelScope before runTest cleanup)
+**Scope:**
+- Tasks: 12
+- Files affected: ~25 (15 new, 10 modified)
+- New tests: yes (8 new test files)
 
-### Work Partition
-- Worker 1: Tasks 1, 2, 9 (Settings fix + Permission check + Next sync time) — 7 points
-- Worker 2: Tasks 3, 4, 5 (Sync result enrichment + Timestamp) — 8 points
-- Worker 3: Tasks 6, 7, 8 (Meals model + collection + display) — 8 points
+**Key Decisions:**
+- BP Scanner built first (before Glucose Scanner) — shared camera/Haiku infrastructure will be reusable
+- Anthropic API key stored alongside Food Scanner API key in EncryptedSharedPreferences
+- CameraX Compose-native API (`camera-compose`) for camera preview
+- Navigation arguments pass systolic/diastolic between camera and confirmation screens
+- SyncViewModel extended with BP reading data (not a separate ViewModel) to keep the home screen simple
+- All permissions (HC nutrition, HC BP read/write, camera) requested upfront on first launch
 
-### Merge Summary
-- Worker 2: fast-forward (first merge, no conflicts)
-- Worker 3: merged, 6 conflicts in SettingsRepository.kt, DataStoreSettingsRepository.kt, SyncNutritionUseCase.kt, SyncViewModel.kt, SyncNutritionUseCaseTest.kt, SyncViewModelTest.kt (all additive — both workers adding different features)
-- Worker 1: merged, 3 conflicts in DataStoreSettingsRepository.kt, SyncViewModel.kt, SyncViewModelTest.kt (additive)
-- Build gate passed after each merge
-
-### Review Findings
-
-Summary: 2 issue(s) found, fixed inline (Team: security, reliability, quality reviewers — 16 files reviewed)
-- FIXED INLINE: 2 issue(s) — verified via TDD + bug-hunter
-
-**Issues fixed inline:**
-- [MEDIUM] ERROR: Missing logging in 3 exception catch blocks (`SyncNutritionUseCase.kt:111-113`, `SyncNutritionUseCase.kt:132-134`, `DataStoreSettingsRepository.kt:128-130`) — added Timber.w logging for observability
-- [LOW] BUG: No `cancelSync()` when app becomes unconfigured (`SyncViewModel.kt:140-144`) — added else clause to cancel WorkManager job when user clears credentials
-
-**Discarded findings (not bugs):**
-- [DISCARDED] SECURITY: Health data in plaintext DataStore — Display convenience data (3 meal summaries), not raw health records; Android filesystem sandbox protects DataStore files adequately
-- [DISCARDED] SECURITY: Background sync without permission check — Data layer handles SecurityException gracefully; WorkManager provides built-in backoff for failed work
-- [DISCARDED] SECURITY: Silent fallback to plaintext SharedPreferences — AppModule.kt not in review scope (not a changed file)
-- [DISCARDED] SECURITY: Internal error message in Timber log — Messages are controlled string constants, not external input
-- [DISCARDED] SECURITY: triggerSync() doesn't re-check permissions — Button gated on cached state; data layer handles SecurityException
-- [DISCARDED] COROUTINE: Missing flow error handling in SyncViewModel launch blocks — DataStore flows handle IOException internally; both .catch and try-catch terminate the observer identically to the original behavior; retry loops cause test OOM with flowOf() mocks
-- [DISCARDED] TIMEOUT: No timeout on network/HC calls — HTTP layer (OkHttp/Retrofit) provides default timeouts; Health Connect IPC has its own timeouts; long total runtime is by design for multi-day sync
-- [DISCARDED] ERROR: isConfigured() migrateIfNeeded without try-catch — Exception IS caught at ViewModel level (triggerSync catch block); user sees adequate generic error; extremely rare scenario
-- [DISCARDED] COROUTINE: apiKeyFlow callbackFlow re-executes migration — Mutex correctly protects concurrent access; one-time cold-start concern
-- [DISCARDED] TYPE: Force unwrap !! in SyncSchedulerTest.kt:79 — Test code; minor inconsistency with surrounding checkNotNull pattern
-- [DISCARDED] TYPE: !! on nullable property in SyncViewModelTest.kt — Test code; property always initialized to non-null value
-- [DISCARDED] TEST: Reflection-based test fragile in SyncSchedulerTest — Design observation; test works correctly today
-- [DISCARDED] CONVENTION: invoke not declared as operator fun — Style preference not enforced by CLAUDE.md
-- [DISCARDED] CONVENTION: Redundant casts after is check in tests — Style-only in test code; no correctness impact
-- [DISCARDED] TEST: Missing edge case test for calories=0 — Test coverage gap; code correctly handles zero via require(calories >= 0)
-
-### Linear Updates
-- HEA-90: Review → Merge
-- HEA-91: Review → Merge
-- HEA-92: Review → Merge
-- HEA-93: Review → Merge
-- HEA-94: Review → Merge
-- HEA-95: Review → Merge
-- HEA-96: Created in Merge (Fix: missing logging in catch blocks — fixed inline)
-- HEA-97: Created in Merge (Fix: missing cancelSync on unconfigure — fixed inline)
-
-### Inline Fix Verification
-- Unit tests: all pass
-- Bug-hunter: initial run found retry loop issue, fixed by reverting to original flow pattern with surgical cancelSync fix
-
-<!-- REVIEW COMPLETE -->
-
-### Continuation Status
-All tasks completed.
-
----
-
-## Status: COMPLETE
-
-All tasks implemented and reviewed successfully. All Linear issues moved to Merge.
+**Risks/Considerations:**
+- CameraX has a known bug on API 28/29 ("Camera is closed") — needs testing on those API levels
+- Image quality (~18% rejection rate in research) means good error UX is critical
+- Anthropic API key needs to be obtained by user separately — clear guidance in settings UI
+- CameraX `camera-compose` API may vary between versions — verify against actual stable release
