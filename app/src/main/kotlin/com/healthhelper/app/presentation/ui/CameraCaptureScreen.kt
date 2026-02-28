@@ -1,13 +1,12 @@
 package com.healthhelper.app.presentation.ui
 
-import android.content.Context
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageCapture
-import androidx.camera.core.ImageCaptureException
-import androidx.camera.core.Preview
-import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.view.PreviewView
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -23,7 +22,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -33,30 +31,69 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.healthhelper.app.presentation.viewmodel.CameraCaptureViewModel
 import timber.log.Timber
+import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CameraCaptureScreen(
     onNavigateToConfirmation: (Int, Int) -> Unit,
     onNavigateBack: () -> Unit,
+    sharedImageUri: String? = null,
     viewModel: CameraCaptureViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
 
-    var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
+    var photoUri by remember { mutableStateOf<Uri?>(null) }
 
     LaunchedEffect(Unit) {
         viewModel.navigateToConfirmation.collect { (systolic, diastolic) ->
             onNavigateToConfirmation(systolic, diastolic)
+        }
+    }
+
+    val takePictureLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture(),
+    ) { success ->
+        val uri = photoUri
+        try {
+            if (success && uri != null) {
+                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                if (bytes != null) {
+                    viewModel.onPhotoCaptured(bytes)
+                } else {
+                    viewModel.onCaptureError("Could not read captured photo.")
+                }
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to read captured photo")
+            viewModel.onCaptureError("Could not read captured photo.")
+        } finally {
+            // Clean up temp file — runs even if user cancels camera
+            uri?.path?.let { File(it).delete() }
+        }
+    }
+
+    // Handle shared image URI — go straight to processing
+    LaunchedEffect(sharedImageUri) {
+        if (sharedImageUri != null) {
+            try {
+                val uri = Uri.parse(sharedImageUri)
+                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                if (bytes != null) {
+                    viewModel.onPhotoCaptured(bytes)
+                } else {
+                    viewModel.onCaptureError("Could not read shared image.")
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to read shared image")
+                viewModel.onCaptureError("Could not read shared image.")
+            }
         }
     }
 
@@ -79,122 +116,61 @@ fun CameraCaptureScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
+            contentAlignment = Alignment.Center,
         ) {
-            AndroidView(
-                factory = { ctx ->
-                    val previewView = PreviewView(ctx)
-                    val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
-                    cameraProviderFuture.addListener(
-                        {
-                            val cameraProvider = cameraProviderFuture.get()
-                            val preview = Preview.Builder().build().also {
-                                it.surfaceProvider = previewView.surfaceProvider
-                            }
-                            val capture = ImageCapture.Builder()
-                                .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
-                                .build()
-                            imageCapture = capture
-                            try {
-                                cameraProvider.unbindAll()
-                                cameraProvider.bindToLifecycle(
-                                    lifecycleOwner,
-                                    CameraSelector.DEFAULT_BACK_CAMERA,
-                                    preview,
-                                    capture,
-                                )
-                            } catch (e: Exception) {
-                                Timber.e(e, "Camera bind failed")
-                            }
-                        },
-                        ContextCompat.getMainExecutor(ctx),
-                    )
-                    previewView
-                },
-                modifier = Modifier.fillMaxSize(),
-            )
-
-            if (uiState.isProcessing) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    CircularProgressIndicator(modifier = Modifier.size(64.dp))
+            when {
+                uiState.isProcessing -> {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(64.dp))
+                        Spacer(modifier = Modifier.size(16.dp))
+                        Text(
+                            text = "Analyzing...",
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                    }
                 }
-            }
-
-            uiState.error?.let { error ->
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(24.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    androidx.compose.foundation.layout.Column(
+                uiState.error != null -> {
+                    Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
                         Text(
-                            text = error,
+                            text = uiState.error!!,
                             color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodyLarge,
                         )
-                        androidx.compose.foundation.layout.Spacer(
-                            modifier = Modifier.size(16.dp),
-                        )
+                        Spacer(modifier = Modifier.size(16.dp))
                         Button(onClick = viewModel::onRetake) {
-                            Text("Retake")
+                            Text("Try Again")
                         }
                     }
                 }
-            }
-
-            if (!uiState.isProcessing && uiState.error == null) {
-                Button(
-                    onClick = {
-                        capturePhoto(
-                            imageCapture = imageCapture,
-                            context = context,
-                            onImageCaptured = viewModel::onPhotoCaptured,
-                            onError = { errorMsg ->
-                                viewModel.onCaptureError(errorMsg)
-                            },
-                        )
-                    },
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = 32.dp),
-                ) {
-                    Text("Take Photo")
+                else -> {
+                    Button(
+                        onClick = {
+                            try {
+                                val imageDir = File(context.cacheDir, "bp_images")
+                                imageDir.mkdirs()
+                                val tempFile = File.createTempFile("bp_", ".jpg", imageDir)
+                                val uri = FileProvider.getUriForFile(
+                                    context,
+                                    "${context.packageName}.fileprovider",
+                                    tempFile,
+                                )
+                                photoUri = uri
+                                takePictureLauncher.launch(uri)
+                            } catch (e: Exception) {
+                                Timber.e(e, "Failed to launch camera")
+                                viewModel.onCaptureError("Could not open camera.")
+                            }
+                        },
+                    ) {
+                        Text("Take Photo")
+                    }
                 }
             }
         }
     }
-}
-
-private fun capturePhoto(
-    imageCapture: ImageCapture?,
-    context: Context,
-    onImageCaptured: (ByteArray) -> Unit,
-    onError: (String) -> Unit,
-) {
-    val capture = imageCapture ?: return
-    capture.takePicture(
-        ContextCompat.getMainExecutor(context),
-        object : ImageCapture.OnImageCapturedCallback() {
-            override fun onCaptureSuccess(image: androidx.camera.core.ImageProxy) {
-                try {
-                    val buffer = image.planes[0].buffer
-                    val bytes = ByteArray(buffer.remaining())
-                    buffer.get(bytes)
-                    onImageCaptured(bytes)
-                } finally {
-                    image.close()
-                }
-            }
-
-            override fun onError(exception: ImageCaptureException) {
-                Timber.e(exception, "Photo capture failed")
-                onError("Camera capture failed. Please try again.")
-            }
-        },
-    )
 }

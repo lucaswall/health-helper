@@ -294,3 +294,45 @@ Add permissions for Sentry MCP tools to the `permissions.allow` array in `.claud
 - The `onCaptureError` callback and `capturePhoto()` helper function are removed since the system camera handles capture errors internally.
 - The share intent filter label "Scan Blood Pressure" is designed for future extensibility — a glucose scanner could add a second filter labeled "Scan Glucose" on the same activity.
 - `IntentCompat.getParcelableExtra()` should be used for API 33+ compatibility when extracting the shared image URI.
+
+---
+
+## Iteration 1
+
+**Implemented:** 2026-02-28
+**Method:** Single-agent (user requested solo mode)
+
+### Tasks Completed This Iteration
+- Step 1: Switch Ktor engine from OkHttp to CIO (HEA-142)
+- Step 2: Fix image decode fallback — fail instead of sending raw bytes (HEA-143)
+- Step 3: Replace CameraCaptureScreen with system camera (HEA-143)
+- Step 4: Add share receiver for image sharing into BP flow (HEA-143)
+- Step 5: Add FileProvider for camera temp files (HEA-143)
+- Step 6: Integrate Sentry for crash reporting (HEA-142/HEA-143)
+- Step 7: Remove CameraX dependencies (HEA-143)
+
+### Files Modified
+- `gradle/libs.versions.toml` — Replaced ktor-client-okhttp with ktor-client-cio, removed CameraX entries, added Sentry SDK + plugin
+- `app/build.gradle.kts` — Swapped ktor-client-cio, removed 5 CameraX deps, added Sentry deps + plugin config
+- `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt` — HttpClient(OkHttp) → HttpClient(CIO)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/CameraCaptureViewModel.kt` — Renamed resizeImageIfNeeded to prepareImageForApi, returns null on decode failure
+- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/CameraCaptureViewModelTest.kt` — Added BitmapFactory mockkStatic, new test for undecodable bytes error
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt` — Full rewrite: system camera via TakePicture + share image support
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/AppNavigation.kt` — Added sharedImageUri parameter, URL-encoded routing to camera-bp
+- `app/src/main/kotlin/com/healthhelper/app/MainActivity.kt` — Extract shared image URI from ACTION_SEND intent
+- `app/src/main/AndroidManifest.xml` — Share intent filter, FileProvider, Sentry meta-data
+- `app/src/main/res/xml/file_paths.xml` — Created FileProvider config for bp_images cache dir
+- `app/src/main/kotlin/com/healthhelper/app/HealthHelperApp.kt` — SentryTimberTree + environment tag
+- `.mcp.json` — Added Sentry MCP server
+- `.claude/settings.json` — Added Sentry MCP tool permissions
+
+### Linear Updates
+- HEA-142: Todo → In Progress → Review
+- HEA-143: Todo → In Progress → Review
+
+### Pre-commit Verification
+- bug-hunter: Found 4 issues — 2 real bugs fixed (temp file leak on camera cancel, unfaithful BitmapFactory mock), 2 false positives skipped (DSN is public per Sentry docs, trace rate intentional for personal app)
+- verifier: All tests pass, zero warnings
+
+### Continuation Status
+All tasks completed.

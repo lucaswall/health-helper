@@ -66,10 +66,19 @@ class CameraCaptureViewModel @Inject constructor(
                     return@launch
                 }
 
-                val resizedBytes = withContext(defaultDispatcher) {
-                    resizeImageIfNeeded(imageBytes, maxDimension = 1568)
+                val preparedBytes = withContext(defaultDispatcher) {
+                    prepareImageForApi(imageBytes, maxDimension = 1568)
                 }
-                when (val result = anthropicApiClient.parseBloodPressureImage(apiKey, resizedBytes)) {
+                if (preparedBytes == null) {
+                    _uiState.update {
+                        it.copy(
+                            isProcessing = false,
+                            error = "Could not process image. Please try a different photo.",
+                        )
+                    }
+                    return@launch
+                }
+                when (val result = anthropicApiClient.parseBloodPressureImage(apiKey, preparedBytes)) {
                     is BloodPressureParseResult.Success -> {
                         _uiState.update { it.copy(isProcessing = false) }
                         _navigateToConfirmation.emit(Pair(result.systolic, result.diastolic))
@@ -105,14 +114,15 @@ class CameraCaptureViewModel @Inject constructor(
         _uiState.update { it.copy(isProcessing = false, error = null) }
     }
 
-    private fun resizeImageIfNeeded(imageBytes: ByteArray, maxDimension: Int): ByteArray {
+    private fun prepareImageForApi(imageBytes: ByteArray, maxDimension: Int): ByteArray? {
         return try {
             val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size, options)
             val width = options.outWidth
             val height = options.outHeight
             if (width <= 0 || height <= 0) {
-                return imageBytes
+                Timber.w("prepareImageForApi: could not decode image dimensions")
+                return null
             }
 
             val needsResize = width > maxDimension || height > maxDimension
@@ -121,7 +131,10 @@ class CameraCaptureViewModel @Inject constructor(
             val newHeight = (height * scale).toInt()
 
             val bitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
-                ?: return imageBytes
+            if (bitmap == null) {
+                Timber.w("prepareImageForApi: BitmapFactory.decodeByteArray returned null")
+                return null
+            }
             var scaled: Bitmap? = null
             try {
                 scaled = if (needsResize) {
@@ -137,8 +150,8 @@ class CameraCaptureViewModel @Inject constructor(
                 bitmap.recycle()
             }
         } catch (e: Exception) {
-            Timber.w(e, "resizeImageIfNeeded: resize failed, using original bytes")
-            imageBytes
+            Timber.w(e, "prepareImageForApi: failed to process image")
+            null
         }
     }
 }

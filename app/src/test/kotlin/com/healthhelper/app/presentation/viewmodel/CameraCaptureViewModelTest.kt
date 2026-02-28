@@ -1,5 +1,7 @@
 package com.healthhelper.app.presentation.viewmodel
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import app.cash.turbine.test
 import com.healthhelper.app.data.api.AnthropicApiClient
 import com.healthhelper.app.domain.model.BloodPressureParseResult
@@ -7,6 +9,8 @@ import com.healthhelper.app.domain.repository.SettingsRepository
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.mockkStatic
+import io.mockk.unmockkStatic
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -20,6 +24,8 @@ import kotlinx.coroutines.test.setMain
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import java.io.ByteArrayOutputStream
+import java.io.OutputStream
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -42,6 +48,28 @@ class CameraCaptureViewModelTest {
         anthropicApiClient = mockk()
         settingsRepository = mockk(relaxed = true)
 
+        // Mock BitmapFactory — Android stubs throw RuntimeException in JUnit
+        mockkStatic(BitmapFactory::class)
+        val mockBitmap = mockk<Bitmap>(relaxed = true)
+        every {
+            BitmapFactory.decodeByteArray(any(), any(), any(), any<BitmapFactory.Options>())
+        } answers {
+            val options = lastArg<BitmapFactory.Options>()
+            if (options.inJustDecodeBounds) {
+                options.outWidth = 100
+                options.outHeight = 100
+                null // Real API returns null for bounds-only decode
+            } else {
+                mockBitmap
+            }
+        }
+        every { BitmapFactory.decodeByteArray(any(), any(), any()) } returns mockBitmap
+        every { mockBitmap.compress(any(), any(), any<OutputStream>()) } answers {
+            val os = thirdArg<OutputStream>()
+            os.write(byteArrayOf(1, 2, 3))
+            true
+        }
+
         every { settingsRepository.apiKeyFlow } returns flowOf("fsk_test")
         every { settingsRepository.baseUrlFlow } returns flowOf("https://example.com")
         every { settingsRepository.syncIntervalFlow } returns flowOf(30)
@@ -54,6 +82,7 @@ class CameraCaptureViewModelTest {
     @AfterEach
     fun tearDown() {
         Dispatchers.resetMain()
+        unmockkStatic(BitmapFactory::class)
     }
 
     private fun createViewModel() =
@@ -259,6 +288,34 @@ class CameraCaptureViewModelTest {
             val state = awaitItem()
             assertFalse(state.isProcessing)
             assertEquals("Camera capture failed", state.error)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `prepareImageForApi returns null for undecodable bytes sets error`() = runTest {
+        // Override BitmapFactory to simulate undecodable image (dimensions = 0)
+        every {
+            BitmapFactory.decodeByteArray(any(), any(), any(), any<BitmapFactory.Options>())
+        } answers {
+            val options = lastArg<BitmapFactory.Options>()
+            if (options.inJustDecodeBounds) {
+                options.outWidth = 0
+                options.outHeight = 0
+            }
+            null
+        }
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.onPhotoCaptured(byteArrayOf(0xFF.toByte(), 0xFE.toByte()))
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertFalse(state.isProcessing)
+            assertEquals("Could not process image. Please try a different photo.", state.error)
             cancelAndIgnoreRemainingEvents()
         }
     }
