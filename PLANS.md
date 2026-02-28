@@ -155,7 +155,110 @@ Add an `ACTION_SEND` intent filter so users can share photos from any app (Galle
 **Tests:**
 1. No unit tests needed — manifest/XML configuration verified by build + manual test
 
-### Step 6: Remove CameraX dependencies
+### Step 6: Integrate Sentry for crash reporting, performance monitoring, and Compose instrumentation
+**File:** `gradle/libs.versions.toml` (modify)
+**File:** `app/build.gradle.kts` (modify)
+**File:** `app/src/main/AndroidManifest.xml` (modify)
+**File:** `app/src/main/kotlin/com/healthhelper/app/HealthHelperApp.kt` (modify)
+**File:** `sentry.properties` (create)
+**File:** `.gitignore` (modify)
+
+**Manual setup required (before implementation):**
+1. Create a Sentry account at https://sentry.io (free tier: 5,000 errors/month) — DONE
+2. Create a new project: Platform = Android, name = `health-helper` — DONE
+3. DSN obtained: `https://2ce7da0da96c55aa5a06a5be24b837df@o4510966037086208.ingest.us.sentry.io/4510966055108608`
+4. Org Auth Token generated and stored in `sentry.properties` (gitignored) — DONE
+5. Org slug: `lucas-wall`, Project slug: `health-helper` — DONE
+
+**Secrets handling:**
+- **DSN** is NOT a secret — it only allows sending events, not reading them. Safe to commit in `AndroidManifest.xml`. Sentry's official stance: [DSNs are safe to keep public](https://sentry.zendesk.com/hc/en-us/articles/26741783759899).
+- **Auth Token** IS a secret — it has write access to releases/mappings. Store it in `sentry.properties` (gitignored) or as env var `SENTRY_AUTH_TOKEN`. The Sentry Gradle plugin reads from `sentry.properties` automatically.
+- **`sentry.properties`** must be added to `.gitignore` (alongside `local.properties`)
+
+**Behavior:**
+
+*Version catalog additions (`libs.versions.toml`):*
+- Add version: `sentry = "8.27.1"`, `sentryGradlePlugin = "5.12.2"`
+- Add libraries: `sentry-android` (core SDK + all auto-integrations), `sentry-compose-android` (Compose instrumentation)
+- Add plugin: `sentry` with id `io.sentry.android.gradle`
+
+*Build script (`app/build.gradle.kts`):*
+- Apply `alias(libs.plugins.sentry)` in plugins block
+- Add `implementation(libs.sentry.android)` and `implementation(libs.sentry.compose.android)`
+- Configure the Sentry Gradle plugin:
+  - `autoUploadProguardMapping.set(true)` — uploads R8 mapping files on release builds for deobfuscated stack traces
+  - `autoInstallation.enabled.set(false)` — we manage dependencies explicitly via version catalog
+  - `tracingInstrumentation.enabled.set(true)` — auto-instruments HTTP calls and DB queries
+  - `autoUploadSourceContext.set(true)` — uploads source context for richer error display
+
+*Manifest (`AndroidManifest.xml`):*
+- Add `<meta-data android:name="io.sentry.dsn" android:value="https://2ce7da0da96c55aa5a06a5be24b837df@o4510966037086208.ingest.us.sentry.io/4510966055108608" />`
+- Add `<meta-data android:name="io.sentry.traces-sample-rate" android:value="1.0" />` — capture all transactions (fine for personal app volume)
+- Add `<meta-data android:name="io.sentry.anr.enable" android:value="true" />` — ANR detection
+- Add `<meta-data android:name="io.sentry.session-tracking.enable" android:value="true" />` — release health / crash-free rate
+
+*Application class (`HealthHelperApp.kt`):*
+- Add a `SentryTimberTree` (from `sentry-android`) to Timber — this forwards all `Timber.w()` and `Timber.e()` calls as Sentry breadcrumbs, and `Timber.e()` with exceptions as Sentry events
+- Plant it unconditionally (both debug and release) alongside the existing `DebugTree` (which stays debug-only)
+- Set the `environment` tag: `Sentry.configureScope { it.setTag("environment", if (BuildConfig.DEBUG) "debug" else "release") }` — allows filtering debug vs release crashes in the dashboard
+
+*`sentry.properties` (create, gitignored):*
+```
+defaults.org=your-org-slug
+defaults.project=health-helper
+auth.token=sntrys_YOUR_AUTH_TOKEN_HERE
+```
+
+*`.gitignore` additions:*
+- Add `sentry.properties` entry
+
+**What Sentry captures with this setup:**
+- Unhandled exceptions (crashes) with full deobfuscated stack traces
+- ANRs (Application Not Responding)
+- Timber warnings/errors as breadcrumbs (trail of events before a crash)
+- Timber errors with exceptions as Sentry error events
+- HTTP transaction performance (Ktor calls)
+- Compose render performance (via `sentry-compose-android`)
+- Session/release health (crash-free sessions percentage)
+- Device info, OS version, app version automatically attached
+- Works in both debug and release builds, filterable by `environment` tag
+
+**Tests:**
+1. `./gradlew assembleDebug` succeeds — Sentry SDK initializes without a valid DSN (sends no events, no crash)
+2. All existing tests pass — Sentry auto-initializes via manifest, no test setup needed (it no-ops without a real DSN)
+
+**Sentry MCP setup (in this step, not optional):**
+
+The [Sentry remote MCP server](https://github.com/getsentry/sentry-mcp) uses OAuth — no auth token needed. You authenticate via browser when first connecting.
+
+Add to `.claude/settings.json` in the top-level object:
+```json
+"mcpServers": {
+  "sentry": {
+    "type": "http",
+    "url": "https://mcp.sentry.dev/mcp"
+  }
+}
+```
+
+Or run: `claude mcp add --transport http sentry https://mcp.sentry.dev/mcp`
+
+On first use, Claude Code will prompt OAuth login via browser to authorize the Sentry connection. If the token expires, run `/mcp` → select Sentry → "Clear authentication" → "Authenticate" to re-trigger.
+
+Add permissions for Sentry MCP tools to the `permissions.allow` array in `.claude/settings.json`:
+```
+"mcp__sentry__list_projects",
+"mcp__sentry__list_project_issues",
+"mcp__sentry__list_issue_events",
+"mcp__sentry__get_sentry_issue",
+"mcp__sentry__get_sentry_event",
+"mcp__sentry__resolve_short_id",
+"mcp__sentry__list_error_events_in_project",
+"mcp__sentry__create_project",
+"mcp__sentry__list_organization_replays"
+```
+
+### Step 7: Remove CameraX dependencies
 **File:** `gradle/libs.versions.toml` (modify)
 **File:** `app/build.gradle.kts` (modify)
 
@@ -169,7 +272,7 @@ Add an `ACTION_SEND` intent filter so users can share photos from any app (Galle
 1. `./gradlew assembleDebug` succeeds with no CameraX references
 2. No import errors in remaining source files
 
-### Step 7: Verify
+### Step 8: Verify
 - [ ] All new tests pass
 - [ ] All existing tests pass (`./gradlew test`)
 - [ ] Kotlin compiles without errors (`./gradlew assembleDebug`)
@@ -180,6 +283,9 @@ Add an `ACTION_SEND` intent filter so users can share photos from any app (Galle
 - [ ] Manual test: Share HEIC from gallery → decoded and processed correctly
 - [ ] Manual test: Airplane mode → take photo → shows error message (NOT crash)
 - [ ] Manual test: Share sheet shows "Scan Blood Pressure" label for HealthHelper
+- [ ] Manual test: After adding DSN, verify Sentry receives a test event (force a crash or call `Sentry.captureMessage("test")`)
+- [ ] Manual test: Check Sentry dashboard shows debug/release environment tag
+- [ ] Verify `sentry.properties` is NOT committed to git
 
 ## Notes
 - The CIO engine uses Java's SSLEngine instead of OkHttp's TLS stack. For standard HTTPS to `api.anthropic.com`, this is transparent. `network_security_config.xml` already has `cleartextTrafficPermitted="false"`.
