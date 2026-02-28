@@ -65,6 +65,7 @@ class SyncNutritionUseCaseTest {
         every { settingsRepository.baseUrlFlow } returns flowOf(baseUrl)
         every { settingsRepository.lastSyncedDateFlow } returns flowOf(lastSyncedDate)
         every { settingsRepository.lastSyncedMealsFlow } returns flowOf(emptyList())
+        every { settingsRepository.anthropicApiKeyFlow } returns flowOf("")
         coEvery { settingsRepository.setLastSyncedDate(any()) } returns Unit
         coEvery { settingsRepository.setLastSyncTimestamp(any()) } returns Unit
         coEvery { settingsRepository.setLastSyncedMeals(any()) } returns Unit

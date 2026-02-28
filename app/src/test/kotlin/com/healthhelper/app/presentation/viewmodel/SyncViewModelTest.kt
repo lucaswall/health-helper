@@ -57,6 +57,7 @@ class SyncViewModelTest {
         every { settingsRepository.lastSyncedDateFlow } returns flowOf("")
         every { settingsRepository.lastSyncTimestampFlow } returns flowOf(0L)
         every { settingsRepository.lastSyncedMealsFlow } returns flowOf(emptyList())
+        every { settingsRepository.anthropicApiKeyFlow } returns flowOf("")
         coEvery { settingsRepository.isConfigured() } returns true
         coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.NeedsConfiguration
         every { syncScheduler.getNextSyncTimeFlow() } returns flowOf(null)

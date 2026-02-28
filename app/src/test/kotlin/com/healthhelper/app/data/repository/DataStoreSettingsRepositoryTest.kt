@@ -290,6 +290,29 @@ class DataStoreSettingsRepositoryTest {
         assertEquals(emptyList(), repository.lastSyncedMealsFlow.first())
     }
 
+    // --- anthropicApiKey (encrypted prefs) tests ---
+
+    @Test
+    @DisplayName("default anthropic API key is empty string")
+    fun defaultAnthropicApiKey() = testScope.runTest {
+        assertEquals("", repository.anthropicApiKeyFlow.first())
+    }
+
+    @Test
+    @DisplayName("anthropicApiKeyFlow reads from encryptedPrefs")
+    fun anthropicApiKeyFlowReadsFromEncryptedPrefs() = testScope.runTest {
+        encryptedStore["anthropic_api_key"] = "sk-ant-test"
+        assertEquals("sk-ant-test", repository.anthropicApiKeyFlow.first())
+    }
+
+    @Test
+    @DisplayName("setAnthropicApiKey writes to encryptedPrefs with commit for durability")
+    fun setAnthropicApiKeyWritesToEncryptedPrefs() = testScope.runTest {
+        repository.setAnthropicApiKey("sk-ant-abc123")
+        verify { encryptedEditor.putString("anthropic_api_key", "sk-ant-abc123") }
+        verify { encryptedEditor.commit() }
+    }
+
     @Test
     @DisplayName("apiKeyFlow handles migration failure gracefully")
     fun apiKeyFlowHandlesMigrationFailure() = testScope.runTest {

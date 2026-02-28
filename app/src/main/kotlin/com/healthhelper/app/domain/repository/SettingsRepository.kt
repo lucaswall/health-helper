@@ -5,12 +5,14 @@ import kotlinx.coroutines.flow.Flow
 
 interface SettingsRepository {
     val apiKeyFlow: Flow<String>
+    val anthropicApiKeyFlow: Flow<String>
     val baseUrlFlow: Flow<String>
     val syncIntervalFlow: Flow<Int>
     val lastSyncedDateFlow: Flow<String>
     val lastSyncTimestampFlow: Flow<Long>
     val lastSyncedMealsFlow: Flow<List<SyncedMealSummary>>
     suspend fun setApiKey(value: String)
+    suspend fun setAnthropicApiKey(value: String)
     suspend fun setBaseUrl(value: String)
     suspend fun setSyncInterval(value: Int)
     suspend fun setLastSyncedDate(value: String)
