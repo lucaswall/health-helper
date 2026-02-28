@@ -21,10 +21,12 @@ fun AppNavigation() {
         popEnterTransition = { EnterTransition.None },
         popExitTransition = { ExitTransition.None },
     ) {
-        composable("sync") {
+        composable("sync") { backStackEntry ->
             SyncScreen(
                 onNavigateToSettings = { navController.navigate("settings") },
                 onNavigateToCamera = { navController.navigate("camera-bp") },
+                snackbarMessage = backStackEntry.savedStateHandle.get<String>("snackbar_msg"),
+                onSnackbarShown = { backStackEntry.savedStateHandle.remove<String>("snackbar_msg") },
             )
         }
         composable("settings") {
@@ -52,6 +54,7 @@ fun AppNavigation() {
                     navController.navigate("sync") {
                         popUpTo("sync") { inclusive = true }
                     }
+                    navController.currentBackStackEntry?.savedStateHandle?.set("snackbar_msg", snackbarMsg)
                 },
                 onCancel = {
                     navController.navigate("sync") {

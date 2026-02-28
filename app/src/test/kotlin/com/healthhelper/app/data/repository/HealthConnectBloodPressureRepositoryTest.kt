@@ -155,4 +155,16 @@ class HealthConnectBloodPressureRepositoryTest {
         val result = repository.getLastReading()
         assertNull(result)
     }
+
+    @Test
+    @DisplayName("CancellationException propagates through getLastReading")
+    fun getLastReadingPropagatesCancellationException() = runTest {
+        val mockClient = mockk<HealthConnectClient>()
+        coEvery { mockClient.readRecords(any<ReadRecordsRequest<BloodPressureRecord>>()) } throws CancellationException("Cancelled")
+
+        val repository = HealthConnectBloodPressureRepository(mockClient)
+        assertFailsWith<CancellationException> {
+            repository.getLastReading()
+        }
+    }
 }

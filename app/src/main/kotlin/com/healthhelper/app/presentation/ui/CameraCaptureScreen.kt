@@ -40,8 +40,6 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.healthhelper.app.presentation.viewmodel.CameraCaptureViewModel
 import timber.log.Timber
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -55,11 +53,6 @@ fun CameraCaptureScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
 
     var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
-    val cameraExecutor: ExecutorService = remember { Executors.newSingleThreadExecutor() }
-
-    DisposableEffect(Unit) {
-        onDispose { cameraExecutor.shutdown() }
-    }
 
     LaunchedEffect(Unit) {
         viewModel.navigateToConfirmation.collect { (systolic, diastolic) ->
@@ -188,11 +181,14 @@ private fun capturePhoto(
         ContextCompat.getMainExecutor(context),
         object : ImageCapture.OnImageCapturedCallback() {
             override fun onCaptureSuccess(image: androidx.camera.core.ImageProxy) {
-                val buffer = image.planes[0].buffer
-                val bytes = ByteArray(buffer.remaining())
-                buffer.get(bytes)
-                image.close()
-                onImageCaptured(bytes)
+                try {
+                    val buffer = image.planes[0].buffer
+                    val bytes = ByteArray(buffer.remaining())
+                    buffer.get(bytes)
+                    onImageCaptured(bytes)
+                } finally {
+                    image.close()
+                }
             }
 
             override fun onError(exception: ImageCaptureException) {

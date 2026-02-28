@@ -1,12 +1,17 @@
 package com.healthhelper.app.presentation.viewmodel
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.healthhelper.app.data.api.AnthropicApiClient
 import com.healthhelper.app.domain.model.BloodPressureParseResult
 import com.healthhelper.app.domain.repository.SettingsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import com.healthhelper.app.di.DefaultDispatcher
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -18,7 +23,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import timber.log.Timber
+import java.io.ByteArrayOutputStream
 import javax.inject.Inject
 
 data class CameraCaptureUiState(
@@ -30,6 +37,7 @@ data class CameraCaptureUiState(
 class CameraCaptureViewModel @Inject constructor(
     private val anthropicApiClient: AnthropicApiClient,
     private val settingsRepository: SettingsRepository,
+    @param:DefaultDispatcher private val defaultDispatcher: CoroutineDispatcher,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(CameraCaptureUiState())
@@ -59,7 +67,10 @@ class CameraCaptureViewModel @Inject constructor(
                     return@launch
                 }
 
-                when (val result = anthropicApiClient.parseBloodPressureImage(apiKey, imageBytes)) {
+                val resizedBytes = withContext(defaultDispatcher) {
+                    resizeImageIfNeeded(imageBytes, maxDimension = 1568)
+                }
+                when (val result = anthropicApiClient.parseBloodPressureImage(apiKey, resizedBytes)) {
                     is BloodPressureParseResult.Success -> {
                         _uiState.update { it.copy(isProcessing = false) }
                         _navigateToConfirmation.emit(Pair(result.systolic, result.diastolic))
@@ -93,5 +104,33 @@ class CameraCaptureViewModel @Inject constructor(
     fun onRetake() {
         processingJob?.cancel()
         _uiState.update { it.copy(isProcessing = false, error = null) }
+    }
+
+    private fun resizeImageIfNeeded(imageBytes: ByteArray, maxDimension: Int): ByteArray {
+        return try {
+            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size, options)
+            val width = options.outWidth
+            val height = options.outHeight
+            if (width <= 0 || height <= 0 || (width <= maxDimension && height <= maxDimension)) {
+                return imageBytes
+            }
+
+            val scale = maxDimension.toFloat() / maxOf(width, height)
+            val newWidth = (width * scale).toInt()
+            val newHeight = (height * scale).toInt()
+
+            val bitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
+                ?: return imageBytes
+            val scaled = Bitmap.createScaledBitmap(bitmap, newWidth, newHeight, true)
+            val outputStream = ByteArrayOutputStream()
+            scaled.compress(Bitmap.CompressFormat.JPEG, 85, outputStream)
+            bitmap.recycle()
+            if (scaled !== bitmap) scaled.recycle()
+            outputStream.toByteArray()
+        } catch (e: Exception) {
+            Timber.w(e, "resizeImageIfNeeded: resize failed, using original bytes")
+            imageBytes
+        }
     }
 }
