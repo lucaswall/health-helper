@@ -365,15 +365,19 @@ class DataStoreSettingsRepositoryTest {
     fun apiKeyFlowHandlesMigrationFailure() = testScope.runTest {
         dataStore.edit { it[stringPreferencesKey("api_key")] = "legacy_key" }
 
-        // Make getString throw on first call to simulate Keystore failure
-        every { encryptedPrefs.getString("api_key", any<String>()) } throws
-            RuntimeException("Keystore unavailable")
+        // First getString call (migration check) throws, second (post-migration read) returns ""
+        var callCount = 0
+        every { encryptedPrefs.getString("api_key", any<String>()) } answers {
+            callCount++
+            if (callCount == 1) throw RuntimeException("Keystore unavailable")
+            ""
+        }
 
         val freshRepo = DataStoreSettingsRepository(dataStore, encryptedPrefs)
 
-        // Should not crash — returns empty default
-        every { encryptedPrefs.getString("api_key", any<String>()) } returns ""
+        // Should not crash — migration failure is caught, returns empty default
         val key = freshRepo.apiKeyFlow.first()
         assertEquals("", key)
+        assertEquals(2, callCount, "getString should be called exactly twice: once in migration (throws), once in post-migration read")
     }
 }

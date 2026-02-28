@@ -30,9 +30,7 @@ class HealthConnectBloodPressureRepository @Inject constructor(
                 healthConnectClient.insertRecords(listOf(record))
             }
             Timber.d(
-                "writeBloodPressureRecord: wrote BP reading %d/%d in %dms",
-                reading.systolic,
-                reading.diastolic,
+                "writeBloodPressureRecord: wrote BP reading in %dms",
                 System.currentTimeMillis() - startMs,
             )
             true
@@ -72,6 +70,9 @@ class HealthConnectBloodPressureRepository @Inject constructor(
                 System.currentTimeMillis() - startMs,
             )
             response.records.maxByOrNull { it.time }?.let { mapToBloodPressureReading(it) }
+        } catch (e: TimeoutCancellationException) {
+            Timber.w("getLastReading: timed out after 10s")
+            null
         } catch (e: SecurityException) {
             Timber.e(e, "getLastReading: permission denied")
             null

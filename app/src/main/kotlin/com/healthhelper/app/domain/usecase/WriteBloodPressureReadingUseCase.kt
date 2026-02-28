@@ -7,6 +7,6 @@ import javax.inject.Inject
 class WriteBloodPressureReadingUseCase @Inject constructor(
     private val bloodPressureRepository: BloodPressureRepository,
 ) {
-    suspend fun invoke(reading: BloodPressureReading): Boolean =
+    suspend operator fun invoke(reading: BloodPressureReading): Boolean =
         bloodPressureRepository.writeBloodPressureRecord(reading)
 }

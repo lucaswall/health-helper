@@ -8,7 +8,7 @@ import kotlin.coroutines.cancellation.CancellationException
 class GetLastBloodPressureReadingUseCase @Inject constructor(
     private val bloodPressureRepository: BloodPressureRepository,
 ) {
-    suspend fun invoke(): BloodPressureReading? = try {
+    suspend operator fun invoke(): BloodPressureReading? = try {
         bloodPressureRepository.getLastReading()
     } catch (e: CancellationException) {
         throw e

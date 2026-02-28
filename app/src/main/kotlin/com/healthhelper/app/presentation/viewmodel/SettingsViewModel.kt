@@ -108,61 +108,64 @@ class SettingsViewModel @Inject constructor(
 
     fun save() {
         if (isSaving) return
+        isSaving = true
         val current = _uiState.value
         viewModelScope.launch {
-            isSaving = true
-            var anyFailed = false
-            val apiKeySaved = try {
-                settingsRepository.setApiKey(current.apiKey)
-                true
-            } catch (e: Exception) {
-                if (e is CancellationException) throw e
-                Timber.e(e, "Failed to save API key")
-                anyFailed = true
-                false
-            }
-            val baseUrlSaved = try {
-                settingsRepository.setBaseUrl(current.baseUrl)
-                true
-            } catch (e: Exception) {
-                if (e is CancellationException) throw e
-                Timber.e(e, "Failed to save base URL")
-                anyFailed = true
-                false
-            }
-            val intervalSaved = try {
-                settingsRepository.setSyncInterval(current.syncInterval)
-                true
-            } catch (e: Exception) {
-                if (e is CancellationException) throw e
-                Timber.e(e, "Failed to save sync interval")
-                anyFailed = true
-                false
-            }
-            val anthropicApiKeySaved = try {
-                settingsRepository.setAnthropicApiKey(current.anthropicApiKey)
-                true
-            } catch (e: Exception) {
-                if (e is CancellationException) throw e
-                Timber.e(e, "Failed to save Anthropic API key")
-                anyFailed = true
-                false
-            }
-            persistedSettings = PersistedSettings(
-                apiKey = if (apiKeySaved) current.apiKey else persistedSettings.apiKey,
-                anthropicApiKey = if (anthropicApiKeySaved) current.anthropicApiKey else persistedSettings.anthropicApiKey,
-                baseUrl = if (baseUrlSaved) current.baseUrl else persistedSettings.baseUrl,
-                syncInterval = if (intervalSaved) current.syncInterval else persistedSettings.syncInterval,
-            )
-            isSaving = false
-            _uiState.update {
-                it.copy(
-                    saveError = if (anyFailed) {
-                        "Some settings could not be saved. Please try again."
-                    } else {
-                        null
-                    },
-                ).withDirtyFlag()
+            try {
+                var anyFailed = false
+                val apiKeySaved = try {
+                    settingsRepository.setApiKey(current.apiKey)
+                    true
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    Timber.e(e, "Failed to save API key")
+                    anyFailed = true
+                    false
+                }
+                val baseUrlSaved = try {
+                    settingsRepository.setBaseUrl(current.baseUrl)
+                    true
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    Timber.e(e, "Failed to save base URL")
+                    anyFailed = true
+                    false
+                }
+                val intervalSaved = try {
+                    settingsRepository.setSyncInterval(current.syncInterval)
+                    true
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    Timber.e(e, "Failed to save sync interval")
+                    anyFailed = true
+                    false
+                }
+                val anthropicApiKeySaved = try {
+                    settingsRepository.setAnthropicApiKey(current.anthropicApiKey)
+                    true
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    Timber.e(e, "Failed to save Anthropic API key")
+                    anyFailed = true
+                    false
+                }
+                persistedSettings = PersistedSettings(
+                    apiKey = if (apiKeySaved) current.apiKey else persistedSettings.apiKey,
+                    anthropicApiKey = if (anthropicApiKeySaved) current.anthropicApiKey else persistedSettings.anthropicApiKey,
+                    baseUrl = if (baseUrlSaved) current.baseUrl else persistedSettings.baseUrl,
+                    syncInterval = if (intervalSaved) current.syncInterval else persistedSettings.syncInterval,
+                )
+                _uiState.update {
+                    it.copy(
+                        saveError = if (anyFailed) {
+                            "Some settings could not be saved. Please try again."
+                        } else {
+                            null
+                        },
+                    ).withDirtyFlag()
+                }
+            } finally {
+                isSaving = false
             }
         }
     }

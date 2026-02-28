@@ -33,7 +33,6 @@ class AppModuleTest {
     @Test
     fun `createEncryptedSharedPreferences does NOT fall back to plaintext on failure`() {
         val mockContext = mockk<Context>()
-        var fallbackCalled = false
         // The creator throws — if result is non-null, that means a fallback was used
         val result = AppModule.createEncryptedSharedPreferences(mockContext) {
             throw java.security.GeneralSecurityException("Keystore error")

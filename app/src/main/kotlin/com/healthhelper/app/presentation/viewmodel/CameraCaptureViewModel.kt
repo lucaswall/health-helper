@@ -111,11 +111,12 @@ class CameraCaptureViewModel @Inject constructor(
             BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size, options)
             val width = options.outWidth
             val height = options.outHeight
-            if (width <= 0 || height <= 0 || (width <= maxDimension && height <= maxDimension)) {
+            if (width <= 0 || height <= 0) {
                 return imageBytes
             }
 
-            val scale = maxDimension.toFloat() / maxOf(width, height)
+            val needsResize = width > maxDimension || height > maxDimension
+            val scale = if (needsResize) maxDimension.toFloat() / maxOf(width, height) else 1f
             val newWidth = (width * scale).toInt()
             val newHeight = (height * scale).toInt()
 
@@ -123,13 +124,17 @@ class CameraCaptureViewModel @Inject constructor(
                 ?: return imageBytes
             var scaled: Bitmap? = null
             try {
-                scaled = Bitmap.createScaledBitmap(bitmap, newWidth, newHeight, true)
+                scaled = if (needsResize) {
+                    Bitmap.createScaledBitmap(bitmap, newWidth, newHeight, true)
+                } else {
+                    bitmap
+                }
                 val outputStream = ByteArrayOutputStream()
                 scaled.compress(Bitmap.CompressFormat.JPEG, 85, outputStream)
                 outputStream.toByteArray()
             } finally {
-                bitmap.recycle()
                 if (scaled != null && scaled !== bitmap) scaled.recycle()
+                bitmap.recycle()
             }
         } catch (e: Exception) {
             Timber.w(e, "resizeImageIfNeeded: resize failed, using original bytes")

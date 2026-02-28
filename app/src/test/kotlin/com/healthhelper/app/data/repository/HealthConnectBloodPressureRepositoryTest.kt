@@ -172,6 +172,20 @@ class HealthConnectBloodPressureRepositoryTest {
     }
 
     @Test
+    @DisplayName("getLastReading returns null when readRecords exceeds 10s timeout")
+    fun getLastReadingReturnsNullOnTimeout() = runTest {
+        val mockClient = mockk<HealthConnectClient>()
+        coEvery { mockClient.readRecords(any<ReadRecordsRequest<BloodPressureRecord>>()) } coAnswers {
+            delay(15_000L)
+            mockk<ReadRecordsResponse<BloodPressureRecord>>()
+        }
+
+        val repository = HealthConnectBloodPressureRepository(mockClient)
+        val result = repository.getLastReading()
+        assertNull(result)
+    }
+
+    @Test
     @DisplayName("CancellationException propagates through getLastReading")
     fun getLastReadingPropagatesCancellationException() = runTest {
         val mockClient = mockk<HealthConnectClient>()

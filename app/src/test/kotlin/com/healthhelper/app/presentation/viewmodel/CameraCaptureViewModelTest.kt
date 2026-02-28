@@ -249,6 +249,21 @@ class CameraCaptureViewModelTest {
     }
 
     @Test
+    fun `onCaptureError sets error message and clears isProcessing`() = runTest {
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.onCaptureError("Camera capture failed")
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertFalse(state.isProcessing)
+            assertEquals("Camera capture failed", state.error)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
     fun `onPhotoCaptured passes non-null bytes to API client`() = runTest {
         var capturedBytes: ByteArray? = null
         coEvery { anthropicApiClient.parseBloodPressureImage(any(), any()) } coAnswers {
