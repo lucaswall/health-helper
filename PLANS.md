@@ -455,3 +455,29 @@ Summary: 4 issue(s) found (Team: security, reliability, quality reviewers)
 
 1. In `SyncNutritionUseCaseTest.kt:370`, replace `assertTrue(result is SyncResult.Success || result is SyncResult.Error)` with `assertTrue(result is SyncResult.Success)` and add `assertEquals(366, (result as SyncResult.Success).daysProcessed)` to verify the full-range fallback
 2. Run verifier (expect pass)
+
+---
+
+## Iteration 3
+
+**Implemented:** 2026-02-28
+**Method:** Single-agent (4 independent units, 4 effort points — below worker threshold)
+
+### Tasks Completed This Iteration
+- Fix 1: Partial migration leaves API key in plaintext DataStore — added DataStore cleanup in early-return path
+- Fix 2: No exception handling around initial settings reads — wrapped in try-catch returning SyncResult.Error
+- Fix 3: when on FoodLogResult as statement, not expression — converted to expression for compile-time exhaustiveness
+- Fix 4: Meaningless test assertion in malformedLastSyncedDateFallsBack — strengthened assertion to verify full-range fallback
+
+### Linear Updates
+- HEA-138: Todo → Done
+- HEA-139: Todo → Done
+- HEA-140: Todo → Done
+- HEA-141: Todo → Done
+
+### Tasks Remaining
+None — all Fix Plan tasks completed.
+
+---
+
+**Status: COMPLETE**
