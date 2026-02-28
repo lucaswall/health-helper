@@ -353,3 +353,38 @@ Summary: 4 issue(s) found (Team: security, reliability, quality reviewers)
    - 429 → `Timber.w` (change from `Timber.e`)
    - other → `Timber.e` (keep as-is)
 2. Run verifier (expect pass)
+
+---
+
+## Iteration 2
+
+**Implemented:** 2026-02-28
+**Method:** Single-agent (3 independent units, 5 effort points — below worker threshold)
+
+### Tasks Completed This Iteration
+- Fix 1: CancellationException swallowed in apiKeyFlow callbackFlow — added rethrow guard before generic catch
+- Fix 2: setLastSyncTimestamp called before HC write result checked — changed guard from `successfulDays > 0` to `totalRecordsSynced > 0`
+- Fix 3: Server error logged at DEBUG level instead of WARN — changed `Timber.d` to `Timber.w`
+- Fix 4: HTTP 429 rate-limited logged at ERROR level instead of WARN — changed `else` branch to `when` with 401/429 at WARN, others at ERROR
+
+### Files Modified
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` — Added CancellationException import and rethrow guard in apiKeyFlow callbackFlow
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt` — Changed setLastSyncTimestamp guard from `successfulDays > 0` to `totalRecordsSynced > 0`
+- `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt` — Server error log level d→w, HTTP error logging refactored to `when` block (401/429 at WARN, others at ERROR)
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepositoryTest.kt` — New: 1 test for CancellationException propagation
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt` — New: 2 tests for setLastSyncTimestamp correctness
+
+### Linear Updates
+- HEA-134: Todo → In Progress → Review
+- HEA-135: Todo → In Progress → Review
+- HEA-136: Todo → In Progress → Review
+- HEA-137: Todo → In Progress → Review
+
+### Pre-commit Verification
+- bug-hunter: 0 bugs found
+- verifier: All tests pass, lint clean, build clean
+
+### Tasks Remaining
+None — all Fix Plan tasks completed.
+
+**Status: COMPLETE**

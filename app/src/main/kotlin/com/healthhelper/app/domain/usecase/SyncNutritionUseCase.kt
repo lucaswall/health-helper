@@ -114,7 +114,7 @@ class SyncNutritionUseCase @Inject constructor(
             settingsRepository.setLastSyncedDate(contiguousEnd.format(DateTimeFormatter.ISO_LOCAL_DATE))
         }
 
-        if (successfulDays > 0) {
+        if (totalRecordsSynced > 0) {
             try {
                 settingsRepository.setLastSyncTimestamp(System.currentTimeMillis())
             } catch (e: Exception) {

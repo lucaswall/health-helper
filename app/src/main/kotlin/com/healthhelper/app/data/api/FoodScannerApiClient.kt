@@ -49,10 +49,9 @@ class FoodScannerApiClient @Inject constructor(
                     429 -> "Rate limited"
                     else -> "HTTP error $status"
                 }
-                if (status == 401) {
-                    Timber.w("getFoodLog(%s) HTTP error: %d", date, status)
-                } else {
-                    Timber.e("getFoodLog(%s) HTTP error: %d", date, status)
+                when (status) {
+                    401, 429 -> Timber.w("getFoodLog(%s) HTTP error: %d", date, status)
+                    else -> Timber.e("getFoodLog(%s) HTTP error: %d", date, status)
                 }
                 return Result.failure(Exception(message))
             }
@@ -62,7 +61,7 @@ class FoodScannerApiClient @Inject constructor(
             if (!envelope.success) {
                 val serverMsg = envelope.error?.message
                 if (serverMsg != null) {
-                    Timber.d("getFoodLog(%s) server error: %s", date, serverMsg)
+                    Timber.w("getFoodLog(%s) server error: %s", date, serverMsg)
                 }
                 Result.failure(Exception("Server returned an error"))
             } else {

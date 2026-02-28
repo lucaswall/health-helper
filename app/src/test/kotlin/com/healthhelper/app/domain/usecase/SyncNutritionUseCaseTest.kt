@@ -370,6 +370,44 @@ class SyncNutritionUseCaseTest {
         assertTrue(result is SyncResult.Success || result is SyncResult.Error)
     }
 
+    // --- setLastSyncTimestamp correctness tests ---
+
+    @Test
+    @DisplayName("all API calls succeed but all HC writes fail: setLastSyncTimestamp NOT called")
+    fun allHcWritesFailDoesNotSetTimestamp() = runTest {
+        val today = LocalDate.now()
+        val yesterday = today.minusDays(1)
+        configureSettings(lastSyncedDate = yesterday.minusDays(1).format(DateTimeFormatter.ISO_LOCAL_DATE))
+
+        coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } returns Result.success(FoodLogResult.Data(listOf(testEntry)))
+        coEvery { nutritionRepository.writeNutritionRecords(any(), any()) } returns false
+
+        val result = useCase.invoke()
+
+        assertTrue(result is SyncResult.Error)
+        coVerify(exactly = 0) { settingsRepository.setLastSyncTimestamp(any()) }
+    }
+
+    @Test
+    @DisplayName("some HC writes succeed (totalRecordsSynced > 0): setLastSyncTimestamp IS called")
+    fun someHcWritesSucceedSetsTimestamp() = runTest {
+        val today = LocalDate.now()
+        val yesterday = today.minusDays(1)
+        configureSettings(lastSyncedDate = yesterday.minusDays(1).format(DateTimeFormatter.ISO_LOCAL_DATE))
+
+        val todayStr = today.format(DateTimeFormatter.ISO_LOCAL_DATE)
+        val yesterdayStr = yesterday.format(DateTimeFormatter.ISO_LOCAL_DATE)
+
+        coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } returns Result.success(FoodLogResult.Data(listOf(testEntry)))
+        coEvery { nutritionRepository.writeNutritionRecords(todayStr, any()) } returns true
+        coEvery { nutritionRepository.writeNutritionRecords(yesterdayStr, any()) } returns false
+
+        val result = useCase.invoke()
+
+        assertTrue(result is SyncResult.Success)
+        coVerify { settingsRepository.setLastSyncTimestamp(match { it > 0L }) }
+    }
+
     // --- Meal collection tests ---
 
     @Test

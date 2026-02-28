@@ -23,7 +23,9 @@ import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -358,6 +360,27 @@ class DataStoreSettingsRepositoryTest {
         // Legacy key remains in DataStore (migration was skipped)
         val prefs = dataStore.data.first()
         assertEquals("legacy_key", prefs[stringPreferencesKey("api_key")])
+    }
+
+    @Test
+    @DisplayName("apiKeyFlow propagates CancellationException from migration instead of swallowing it")
+    fun apiKeyFlowPropagatesCancellationException() = testScope.runTest {
+        dataStore.edit { it[stringPreferencesKey("api_key")] = "legacy_key" }
+
+        // First getString call (in migrateIfNeeded) throws CancellationException
+        // Second call (post-migration trySend) would return "" but should never be reached
+        var callCount = 0
+        every { encryptedPrefs.getString("api_key", any<String>()) } answers {
+            callCount++
+            if (callCount == 1) throw CancellationException("coroutine cancelled")
+            ""
+        }
+
+        val freshRepo = DataStoreSettingsRepository(dataStore, encryptedPrefs)
+
+        assertFailsWith<CancellationException> {
+            freshRepo.apiKeyFlow.first()
+        }
     }
 
     @Test
