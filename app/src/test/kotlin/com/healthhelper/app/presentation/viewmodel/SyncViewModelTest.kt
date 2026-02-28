@@ -5,18 +5,22 @@ import androidx.health.connect.client.HealthConnectClient
 import androidx.lifecycle.viewModelScope
 import androidx.health.connect.client.PermissionController
 import androidx.health.connect.client.permission.HealthPermission
+import androidx.health.connect.client.records.BloodPressureRecord
 import androidx.health.connect.client.records.NutritionRecord
 import com.healthhelper.app.data.sync.SyncScheduler
+import com.healthhelper.app.domain.model.BloodPressureReading
 import com.healthhelper.app.domain.model.MealType
 import com.healthhelper.app.domain.model.SyncProgress
 import com.healthhelper.app.domain.model.SyncResult
 import com.healthhelper.app.domain.model.SyncedMealSummary
 import com.healthhelper.app.domain.repository.SettingsRepository
+import com.healthhelper.app.domain.usecase.GetLastBloodPressureReadingUseCase
 import com.healthhelper.app.domain.usecase.SyncNutritionUseCase
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import java.time.Instant
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancel
@@ -42,6 +46,7 @@ class SyncViewModelTest {
     private lateinit var syncNutritionUseCase: SyncNutritionUseCase
     private lateinit var settingsRepository: SettingsRepository
     private lateinit var syncScheduler: SyncScheduler
+    private lateinit var getLastBpReadingUseCase: GetLastBloodPressureReadingUseCase
     private lateinit var viewModel: SyncViewModel
 
     @BeforeEach
@@ -50,6 +55,7 @@ class SyncViewModelTest {
         syncNutritionUseCase = mockk()
         settingsRepository = mockk()
         syncScheduler = mockk(relaxed = true)
+        getLastBpReadingUseCase = mockk()
 
         every { settingsRepository.apiKeyFlow } returns flowOf("fsk_test")
         every { settingsRepository.baseUrlFlow } returns flowOf("https://example.com")
@@ -60,6 +66,7 @@ class SyncViewModelTest {
         coEvery { settingsRepository.isConfigured() } returns true
         coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.NeedsConfiguration
         every { syncScheduler.getNextSyncTimeFlow() } returns flowOf(null)
+        coEvery { getLastBpReadingUseCase.invoke() } returns null
     }
 
     @AfterEach
@@ -70,7 +77,7 @@ class SyncViewModelTest {
     private val healthConnectClient: HealthConnectClient? = mockk(relaxed = true)
 
     private fun createViewModel(hcClient: HealthConnectClient? = healthConnectClient): SyncViewModel =
-        SyncViewModel(syncNutritionUseCase, settingsRepository, syncScheduler, hcClient)
+        SyncViewModel(syncNutritionUseCase, settingsRepository, syncScheduler, getLastBpReadingUseCase, hcClient)
 
     /**
      * Wraps [runTest] to cancel viewModelScope after the test body,
@@ -451,8 +458,7 @@ class SyncViewModelTest {
     fun `permissionGranted is true on init when permission already granted`() = viewModelTest {
         val permController = mockk<PermissionController>()
         every { healthConnectClient!!.permissionController } returns permController
-        coEvery { permController.getGrantedPermissions() } returns
-            setOf(HealthPermission.getWritePermission(NutritionRecord::class))
+        coEvery { permController.getGrantedPermissions() } returns SyncViewModel.REQUIRED_HC_PERMISSIONS
 
         viewModel = createViewModel()
         advanceTimeBy(1_000)
@@ -522,6 +528,193 @@ class SyncViewModelTest {
         viewModel.uiState.test {
             val state = awaitItem()
             assertEquals("", state.nextSyncTime)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    // --- Task 7 (HEA-104): All HC permissions required ---
+
+    @Test
+    fun `permissionGranted is true only when ALL required HC permissions are granted`() = viewModelTest {
+        val permController = mockk<PermissionController>()
+        every { healthConnectClient!!.permissionController } returns permController
+        coEvery { permController.getGrantedPermissions() } returns SyncViewModel.REQUIRED_HC_PERMISSIONS
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            assertTrue(awaitItem().permissionGranted)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `permissionGranted is false when only WRITE_NUTRITION is granted`() = viewModelTest {
+        val permController = mockk<PermissionController>()
+        every { healthConnectClient!!.permissionController } returns permController
+        coEvery { permController.getGrantedPermissions() } returns
+            setOf(HealthPermission.getWritePermission(NutritionRecord::class))
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            assertFalse(awaitItem().permissionGranted)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `permissionGranted is false when only BP permissions are granted`() = viewModelTest {
+        val permController = mockk<PermissionController>()
+        every { healthConnectClient!!.permissionController } returns permController
+        coEvery { permController.getGrantedPermissions() } returns setOf(
+            HealthPermission.getWritePermission(BloodPressureRecord::class),
+            HealthPermission.getReadPermission(BloodPressureRecord::class),
+        )
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            assertFalse(awaitItem().permissionGranted)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `cameraPermissionGranted is false by default`() = viewModelTest {
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertFalse(state.cameraPermissionGranted)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `onCameraPermissionResult true sets cameraPermissionGranted to true`() = viewModelTest {
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.onCameraPermissionResult(true)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertTrue(state.cameraPermissionGranted)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `onCameraPermissionResult false sets cameraPermissionGranted to false`() = viewModelTest {
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.onCameraPermissionResult(true)
+        viewModel.onCameraPermissionResult(false)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertFalse(state.cameraPermissionGranted)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    // --- Task 8 (HEA-105): Last BP reading on home screen ---
+
+    @Test
+    fun `lastBpReading is null by default`() = viewModelTest {
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertNull(state.lastBpReading)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `lastBpReading populated after init loads from GetLastBloodPressureReadingUseCase`() = viewModelTest {
+        val reading = BloodPressureReading(systolic = 120, diastolic = 80, timestamp = Instant.now())
+        coEvery { getLastBpReadingUseCase.invoke() } returns reading
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals(reading, state.lastBpReading)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `lastBpReadingDisplay formats as systolic slash diastolic mmHg`() = viewModelTest {
+        val reading = BloodPressureReading(systolic = 120, diastolic = 80, timestamp = Instant.now())
+        coEvery { getLastBpReadingUseCase.invoke() } returns reading
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals("120/80 mmHg", state.lastBpReadingDisplay)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `lastBpReadingTime shows relative time when reading exists`() = viewModelTest {
+        val twoHoursAgo = Instant.now().minusSeconds(7200)
+        val reading = BloodPressureReading(systolic = 120, diastolic = 80, timestamp = twoHoursAgo)
+        coEvery { getLastBpReadingUseCase.invoke() } returns reading
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertTrue(
+                state.lastBpReadingTime.contains("hr ago") || state.lastBpReadingTime.contains("min ago"),
+                "Expected relative time in '${state.lastBpReadingTime}'",
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `lastBpReadingDisplay is empty when no reading exists`() = viewModelTest {
+        coEvery { getLastBpReadingUseCase.invoke() } returns null
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals("", state.lastBpReadingDisplay)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `refreshLastBpReading reloads from use case`() = viewModelTest {
+        val reading = BloodPressureReading(systolic = 130, diastolic = 85, timestamp = Instant.now())
+        coEvery { getLastBpReadingUseCase.invoke() } returns null andThen reading
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.refreshLastBpReading()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals(reading, state.lastBpReading)
             cancelAndIgnoreRemainingEvents()
         }
     }

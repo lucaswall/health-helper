@@ -5,8 +5,13 @@
     <!-- Network access for Food Scanner API -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Camera for Blood Pressure scanner -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
     <!-- Health Connect permissions -->
     <uses-permission android:name="android.permission.health.WRITE_NUTRITION" />
+    <uses-permission android:name="android.permission.health.WRITE_BLOOD_PRESSURE" />
+    <uses-permission android:name="android.permission.health.READ_BLOOD_PRESSURE" />
 
     <application
         android:name=".HealthHelperApp"
