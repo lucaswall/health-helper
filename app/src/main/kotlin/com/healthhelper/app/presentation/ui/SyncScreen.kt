@@ -104,7 +104,9 @@ fun SyncScreen(
                 Text("Please configure API settings to enable sync.")
             }
 
-            if (uiState.lastSyncedDate.isNotEmpty()) {
+            if (uiState.lastSyncTime.isNotEmpty()) {
+                Text("Last synced: ${uiState.lastSyncTime}")
+            } else if (uiState.lastSyncedDate.isNotEmpty()) {
                 Text("Last synced: ${uiState.lastSyncedDate}")
             }
 

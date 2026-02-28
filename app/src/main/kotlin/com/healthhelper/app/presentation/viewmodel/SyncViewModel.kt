@@ -9,8 +9,13 @@ import com.healthhelper.app.domain.repository.SettingsRepository
 import com.healthhelper.app.domain.usecase.SyncNutritionUseCase
 import androidx.health.connect.client.HealthConnectClient
 import dagger.hilt.android.lifecycle.HiltViewModel
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import timber.log.Timber
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -27,6 +32,7 @@ data class SyncUiState(
     val syncProgress: SyncProgress? = null,
     val isConfigured: Boolean = false,
     val lastSyncedDate: String = "",
+    val lastSyncTime: String = "",
     val healthConnectAvailable: Boolean = false,
     val permissionGranted: Boolean = false,
 )
@@ -43,6 +49,7 @@ class SyncViewModel @Inject constructor(
     val uiState: StateFlow<SyncUiState> = _uiState.asStateFlow()
 
     private var syncJob: Job? = null
+    private var lastSyncTimestamp = 0L
 
     init {
         _uiState.update {
@@ -64,6 +71,24 @@ class SyncViewModel @Inject constructor(
                         isConfigured = configured,
                         lastSyncedDate = lastSyncedDate,
                     )
+                }
+            }
+        }
+
+        // Collect last sync timestamp and format as relative time
+        viewModelScope.launch {
+            settingsRepository.lastSyncTimestampFlow.collect { ts ->
+                lastSyncTimestamp = ts
+                _uiState.update { it.copy(lastSyncTime = formatRelativeTime(ts)) }
+            }
+        }
+
+        // Periodically refresh relative time string
+        viewModelScope.launch {
+            while (isActive) {
+                delay(30_000)
+                if (lastSyncTimestamp > 0) {
+                    _uiState.update { it.copy(lastSyncTime = formatRelativeTime(lastSyncTimestamp)) }
                 }
             }
         }
@@ -99,7 +124,11 @@ class SyncViewModel @Inject constructor(
                     _uiState.update { it.copy(syncProgress = progress) }
                 }
                 val resultMessage = when (result) {
-                    is SyncResult.Success -> "Synced ${result.recordsSynced} records"
+                    is SyncResult.Success -> when {
+                        result.recordsSynced == 0 -> "No new meals"
+                        result.daysProcessed == 1 -> "Synced ${result.recordsSynced} meals across 1 day"
+                        else -> "Synced ${result.recordsSynced} meals across ${result.daysProcessed} days"
+                    }
                     is SyncResult.Error -> "Error: ${result.message}"
                     is SyncResult.NeedsConfiguration -> "Please configure API settings"
                 }
@@ -112,6 +141,28 @@ class SyncViewModel @Inject constructor(
             } finally {
                 _uiState.update { it.copy(isSyncing = false, syncProgress = null) }
             }
+        }
+    }
+}
+
+internal fun formatRelativeTime(timestampMillis: Long): String {
+    if (timestampMillis <= 0L) return ""
+    val now = System.currentTimeMillis()
+    val diffMs = now - timestampMillis
+    if (diffMs < 0) return "Just now" // future timestamp — clock skew
+    val diffSec = diffMs / 1_000
+    val diffMin = diffSec / 60
+    val diffHour = diffMin / 60
+    val diffDays = diffHour / 24
+    return when {
+        diffSec < 60 -> "Just now"
+        diffMin < 60 -> "${diffMin} min ago"
+        diffHour < 24 -> "${diffHour} hr ago"
+        diffDays < 7 -> "${diffDays} days ago"
+        else -> {
+            val instant = Instant.ofEpochMilli(timestampMillis)
+            val date = instant.atZone(ZoneId.systemDefault()).toLocalDate()
+            date.format(DateTimeFormatter.ofPattern("MMM d"))
         }
     }
 }

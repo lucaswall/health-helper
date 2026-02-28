@@ -47,6 +47,7 @@ class SyncViewModelTest {
         every { settingsRepository.baseUrlFlow } returns flowOf("https://example.com")
         every { settingsRepository.syncIntervalFlow } returns flowOf(30)
         every { settingsRepository.lastSyncedDateFlow } returns flowOf("")
+        every { settingsRepository.lastSyncTimestampFlow } returns flowOf(0L)
         coEvery { settingsRepository.isConfigured() } returns true
         coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.NeedsConfiguration
     }
@@ -77,7 +78,7 @@ class SyncViewModelTest {
 
     @Test
     fun `triggerSync sets isSyncing true then false on completion`() = runTest {
-        coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Success(5)
+        coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Success(5, 1)
         coEvery { settingsRepository.isConfigured() } returns true
 
         viewModel = createViewModel()
@@ -95,7 +96,7 @@ class SyncViewModelTest {
 
     @Test
     fun `triggerSync calls use case`() = runTest {
-        coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Success(3)
+        coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Success(3, 1)
         coEvery { settingsRepository.isConfigured() } returns true
 
         viewModel = createViewModel()
@@ -109,7 +110,7 @@ class SyncViewModelTest {
 
     @Test
     fun `sync success updates lastSyncResult with record count`() = runTest {
-        coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Success(42)
+        coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Success(42, 3)
         coEvery { settingsRepository.isConfigured() } returns true
 
         viewModel = createViewModel()
@@ -120,7 +121,43 @@ class SyncViewModelTest {
 
         viewModel.uiState.test {
             val state = awaitItem()
-            assertEquals("Synced 42 records", state.lastSyncResult)
+            assertEquals("Synced 42 meals across 3 days", state.lastSyncResult)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `sync success with zero records shows no new meals`() = runTest {
+        coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Success(0, 1)
+        coEvery { settingsRepository.isConfigured() } returns true
+
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.triggerSync()
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals("No new meals", state.lastSyncResult)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `sync success with one day uses singular day`() = runTest {
+        coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Success(5, 1)
+        coEvery { settingsRepository.isConfigured() } returns true
+
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.triggerSync()
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals("Synced 5 meals across 1 day", state.lastSyncResult)
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -166,7 +203,7 @@ class SyncViewModelTest {
         coEvery { syncNutritionUseCase.invoke(any()) } coAnswers {
             val onProgress = firstArg<(SyncProgress) -> Unit>()
             onProgress(SyncProgress("2024-01-01", 5, 1, 10))
-            SyncResult.Success(10)
+            SyncResult.Success(10, 5)
         }
         coEvery { settingsRepository.isConfigured() } returns true
 
@@ -190,7 +227,7 @@ class SyncViewModelTest {
         coEvery { syncNutritionUseCase.invoke(any()) } coAnswers {
             callCount++
             kotlinx.coroutines.delay(1000L) // hold the coroutine
-            SyncResult.Success(1)
+            SyncResult.Success(1, 1)
         }
         coEvery { settingsRepository.isConfigured() } returns true
 
@@ -301,6 +338,36 @@ class SyncViewModelTest {
             val state = awaitItem()
             assertFalse(state.isSyncing)
             assertEquals("Sync failed. Please try again.", state.lastSyncResult)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `lastSyncTime is empty when timestamp is 0`() = runTest {
+        every { settingsRepository.lastSyncTimestampFlow } returns flowOf(0L)
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals("", state.lastSyncTime)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `lastSyncTime formats recent timestamp as relative time`() = runTest {
+        val fiveMinAgo = System.currentTimeMillis() - 300_000L
+        every { settingsRepository.lastSyncTimestampFlow } returns flowOf(fiveMinAgo)
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertTrue(
+                state.lastSyncTime.contains("min ago"),
+                "Expected 'min ago' in '${state.lastSyncTime}'",
+            )
             cancelAndIgnoreRemainingEvents()
         }
     }

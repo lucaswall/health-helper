@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.healthhelper.app.domain.repository.SettingsRepository
 import kotlinx.coroutines.Dispatchers
@@ -29,6 +30,7 @@ class DataStoreSettingsRepository @Inject constructor(
         val BASE_URL = stringPreferencesKey("base_url")
         val SYNC_INTERVAL = intPreferencesKey("sync_interval")
         val LAST_SYNCED_DATE = stringPreferencesKey("last_synced_date")
+        val LAST_SYNC_TIMESTAMP = longPreferencesKey("last_sync_timestamp")
         const val DEFAULT_SYNC_INTERVAL = 5
         const val ENCRYPTED_API_KEY = "api_key"
     }
@@ -87,6 +89,9 @@ class DataStoreSettingsRepository @Inject constructor(
     override val lastSyncedDateFlow: Flow<String> =
         dataStore.data.map { it[LAST_SYNCED_DATE] ?: "" }
 
+    override val lastSyncTimestampFlow: Flow<Long> =
+        dataStore.data.map { it[LAST_SYNC_TIMESTAMP] ?: 0L }
+
     override suspend fun setApiKey(value: String) {
         withContext(Dispatchers.IO) {
             encryptedPrefs.edit().putString(ENCRYPTED_API_KEY, value).commit()
@@ -103,6 +108,10 @@ class DataStoreSettingsRepository @Inject constructor(
 
     override suspend fun setLastSyncedDate(value: String) {
         dataStore.edit { it[LAST_SYNCED_DATE] = value }
+    }
+
+    override suspend fun setLastSyncTimestamp(value: Long) {
+        dataStore.edit { it[LAST_SYNC_TIMESTAMP] = value }
     }
 
     override suspend fun isConfigured(): Boolean {

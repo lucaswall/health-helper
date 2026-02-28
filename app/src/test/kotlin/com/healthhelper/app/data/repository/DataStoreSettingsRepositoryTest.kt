@@ -230,6 +230,19 @@ class DataStoreSettingsRepositoryTest {
     }
 
     @Test
+    @DisplayName("lastSyncTimestampFlow emits 0L by default")
+    fun defaultLastSyncTimestamp() = testScope.runTest {
+        assertEquals(0L, repository.lastSyncTimestampFlow.first())
+    }
+
+    @Test
+    @DisplayName("setLastSyncTimestamp stores value and emits it")
+    fun storeAndRetrieveLastSyncTimestamp() = testScope.runTest {
+        repository.setLastSyncTimestamp(1_000_000L)
+        assertEquals(1_000_000L, repository.lastSyncTimestampFlow.first())
+    }
+
+    @Test
     @DisplayName("isConfigured returns true when API key exists only in DataStore (pre-migration)")
     fun isConfiguredReturnsTruePreMigration() = testScope.runTest {
         dataStore.edit { it[stringPreferencesKey("api_key")] = "legacy_key" }

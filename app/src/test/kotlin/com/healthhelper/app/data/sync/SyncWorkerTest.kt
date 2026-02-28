@@ -22,7 +22,7 @@ class SyncWorkerTest {
 
     @Test
     fun `doWork returns success when sync succeeds`() = runTest {
-        coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Success(5)
+        coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Success(5, 1)
 
         val result = createWorker().doWork()
 

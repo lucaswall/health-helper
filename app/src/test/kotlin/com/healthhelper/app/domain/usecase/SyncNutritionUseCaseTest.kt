@@ -64,6 +64,7 @@ class SyncNutritionUseCaseTest {
         every { settingsRepository.baseUrlFlow } returns flowOf(baseUrl)
         every { settingsRepository.lastSyncedDateFlow } returns flowOf(lastSyncedDate)
         coEvery { settingsRepository.setLastSyncedDate(any()) } returns Unit
+        coEvery { settingsRepository.setLastSyncTimestamp(any()) } returns Unit
     }
 
     @Test
@@ -88,6 +89,7 @@ class SyncNutritionUseCaseTest {
 
         assertTrue(result is SyncResult.Success)
         assertEquals(1, (result as SyncResult.Success).recordsSynced)
+        assertEquals(1, (result as SyncResult.Success).daysProcessed)
     }
 
     @Test
@@ -103,6 +105,7 @@ class SyncNutritionUseCaseTest {
 
         assertTrue(result is SyncResult.Success)
         assertTrue((result as SyncResult.Success).recordsSynced >= 2)
+        assertTrue((result as SyncResult.Success).daysProcessed >= 2)
     }
 
     @Test
@@ -123,6 +126,7 @@ class SyncNutritionUseCaseTest {
 
         assertTrue(result is SyncResult.Success)
         assertEquals(1, (result as SyncResult.Success).recordsSynced)
+        // today failed, but yesterday succeeded → 1 successful day
     }
 
     @Test
@@ -317,6 +321,30 @@ class SyncNutritionUseCaseTest {
         // Partial success — some records written
         assertTrue(result is SyncResult.Success)
         assertEquals(1, (result as SyncResult.Success).recordsSynced)
+    }
+
+    @Test
+    @DisplayName("invoke sets lastSyncTimestamp on successful sync")
+    fun invokeSetsLastSyncTimestampOnSuccess() = runTest {
+        val today = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE)
+        configureSettings(lastSyncedDate = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), today) } returns Result.success(listOf(testEntry))
+        coEvery { nutritionRepository.writeNutritionRecords(today, any()) } returns true
+
+        useCase.invoke()
+
+        coVerify { settingsRepository.setLastSyncTimestamp(match { it > 0L }) }
+    }
+
+    @Test
+    @DisplayName("invoke does not set lastSyncTimestamp when all days fail")
+    fun invokeDoesNotSetLastSyncTimestampOnError() = runTest {
+        configureSettings(lastSyncedDate = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } returns Result.failure(Exception("fail"))
+
+        useCase.invoke()
+
+        coVerify(exactly = 0) { settingsRepository.setLastSyncTimestamp(any()) }
     }
 
     @Test

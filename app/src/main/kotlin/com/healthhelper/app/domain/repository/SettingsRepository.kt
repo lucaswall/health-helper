@@ -7,9 +7,11 @@ interface SettingsRepository {
     val baseUrlFlow: Flow<String>
     val syncIntervalFlow: Flow<Int>
     val lastSyncedDateFlow: Flow<String>
+    val lastSyncTimestampFlow: Flow<Long>
     suspend fun setApiKey(value: String)
     suspend fun setBaseUrl(value: String)
     suspend fun setSyncInterval(value: Int)
     suspend fun setLastSyncedDate(value: String)
+    suspend fun setLastSyncTimestamp(value: Long)
     suspend fun isConfigured(): Boolean
 }

@@ -99,11 +99,19 @@ class SyncNutritionUseCase @Inject constructor(
             settingsRepository.setLastSyncedDate(contiguousEnd.format(DateTimeFormatter.ISO_LOCAL_DATE))
         }
 
+        if (successfulDays > 0) {
+            try {
+                settingsRepository.setLastSyncTimestamp(System.currentTimeMillis())
+            } catch (e: Exception) {
+                // Do not break sync flow if timestamp save fails
+            }
+        }
+
         return when {
             successfulDays == 0 -> SyncResult.Error("All sync attempts failed")
             totalEntriesFetched > 0 && totalRecordsSynced == 0 ->
                 SyncResult.Error("Failed to write records to Health Connect")
-            else -> SyncResult.Success(totalRecordsSynced)
+            else -> SyncResult.Success(totalRecordsSynced, successfulDays)
         }
     }
 
