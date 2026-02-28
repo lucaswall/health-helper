@@ -313,6 +313,53 @@ class DataStoreSettingsRepositoryTest {
         verify { encryptedEditor.commit() }
     }
 
+    // --- null encryptedPrefs tests (Fix 1: HEA-110) ---
+
+    @Test
+    @DisplayName("apiKeyFlow emits empty string when encryptedPrefs is null")
+    fun apiKeyFlowEmitsEmptyWhenEncryptedPrefsNull() = testScope.runTest {
+        val repoNullPrefs = DataStoreSettingsRepository(dataStore, null)
+        assertEquals("", repoNullPrefs.apiKeyFlow.first())
+    }
+
+    @Test
+    @DisplayName("anthropicApiKeyFlow emits empty string when encryptedPrefs is null")
+    fun anthropicApiKeyFlowEmitsEmptyWhenEncryptedPrefsNull() = testScope.runTest {
+        val repoNullPrefs = DataStoreSettingsRepository(dataStore, null)
+        assertEquals("", repoNullPrefs.anthropicApiKeyFlow.first())
+    }
+
+    @Test
+    @DisplayName("setApiKey is no-op when encryptedPrefs is null")
+    fun setApiKeyIsNoOpWhenEncryptedPrefsNull() = testScope.runTest {
+        val repoNullPrefs = DataStoreSettingsRepository(dataStore, null)
+        // Should not throw
+        repoNullPrefs.setApiKey("should-be-ignored")
+        assertEquals("", repoNullPrefs.apiKeyFlow.first())
+    }
+
+    @Test
+    @DisplayName("setAnthropicApiKey is no-op when encryptedPrefs is null")
+    fun setAnthropicApiKeyIsNoOpWhenEncryptedPrefsNull() = testScope.runTest {
+        val repoNullPrefs = DataStoreSettingsRepository(dataStore, null)
+        // Should not throw
+        repoNullPrefs.setAnthropicApiKey("should-be-ignored")
+        assertEquals("", repoNullPrefs.anthropicApiKeyFlow.first())
+    }
+
+    @Test
+    @DisplayName("migration is skipped when encryptedPrefs is null")
+    fun migrationSkippedWhenEncryptedPrefsNull() = testScope.runTest {
+        // Put a legacy key in DataStore
+        dataStore.edit { it[stringPreferencesKey("api_key")] = "legacy_key" }
+        val repoNullPrefs = DataStoreSettingsRepository(dataStore, null)
+        // Should not crash, returns empty
+        assertEquals("", repoNullPrefs.apiKeyFlow.first())
+        // Legacy key remains in DataStore (migration was skipped)
+        val prefs = dataStore.data.first()
+        assertEquals("legacy_key", prefs[stringPreferencesKey("api_key")])
+    }
+
     @Test
     @DisplayName("apiKeyFlow handles migration failure gracefully")
     fun apiKeyFlowHandlesMigrationFailure() = testScope.runTest {

@@ -6,6 +6,8 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flow
@@ -422,5 +424,82 @@ class SettingsViewModelTest {
             assertEquals("", state.apiKey)
             cancelAndIgnoreRemainingEvents()
         }
+    }
+
+    // --- Fix 2 (HEA-111): toString redaction tests ---
+
+    @Test
+    fun `SettingsUiState toString does not expose apiKey value`() {
+        val state = SettingsUiState(apiKey = "secret-api-key-12345")
+        assertFalse(state.toString().contains("secret-api-key-12345"))
+    }
+
+    @Test
+    fun `SettingsUiState toString does not expose anthropicApiKey value`() {
+        val state = SettingsUiState(anthropicApiKey = "sk-ant-secret-key-12345")
+        assertFalse(state.toString().contains("sk-ant-secret-key-12345"))
+    }
+
+    @Test
+    fun `SettingsUiState toString shows redacted placeholder for apiKey`() {
+        val state = SettingsUiState(apiKey = "super-secret")
+        assertTrue(state.toString().contains("***"))
+    }
+
+    // --- Fix 3 (HEA-112): Concurrent save guard tests ---
+
+    @Test
+    fun `second save while already saving is ignored`() = runTest {
+        val continueDeferred = CompletableDeferred<Unit>()
+        coEvery { settingsRepository.setApiKey(any()) } coAnswers {
+            continueDeferred.await()
+        }
+
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.save() // first call — coroutine starts, suspends at continueDeferred.await()
+        advanceUntilIdle() // runs until first save suspends; isSaving is now true
+
+        viewModel.save() // second call — should be ignored (isSaving = true)
+
+        continueDeferred.complete(Unit) // release first save
+        advanceUntilIdle()
+
+        // setApiKey called only once
+        coVerify(exactly = 1) { settingsRepository.setApiKey(any()) }
+    }
+
+    // --- Fix 3 (HEA-112): CancellationException propagation tests ---
+
+    @Test
+    fun `CancellationException from setApiKey propagates and stops further saves`() = runTest {
+        coEvery { settingsRepository.setApiKey(any()) } throws CancellationException("test cancel")
+
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.save()
+        advanceUntilIdle()
+
+        // CancellationException propagated — setBaseUrl and setSyncInterval must NOT have been called
+        coVerify(exactly = 0) { settingsRepository.setBaseUrl(any()) }
+        coVerify(exactly = 0) { settingsRepository.setSyncInterval(any()) }
+        coVerify(exactly = 0) { settingsRepository.setAnthropicApiKey(any()) }
+    }
+
+    @Test
+    fun `CancellationException from setBaseUrl propagates and stops further saves`() = runTest {
+        coEvery { settingsRepository.setBaseUrl(any()) } throws CancellationException("test cancel")
+
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.save()
+        advanceUntilIdle()
+
+        // setSyncInterval and setAnthropicApiKey must NOT have been called
+        coVerify(exactly = 0) { settingsRepository.setSyncInterval(any()) }
+        coVerify(exactly = 0) { settingsRepository.setAnthropicApiKey(any()) }
     }
 }
