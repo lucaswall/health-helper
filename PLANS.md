@@ -634,3 +634,126 @@
 
 ### Continuation Status
 All tasks completed.
+
+### Review Findings
+
+Summary: 14 issue(s) found, creating Fix Plan (Team: security, reliability, quality reviewers)
+- FIX: 14 issue(s) — Linear issues created (HEA-110 through HEA-120)
+- DISCARDED: 6 finding(s) — false positives / not applicable
+
+**Issues requiring fix:**
+- [CRITICAL] SECURITY: Silent plaintext fallback when Keystore unavailable (`app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt:64-67`) — API keys stored in cleartext when EncryptedSharedPreferences fails (HEA-110)
+- [HIGH] SECURITY: API keys exposed via ViewModel data class toString() (`app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModel.kt:16-24, 34-39`) — crash reporters/loggers can leak keys (HEA-111)
+- [HIGH] COROUTINE: SettingsViewModel.save() swallows CancellationException + missing concurrent guard (`app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModel.kt:100-154`) — 4 catch blocks catch CancellationException; no guard prevents concurrent saves (HEA-112)
+- [HIGH] TIMEOUT: HC writeBloodPressureRecord missing timeout (`app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodPressureRepository.kt:26-27`) — getLastReading has withTimeout but write does not (HEA-113)
+- [MEDIUM] RESOURCE: CameraCaptureScreen ImageProxy not closed in finally + unused ExecutorService (`app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt:58-61, 190-195`) — OOM during buffer read leaks ImageProxy; cameraExecutor created but never used (HEA-114)
+- [MEDIUM] BUG: No image size validation before Anthropic API call (`app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt:191-195`) — large images exceed API limit, base64 on main thread risks ANR (HEA-115)
+- [MEDIUM] BUG: Snackbar message silently dropped after BP save (`app/src/main/kotlin/com/healthhelper/app/presentation/ui/AppNavigation.kt:51-55`) — snackbarMsg parameter received but unused (HEA-116)
+- [MEDIUM] ERROR: GetLastBloodPressureReadingUseCase swallows exceptions without logging (`app/src/main/kotlin/com/healthhelper/app/domain/usecase/GetLastBloodPressureReadingUseCase.kt:15-16`) — catch returns null with no Timber log (HEA-117)
+- [MEDIUM] TEST: CancellationException tests incomplete (`CameraCaptureViewModelTest.kt:229-250`, `HealthConnectBloodPressureRepositoryTest.kt`) — test doesn't verify propagation; missing getLastReading test (HEA-120)
+- [LOW] BUG: BloodPressureRecordMapper toInt() truncates instead of rounding (`app/src/main/kotlin/com/healthhelper/app/data/repository/BloodPressureRecordMapper.kt:61-62`) — should use roundToInt() (HEA-118)
+- [LOW] BUG: AnthropicApiClient elapsed time only logged on success path (`app/src/main/kotlin/com/healthhelper/app/data/api/AnthropicApiClient.kt:90-113`) — error paths skip duration log (HEA-119)
+
+**Discarded findings (not bugs):**
+- [DISCARDED] SECURITY: security-crypto alpha version (libs.versions.toml:24) — 1.1.0-alpha06 is accepted industry practice; stable 1.0.0 has known device compatibility issues; widely used in production Android apps
+- [DISCARDED] BUG: Image format mismatch YUV vs JPEG (CameraCaptureScreen.kt:187-195) — false positive; CameraX `ImageCapture.OnImageCapturedCallback` returns JPEG format by default; `planes[0].buffer` contains JPEG bytes
+- [DISCARDED] TYPE: Force-unwrap !! on nullable in SyncViewModelTest (SyncViewModelTest.kt:461) — false positive; `mockk(relaxed = true)` always returns non-null mock; the !! is safe in practice
+- [DISCARDED] BUG: CameraCaptureViewModel stale processing guard (CameraCaptureViewModel.kt:47-52) — false positive; `viewModelScope` uses `Dispatchers.Main.immediate`, so the launched coroutine sets `isProcessing=true` before `onPhotoCaptured` returns, making the guard effective
+- [DISCARDED] CONVENTION: Timber string interpolation (CameraCaptureViewModel.kt:68) — style-only, no correctness impact; `Timber.w("BP parse error: ${result.message}")` vs format args is cosmetic
+- [DISCARDED] TEST: Trivial enum existence tests (BloodPressureReadingTest.kt:72-129) — tests aren't wrong, just low value; they guard against enum constant removal but add no behavioral coverage
+
+### Linear Updates
+- HEA-98 through HEA-109: Review → Merge (original tasks completed)
+- HEA-110: Created in Todo (Fix: silent plaintext fallback — CRITICAL)
+- HEA-111: Created in Todo (Fix: API keys in toString — HIGH)
+- HEA-112: Created in Todo (Fix: save() CancellationException + concurrent guard — HIGH)
+- HEA-113: Created in Todo (Fix: HC write missing timeout — HIGH)
+- HEA-114: Created in Todo (Fix: CameraCaptureScreen resource management — MEDIUM)
+- HEA-115: Created in Todo (Fix: image size validation — MEDIUM)
+- HEA-116: Created in Todo (Fix: snackbar message dropped — MEDIUM)
+- HEA-117: Created in Todo (Fix: use case missing error logging — MEDIUM)
+- HEA-118: Created in Todo (Fix: toInt truncation — LOW)
+- HEA-119: Created in Todo (Fix: API client elapsed time logging — LOW)
+- HEA-120: Created in Todo (Fix: test quality — MEDIUM)
+
+<!-- REVIEW COMPLETE -->
+
+---
+
+## Fix Plan
+
+**Source:** Review findings from Iteration 1
+**Linear Issues:** [HEA-110](https://linear.app/lw-claude/issue/HEA-110), [HEA-111](https://linear.app/lw-claude/issue/HEA-111), [HEA-112](https://linear.app/lw-claude/issue/HEA-112), [HEA-113](https://linear.app/lw-claude/issue/HEA-113), [HEA-114](https://linear.app/lw-claude/issue/HEA-114), [HEA-115](https://linear.app/lw-claude/issue/HEA-115), [HEA-116](https://linear.app/lw-claude/issue/HEA-116), [HEA-117](https://linear.app/lw-claude/issue/HEA-117), [HEA-118](https://linear.app/lw-claude/issue/HEA-118), [HEA-119](https://linear.app/lw-claude/issue/HEA-119), [HEA-120](https://linear.app/lw-claude/issue/HEA-120)
+
+### Fix 1: Silent plaintext fallback when Keystore unavailable
+**Linear Issue:** [HEA-110](https://linear.app/lw-claude/issue/HEA-110)
+
+1. Write test in `app/src/test/kotlin/com/healthhelper/app/di/AppModuleTest.kt` verifying that when `EncryptedSharedPreferences.create()` throws, the provider returns null (or a marked-insecure wrapper) rather than silently falling back to plaintext
+2. Modify `AppModule.kt:64-67` to either return null (making `SharedPreferences?` nullable) or throw, and surface a warning via a `SharedFlow` that the UI can observe
+3. Ensure `DataStoreSettingsRepository` handles null `SharedPreferences` gracefully (refuses to store keys, returns empty flows)
+
+### Fix 2: SettingsViewModel API keys exposed via toString()
+**Linear Issue:** [HEA-111](https://linear.app/lw-claude/issue/HEA-111)
+
+1. Write test verifying `SettingsUiState.toString()` and `PersistedSettings.toString()` do not contain API key values
+2. Override `toString()` on `SettingsUiState` to redact `apiKey` and `anthropicApiKey` fields (show "***" instead)
+3. Override `toString()` on `PersistedSettings` similarly
+
+### Fix 3: SettingsViewModel.save() CancellationException + concurrent guard
+**Linear Issue:** [HEA-112](https://linear.app/lw-claude/issue/HEA-112)
+
+1. Write test verifying `save()` while already saving is ignored (returns without launching)
+2. Write test verifying CancellationException propagates from `save()` instead of being logged as error
+3. Add `if (isSaving) return` guard at top of `save()` before `viewModelScope.launch`
+4. Add `if (e is CancellationException) throw e` as first line in each of the 4 catch blocks in `save()`
+
+### Fix 4: HC writeBloodPressureRecord missing timeout
+**Linear Issue:** [HEA-113](https://linear.app/lw-claude/issue/HEA-113)
+
+1. Write test in `HealthConnectBloodPressureRepositoryTest.kt` verifying `writeBloodPressureRecord` times out after 10s (use `delay` in mock to exceed timeout)
+2. Wrap `healthConnectClient.insertRecords()` at line 27 in `withTimeout(10_000L)`
+
+### Fix 5: CameraCaptureScreen resource management
+**Linear Issue:** [HEA-114](https://linear.app/lw-claude/issue/HEA-114)
+
+1. Wrap `onCaptureSuccess` body in `try { ... } finally { image.close() }` at `CameraCaptureScreen.kt:190-195`
+2. Remove unused `cameraExecutor` (`ExecutorService`) and its `DisposableEffect` cleanup at lines 58-61
+3. Remove unused import `java.util.concurrent.ExecutorService` and `java.util.concurrent.Executors`
+
+### Fix 6: Image size validation before Anthropic API call
+**Linear Issue:** [HEA-115](https://linear.app/lw-claude/issue/HEA-115)
+
+1. Write test in `AnthropicApiClientTest.kt` or `CameraCaptureViewModelTest.kt` verifying oversized images are resized before API call
+2. Add image resize utility function: decode JPEG to Bitmap, scale to max 1568px on long edge, re-encode as JPEG
+3. Call resize in `CameraCaptureViewModel.onPhotoCaptured()` before passing bytes to API client (use `withContext(Dispatchers.Default)` for CPU-bound resize)
+
+### Fix 7: Snackbar message wiring in AppNavigation
+**Linear Issue:** [HEA-116](https://linear.app/lw-claude/issue/HEA-116)
+
+1. In `AppNavigation.kt:51-55`, set the snackbar message in the previous back stack entry's `savedStateHandle` before navigating
+2. In `SyncScreen`, observe the `savedStateHandle` for the snackbar message key and show via `SnackbarHostState`
+3. Clear the message after showing to prevent re-display on recomposition
+
+### Fix 8: GetLastBloodPressureReadingUseCase missing error logging
+**Linear Issue:** [HEA-117](https://linear.app/lw-claude/issue/HEA-117)
+
+1. Write test verifying that when an exception occurs, it is logged (use MockK to verify Timber interaction, or test the return value and ensure Timber is planted)
+2. Add `Timber.e(e, "GetLastBloodPressureReadingUseCase: unexpected error")` in the catch block at `GetLastBloodPressureReadingUseCase.kt:15-16`
+
+### Fix 9: BloodPressureRecordMapper toInt() truncation
+**Linear Issue:** [HEA-118](https://linear.app/lw-claude/issue/HEA-118)
+
+1. Write test in `BloodPressureRecordMapperTest.kt` verifying that a `BloodPressureRecord` with systolic `120.9` maps to domain model with systolic `121`
+2. Change `toInt()` to `roundToInt()` at `BloodPressureRecordMapper.kt:61-62`, add `import kotlin.math.roundToInt`
+
+### Fix 10: AnthropicApiClient elapsed time logging
+**Linear Issue:** [HEA-119](https://linear.app/lw-claude/issue/HEA-119)
+
+1. Move the elapsed time log (`Timber.d("parseBloodPressureImage completed in ${elapsed}ms")`) to immediately after computing `elapsed` at line 90-91, before the status check
+2. Or add elapsed to the error log lines at lines 100-103
+
+### Fix 11: CancellationException test quality
+**Linear Issue:** [HEA-120](https://linear.app/lw-claude/issue/HEA-120)
+
+1. In `CameraCaptureViewModelTest.kt:229-250`, replace the assertion with `assertFailsWith<CancellationException>` to actually verify the exception propagates
+2. In `HealthConnectBloodPressureRepositoryTest.kt`, add a new test `getLastReadingPropagatesCancellationException` following the same pattern as the existing `writeBloodPressureRecordPropagatesCancellationException` test
