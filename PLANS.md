@@ -334,5 +334,90 @@ Add permissions for Sentry MCP tools to the `permissions.allow` array in `.claud
 - bug-hunter: Found 4 issues — 2 real bugs fixed (temp file leak on camera cancel, unfaithful BitmapFactory mock), 2 false positives skipped (DSN is public per Sentry docs, trace rate intentional for personal app)
 - verifier: All tests pass, zero warnings
 
+### Review Findings
+
+Summary: 5 issue(s) found (Team: security, reliability, quality reviewers)
+- FIX: 5 issue(s) — Linear issues created
+- DISCARDED: 14 finding(s) — false positives / not applicable
+
+**Issues requiring fix:**
+- [MEDIUM] RESOURCE: Temp file leak — `uri?.path` on content:// URI doesn't resolve to filesystem path, temp files never deleted (`app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt:78`)
+- [MEDIUM] SECURITY: No URI scheme validation for shared images — `file://` URIs accepted without validation (`app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt:86`)
+- [MEDIUM] RESOURCE: IO reads on Main dispatcher — `readBytes()` on Main thread in camera callback and shared URI handler, ANR risk (`app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt:66,87`)
+- [MEDIUM] EDGE CASE: No size limit on image `readBytes()` — unbounded stream could cause OOM (`app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt:66,87`)
+- [LOW] EDGE CASE: Share intent re-navigation on activity recreation — `LaunchedEffect(sharedImageUri)` fires again after config change/process death (`app/src/main/kotlin/com/healthhelper/app/presentation/ui/AppNavigation.kt:18-24`)
+
+**Discarded findings (not bugs):**
+- [DISCARDED] Sentry DSN hardcoded in manifest — Intentional per plan. Sentry DSNs are public ingest endpoints per Sentry's official documentation. Not a secret; only allows event submission, not reading.
+- [DISCARDED] Timber.w logs API error message — Data minimization concern only. The `result.message` field contains parse-level descriptions, not user data or tokens.
+- [DISCARDED] ACTION_SEND no permission guard — Standard Android share receiver behavior. Expected design.
+- [DISCARDED] SharedFlow collection pattern — Reviewer confirmed no actual bug. replay=0 prevents stale events.
+- [DISCARDED] processingJob?.cancel() unreachable code — Guard on line 55 makes cancel on line 57 unreachable when processing. Harmless dead code.
+- [DISCARDED] Force unwrap `uiState.error!!` — Safe in Compose snapshot system. Delegated property value stable within a composition pass. Standard Compose pattern.
+- [DISCARDED] URLEncoder/URLDecoder inline style — Style only, zero correctness impact.
+- [DISCARDED] Timber string interpolation format — Style preference not enforced by CLAUDE.md.
+- [DISCARDED] Timber missing image context in logs — Nice-to-have diagnostic info, not a bug.
+- [DISCARDED] AppModule internal overload layering — Reviewer confirmed no bug.
+- [DISCARDED] No test for processingJob race — Edge case unreachable in practice due to guard + finally block ordering.
+- [DISCARDED] No test for onRetake() idempotency — Null-safe `?.cancel()` on null is safe by design.
+- [DISCARDED] Weak test assertion on captured bytes — Test is functional and asserts non-null. Stronger assertion is nice-to-have.
+- [DISCARDED] setUp mocks unused SettingsRepository flows — Copy-paste noise from another test class. Not a bug.
+
+### Linear Updates
+- HEA-142: Review → Merge (original task completed)
+- HEA-143: Review → Merge (original task completed)
+- HEA-144: Created in Todo (Fix: temp file leak)
+- HEA-145: Created in Todo (Fix: URI scheme validation)
+- HEA-146: Created in Todo (Fix: IO on Main dispatcher)
+- HEA-147: Created in Todo (Fix: image size limit)
+- HEA-148: Created in Todo (Fix: share intent re-navigation)
+
+<!-- REVIEW COMPLETE -->
+
 ### Continuation Status
 All tasks completed.
+
+---
+
+## Fix Plan
+
+**Source:** Review findings from Iteration 1
+**Linear Issues:** [HEA-144](https://linear.app/lw-claude/issue/HEA-144), [HEA-145](https://linear.app/lw-claude/issue/HEA-145), [HEA-146](https://linear.app/lw-claude/issue/HEA-146), [HEA-147](https://linear.app/lw-claude/issue/HEA-147), [HEA-148](https://linear.app/lw-claude/issue/HEA-148)
+
+### Fix 1: Temp file leak — store File reference for cleanup (HEA-144)
+**Linear Issue:** [HEA-144](https://linear.app/lw-claude/issue/HEA-144)
+
+1. Add `var tempFile by remember { mutableStateOf<File?>(null) }` to hold the temp file reference
+2. In the "Take Photo" onClick, assign `tempFile = File.createTempFile(...)` before creating the URI
+3. In `takePictureLauncher` callback `finally` block, replace `uri?.path?.let { File(it).delete() }` with `tempFile?.delete(); tempFile = null`
+4. Verify existing tests pass
+
+### Fix 2: URI scheme validation for shared images (HEA-145)
+**Linear Issue:** [HEA-145](https://linear.app/lw-claude/issue/HEA-145)
+
+1. In the `LaunchedEffect(sharedImageUri)` block, after `Uri.parse(sharedImageUri)`, add: `if (uri.scheme != "content") { viewModel.onCaptureError("Unsupported image source."); return@LaunchedEffect }`
+2. Verify existing tests pass
+
+### Fix 3: Move IO reads off Main dispatcher (HEA-146)
+**Linear Issue:** [HEA-146](https://linear.app/lw-claude/issue/HEA-146)
+
+1. In the `LaunchedEffect(sharedImageUri)` block, wrap `contentResolver.openInputStream(uri)?.use { it.readBytes() }` in `withContext(Dispatchers.IO) { ... }`
+2. In the `takePictureLauncher` callback, extract the byte-reading into a `rememberCoroutineScope()` launch with `Dispatchers.IO`, then call `viewModel.onPhotoCaptured(bytes)` from within
+3. Add `import kotlinx.coroutines.Dispatchers` and `import kotlinx.coroutines.withContext`
+4. Verify existing tests pass
+
+### Fix 4: Add size limit on image reads (HEA-147)
+**Linear Issue:** [HEA-147](https://linear.app/lw-claude/issue/HEA-147)
+
+1. Add a `private const val MAX_IMAGE_BYTES = 20 * 1024 * 1024` (20MB) constant at file level
+2. Create a `readBytesLimited(inputStream: InputStream, maxSize: Int): ByteArray` helper that reads in chunks and throws `IllegalArgumentException` if size exceeded
+3. Replace both `readBytes()` calls with `readBytesLimited(it, MAX_IMAGE_BYTES)`
+4. In catch blocks, handle the size exceeded case with user-friendly error: "Image is too large. Please choose a smaller photo."
+5. Verify existing tests pass
+
+### Fix 5: Consume share intent to prevent re-navigation (HEA-148)
+**Linear Issue:** [HEA-148](https://linear.app/lw-claude/issue/HEA-148)
+
+1. In `MainActivity.kt`, after extracting `sharedImageUri` from the intent, call `intent.removeExtra(Intent.EXTRA_STREAM)` to consume the share data
+2. This prevents the same URI from being re-extracted on activity recreation (config change / process death + restore)
+3. Verify existing tests pass
