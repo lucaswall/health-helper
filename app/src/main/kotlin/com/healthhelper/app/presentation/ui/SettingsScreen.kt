@@ -43,6 +43,7 @@ fun SettingsScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     var apiKeyVisible by remember { mutableStateOf(false) }
+    var anthropicApiKeyVisible by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -94,6 +95,31 @@ fun SettingsScreen(
                                 Icons.Filled.Visibility
                             },
                             contentDescription = if (apiKeyVisible) "Hide API key" else "Show API key",
+                        )
+                    }
+                },
+            )
+
+            OutlinedTextField(
+                value = uiState.anthropicApiKey,
+                onValueChange = viewModel::updateAnthropicApiKey,
+                label = { Text("Anthropic API Key") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                visualTransformation = if (anthropicApiKeyVisible) {
+                    VisualTransformation.None
+                } else {
+                    PasswordVisualTransformation()
+                },
+                trailingIcon = {
+                    IconButton(onClick = { anthropicApiKeyVisible = !anthropicApiKeyVisible }) {
+                        Icon(
+                            imageVector = if (anthropicApiKeyVisible) {
+                                Icons.Filled.VisibilityOff
+                            } else {
+                                Icons.Filled.Visibility
+                            },
+                            contentDescription = if (anthropicApiKeyVisible) "Hide Anthropic API key" else "Show Anthropic API key",
                         )
                     }
                 },

@@ -15,6 +15,7 @@ import javax.inject.Inject
 
 data class SettingsUiState(
     val apiKey: String = "",
+    val anthropicApiKey: String = "",
     val baseUrl: String = "",
     val syncInterval: Int = 15,
     val isConfigured: Boolean = false,
@@ -32,6 +33,7 @@ class SettingsViewModel @Inject constructor(
 
     private data class PersistedSettings(
         val apiKey: String = "",
+        val anthropicApiKey: String = "",
         val baseUrl: String = "",
         val syncInterval: Int = 15,
     )
@@ -46,17 +48,19 @@ class SettingsViewModel @Inject constructor(
                     settingsRepository.apiKeyFlow,
                     settingsRepository.baseUrlFlow,
                     settingsRepository.syncIntervalFlow,
-                ) { apiKey, baseUrl, syncInterval ->
-                    Triple(apiKey, baseUrl, syncInterval)
-                }.collect { (apiKey, baseUrl, syncInterval) ->
-                    persistedSettings = PersistedSettings(apiKey, baseUrl, syncInterval)
+                    settingsRepository.anthropicApiKeyFlow,
+                ) { apiKey, baseUrl, syncInterval, anthropicApiKey ->
+                    PersistedSettings(apiKey, anthropicApiKey, baseUrl, syncInterval)
+                }.collect { settings ->
+                    persistedSettings = settings
                     if (!isSaving) {
-                        val configured = apiKey.isNotEmpty() && baseUrl.isNotEmpty()
+                        val configured = settings.apiKey.isNotEmpty() && settings.baseUrl.isNotEmpty()
                         _uiState.update {
                             it.copy(
-                                apiKey = apiKey,
-                                baseUrl = baseUrl,
-                                syncInterval = syncInterval,
+                                apiKey = settings.apiKey,
+                                anthropicApiKey = settings.anthropicApiKey,
+                                baseUrl = settings.baseUrl,
+                                syncInterval = settings.syncInterval,
                                 isConfigured = configured,
                                 hasUnsavedChanges = false,
                             )
@@ -84,6 +88,12 @@ class SettingsViewModel @Inject constructor(
     fun updateSyncInterval(value: Int) {
         _uiState.update {
             it.copy(syncInterval = value).withDirtyFlag()
+        }
+    }
+
+    fun updateAnthropicApiKey(value: String) {
+        _uiState.update {
+            it.copy(anthropicApiKey = value).withDirtyFlag()
         }
     }
 
@@ -116,8 +126,17 @@ class SettingsViewModel @Inject constructor(
                 anyFailed = true
                 false
             }
+            val anthropicApiKeySaved = try {
+                settingsRepository.setAnthropicApiKey(current.anthropicApiKey)
+                true
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to save Anthropic API key")
+                anyFailed = true
+                false
+            }
             persistedSettings = PersistedSettings(
                 apiKey = if (apiKeySaved) current.apiKey else persistedSettings.apiKey,
+                anthropicApiKey = if (anthropicApiKeySaved) current.anthropicApiKey else persistedSettings.anthropicApiKey,
                 baseUrl = if (baseUrlSaved) current.baseUrl else persistedSettings.baseUrl,
                 syncInterval = if (intervalSaved) current.syncInterval else persistedSettings.syncInterval,
             )
@@ -140,6 +159,7 @@ class SettingsViewModel @Inject constructor(
                 persistedSettings.baseUrl.isNotEmpty()
             it.copy(
                 apiKey = persistedSettings.apiKey,
+                anthropicApiKey = persistedSettings.anthropicApiKey,
                 baseUrl = persistedSettings.baseUrl,
                 syncInterval = persistedSettings.syncInterval,
                 isConfigured = configured,
@@ -150,6 +170,7 @@ class SettingsViewModel @Inject constructor(
 
     private fun SettingsUiState.withDirtyFlag(): SettingsUiState {
         val dirty = apiKey != persistedSettings.apiKey ||
+            anthropicApiKey != persistedSettings.anthropicApiKey ||
             baseUrl != persistedSettings.baseUrl ||
             syncInterval != persistedSettings.syncInterval
         return copy(hasUnsavedChanges = dirty)

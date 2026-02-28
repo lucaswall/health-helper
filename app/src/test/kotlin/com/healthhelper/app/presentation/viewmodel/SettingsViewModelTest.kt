@@ -40,9 +40,11 @@ class SettingsViewModelTest {
         every { settingsRepository.baseUrlFlow } returns flowOf("https://example.com")
         every { settingsRepository.syncIntervalFlow } returns flowOf(30)
         every { settingsRepository.lastSyncedDateFlow } returns flowOf("")
+        every { settingsRepository.anthropicApiKeyFlow } returns flowOf("")
         coEvery { settingsRepository.setApiKey(any()) } returns Unit
         coEvery { settingsRepository.setBaseUrl(any()) } returns Unit
         coEvery { settingsRepository.setSyncInterval(any()) } returns Unit
+        coEvery { settingsRepository.setAnthropicApiKey(any()) } returns Unit
     }
 
     @AfterEach
@@ -331,6 +333,64 @@ class SettingsViewModelTest {
     fun `default SettingsUiState has syncInterval of 15`() {
         val state = SettingsUiState()
         assertEquals(15, state.syncInterval)
+    }
+
+    @Test
+    fun `initial state has empty anthropicApiKey`() = runTest {
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals("", state.anthropicApiKey)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `updateAnthropicApiKey sets hasUnsavedChanges to true`() = runTest {
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.updateAnthropicApiKey("sk-ant-test")
+
+        viewModel.uiState.test {
+            assertTrue(awaitItem().hasUnsavedChanges)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `save calls setAnthropicApiKey`() = runTest {
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.updateAnthropicApiKey("sk-ant-test")
+        viewModel.save()
+        advanceUntilIdle()
+
+        coVerify { settingsRepository.setAnthropicApiKey("sk-ant-test") }
+    }
+
+    @Test
+    fun `reset restores persisted anthropicApiKey`() = runTest {
+        every { settingsRepository.anthropicApiKeyFlow } returns flowOf("sk-ant-persisted")
+
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.updateAnthropicApiKey("sk-ant-changed")
+        viewModel.uiState.test {
+            assertEquals("sk-ant-changed", awaitItem().anthropicApiKey)
+            cancelAndIgnoreRemainingEvents()
+        }
+
+        viewModel.reset()
+
+        viewModel.uiState.test {
+            assertEquals("sk-ant-persisted", awaitItem().anthropicApiKey)
+            cancelAndIgnoreRemainingEvents()
+        }
     }
 
     @Test

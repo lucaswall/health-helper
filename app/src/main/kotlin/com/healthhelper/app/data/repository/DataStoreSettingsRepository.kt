@@ -46,6 +46,7 @@ class DataStoreSettingsRepository @Inject constructor(
         val LAST_SYNCED_MEALS = stringPreferencesKey("last_synced_meals")
         const val DEFAULT_SYNC_INTERVAL = 15
         const val ENCRYPTED_API_KEY = "api_key"
+        const val ENCRYPTED_ANTHROPIC_KEY = "anthropic_api_key"
     }
 
     private val migrationMutex = Mutex()
@@ -93,6 +94,17 @@ class DataStoreSettingsRepository @Inject constructor(
         awaitClose { encryptedPrefs.unregisterOnSharedPreferenceChangeListener(listener) }
     }
 
+    override val anthropicApiKeyFlow: Flow<String> = callbackFlow {
+        trySend(encryptedPrefs.getString(ENCRYPTED_ANTHROPIC_KEY, "") ?: "")
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == ENCRYPTED_ANTHROPIC_KEY) {
+                trySend(encryptedPrefs.getString(ENCRYPTED_ANTHROPIC_KEY, "") ?: "")
+            }
+        }
+        encryptedPrefs.registerOnSharedPreferenceChangeListener(listener)
+        awaitClose { encryptedPrefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+
     override val baseUrlFlow: Flow<String> =
         dataStore.data.map { it[BASE_URL] ?: "" }
 
@@ -134,6 +146,12 @@ class DataStoreSettingsRepository @Inject constructor(
     override suspend fun setApiKey(value: String) {
         withContext(Dispatchers.IO) {
             encryptedPrefs.edit().putString(ENCRYPTED_API_KEY, value).commit()
+        }
+    }
+
+    override suspend fun setAnthropicApiKey(value: String) {
+        withContext(Dispatchers.IO) {
+            encryptedPrefs.edit().putString(ENCRYPTED_ANTHROPIC_KEY, value).commit()
         }
     }
 

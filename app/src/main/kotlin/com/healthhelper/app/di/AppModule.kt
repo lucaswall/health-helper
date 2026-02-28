@@ -9,6 +9,7 @@ import androidx.health.connect.client.HealthConnectClient
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import androidx.work.WorkManager
+import com.healthhelper.app.data.api.AnthropicApiClient
 import com.healthhelper.app.data.api.FoodScannerApiClient
 import com.healthhelper.app.data.repository.DataStoreSettingsRepository
 import com.healthhelper.app.data.repository.FoodScannerFoodLogRepository
@@ -109,6 +110,11 @@ object AppModule {
     @Singleton
     fun provideFoodScannerApiClient(httpClient: HttpClient): FoodScannerApiClient =
         FoodScannerApiClient(httpClient)
+
+    @Provides
+    @Singleton
+    fun provideAnthropicApiClient(httpClient: HttpClient): AnthropicApiClient =
+        AnthropicApiClient(httpClient)
 
     @Provides
     @Singleton
