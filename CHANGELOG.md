@@ -6,3 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [1.0.0] - 2026-02-28
+
+### Added
+
+- Nutrition sync from Food Scanner API to Health Connect with full macro tracking (calories, protein, carbs, fat, fiber, sodium, and more)
+- Automatic background sync on a configurable interval (15–120 minutes)
+- Smart sync with ETag caching to skip Health Connect writes when food data hasn't changed
+- Blood pressure logging via camera — photograph your monitor and AI extracts the reading
+- Editable blood pressure confirmation screen with body position and measurement location
+- Blood pressure readings saved to Health Connect
+- Home screen showing last 3 synced meals, last blood pressure reading, and next sync time
+- Real-time sync progress with day counter and records synced
+- Settings screen for API configuration and sync interval
+- Adaptive launcher icon with health cross design
+
+[Unreleased]: https://github.com/lucaswall/health-helper/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/lucaswall/health-helper/releases/tag/v1.0.0
