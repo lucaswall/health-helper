@@ -22,6 +22,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -56,7 +57,7 @@ class CameraCaptureViewModelTest {
     }
 
     private fun createViewModel() =
-        CameraCaptureViewModel(anthropicApiClient, settingsRepository)
+        CameraCaptureViewModel(anthropicApiClient, settingsRepository, testDispatcher)
 
     @Test
     fun `initial state has isProcessing false and no error`() = runTest {
@@ -227,25 +228,40 @@ class CameraCaptureViewModelTest {
     }
 
     @Test
-    fun `CancellationException propagates`() = runTest {
+    fun `CancellationException resets isProcessing without setting error`() = runTest {
         coEvery { anthropicApiClient.parseBloodPressureImage(any(), any()) } throws
             CancellationException("Cancelled")
 
         viewModel = createViewModel()
         advanceTimeBy(1_000)
 
-        // CancellationException should be re-thrown (not caught silently)
-        // In the ViewModel implementation, CancellationException must propagate
-        // We verify this by checking the coroutine behaves correctly
-        // The ViewModel catches non-cancellation exceptions only
         viewModel.onPhotoCaptured(testImageBytes)
         advanceUntilIdle()
 
-        // After cancellation, state should be reset (not stuck in processing)
+        // CancellationException must not be swallowed as a generic error:
+        // isProcessing must reset to false AND error must remain null
         viewModel.uiState.test {
             val state = awaitItem()
             assertFalse(state.isProcessing)
+            assertNull(state.error)
             cancelAndIgnoreRemainingEvents()
         }
+    }
+
+    @Test
+    fun `onPhotoCaptured passes non-null bytes to API client`() = runTest {
+        var capturedBytes: ByteArray? = null
+        coEvery { anthropicApiClient.parseBloodPressureImage(any(), any()) } coAnswers {
+            capturedBytes = secondArg()
+            BloodPressureParseResult.Success(120, 80)
+        }
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.onPhotoCaptured(testImageBytes)
+        advanceUntilIdle()
+
+        assertNotNull(capturedBytes)
     }
 }
