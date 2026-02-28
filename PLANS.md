@@ -283,5 +283,73 @@ Meal persistence fix:
 - bug-hunter: Found 2 bugs (1 HIGH: setETag exception propagation, 1 MEDIUM: hardcoded test dates), both fixed
 - verifier: All tests pass, zero warnings
 
-### Continuation Status
-All tasks completed.
+### Review Findings
+
+Summary: 4 issue(s) found (Team: security, reliability, quality reviewers)
+- FIX: 4 issue(s) — Linear issues created
+- DISCARDED: 7 finding(s) — false positives / not applicable
+
+**Issues requiring fix:**
+- [MEDIUM] COROUTINE: CancellationException swallowed in apiKeyFlow callbackFlow (`app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt:93`) — `catch (e: Exception)` catches CancellationException without rethrowing, breaking cooperative cancellation
+- [MEDIUM] BUG: setLastSyncTimestamp called before HC write result checked (`app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt:117-123`) — timestamp updated when `successfulDays > 0` but before checking if HC writes succeeded; misleads UI on failed syncs
+- [MEDIUM] LOGGING: Server error logged at DEBUG level instead of WARN (`app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt:65`) — `Timber.d` makes server-reported errors invisible in production
+- [LOW] LOGGING: HTTP 429 rate-limited logged at ERROR level instead of WARN (`app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt:55`) — rate limiting is a transient condition, not an app error
+
+**Discarded findings (not bugs):**
+- [DISCARDED] SECURITY: ETag CRLF injection risk (`FoodScannerApiClient.kt:89`) — OkHttp validates header values and throws on CR/LF characters; server is already trusted (auth token sent). Defense exists at HTTP client layer.
+- [DISCARDED] SECURITY: No certificate pinning (`AppModule.kt:86-93`) — User-configured server makes certificate pinning impractical. HTTPS enforcement already present. Known trade-off.
+- [DISCARDED] SECURITY: No date parameter validation (`FoodLogRepository.kt:9`) — All callers generate dates from `LocalDate.format()`. No user input path. Defensive coding suggestion, not a bug.
+- [DISCARDED] CONVENTION: Missing `operator` keyword on invoke (`SyncNutritionUseCase.kt:25`) — Style-only preference. Both `useCase.invoke()` and `useCase()` work identically. Zero correctness impact.
+- [DISCARDED] TEST: Trivial singleton test (`FoodLogResultTest.kt:40-43`) — `data object` singleton is a Kotlin language guarantee. Test is trivially true but harmless.
+- [DISCARDED] TYPE: `assertIs<>` pattern not used in tests (`FoodScannerFoodLogRepositoryTest.kt`, `SyncNutritionUseCaseTest.kt`) — Style preference. `assertTrue + as` is correct and provides adequate coverage.
+- [DISCARDED] SECURITY: Server error message logged verbatim (`FoodScannerApiClient.kt:65`) — Merged into logging finding above. Timber.d suppressed in production.
+
+### Linear Updates
+- HEA-129: Review → Merge
+- HEA-130: Review → Merge
+- HEA-131: Review → Merge
+- HEA-132: Review → Merge
+- HEA-133: Review → Merge
+- HEA-134: Created in Todo (Fix: CancellationException swallowed in apiKeyFlow)
+- HEA-135: Created in Todo (Fix: setLastSyncTimestamp called prematurely)
+- HEA-136: Created in Todo (Fix: Server error logged at DEBUG)
+- HEA-137: Created in Todo (Fix: HTTP 429 logged at ERROR)
+
+<!-- REVIEW COMPLETE -->
+
+---
+
+## Fix Plan
+
+**Source:** Review findings from Iteration 1
+**Linear Issues:** [HEA-134](https://linear.app/lw-claude/issue/HEA-134), [HEA-135](https://linear.app/lw-claude/issue/HEA-135), [HEA-136](https://linear.app/lw-claude/issue/HEA-136), [HEA-137](https://linear.app/lw-claude/issue/HEA-137)
+
+### Fix 1: CancellationException swallowed in apiKeyFlow callbackFlow
+**Linear Issue:** [HEA-134](https://linear.app/lw-claude/issue/HEA-134)
+
+1. Write test in `app/src/test/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepositoryTest.kt` that collects `apiKeyFlow`, cancels the collecting coroutine during `migrateIfNeeded()`, and verifies `CancellationException` propagates (is not swallowed)
+2. Add `catch (e: CancellationException) { throw e }` before the generic `catch (e: Exception)` in `DataStoreSettingsRepository.kt:93`
+3. Run verifier (expect pass)
+
+### Fix 2: setLastSyncTimestamp called before HC write result checked
+**Linear Issue:** [HEA-135](https://linear.app/lw-claude/issue/HEA-135)
+
+1. Write test in `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt`: all API calls succeed with entries but all `writeNutritionRecords()` return false → verify `setLastSyncTimestamp` is NOT called
+2. Write test: some HC writes succeed (totalRecordsSynced > 0) → verify `setLastSyncTimestamp` IS called
+3. Change condition in `SyncNutritionUseCase.kt:117` from `successfulDays > 0` to `totalRecordsSynced > 0`
+4. Run verifier (expect pass)
+
+### Fix 3: Server error logged at DEBUG level instead of WARN
+**Linear Issue:** [HEA-136](https://linear.app/lw-claude/issue/HEA-136)
+
+1. Change `Timber.d` to `Timber.w` on line 65 of `FoodScannerApiClient.kt`
+2. Run verifier (expect pass — no test changes needed, log level is not asserted in tests)
+
+### Fix 4: HTTP 429 rate-limited logged at ERROR level instead of WARN
+**Linear Issue:** [HEA-137](https://linear.app/lw-claude/issue/HEA-137)
+
+1. In `FoodScannerApiClient.kt:52-56`, change the else branch to distinguish 429 from other errors:
+   - 401 → `Timber.w` (already correct)
+   - 429 → `Timber.w` (change from `Timber.e`)
+   - other → `Timber.e` (keep as-is)
+2. Run verifier (expect pass)
