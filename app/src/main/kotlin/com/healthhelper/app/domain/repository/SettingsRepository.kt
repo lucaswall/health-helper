@@ -18,5 +18,7 @@ interface SettingsRepository {
     suspend fun setLastSyncedDate(value: String)
     suspend fun setLastSyncTimestamp(value: Long)
     suspend fun setLastSyncedMeals(meals: List<SyncedMealSummary>)
+    suspend fun getETag(date: String): String?
+    suspend fun setETag(date: String, etag: String)
     suspend fun isConfigured(): Boolean
 }

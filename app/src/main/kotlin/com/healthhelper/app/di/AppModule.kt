@@ -106,7 +106,8 @@ object AppModule {
     @Singleton
     fun provideFoodLogRepository(
         apiClient: FoodScannerApiClient,
-    ): FoodLogRepository = FoodScannerFoodLogRepository(apiClient)
+        settingsRepository: SettingsRepository,
+    ): FoodLogRepository = FoodScannerFoodLogRepository(apiClient, settingsRepository)
 
     @Provides
     @Singleton

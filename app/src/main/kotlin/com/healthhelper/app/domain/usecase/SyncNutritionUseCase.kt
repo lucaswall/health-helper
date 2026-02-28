@@ -1,6 +1,7 @@
 package com.healthhelper.app.domain.usecase
 
 import com.healthhelper.app.domain.model.FoodLogEntry
+import com.healthhelper.app.domain.model.FoodLogResult
 import com.healthhelper.app.domain.model.SyncProgress
 import com.healthhelper.app.domain.model.SyncResult
 import com.healthhelper.app.domain.model.SyncedMealSummary
@@ -57,13 +58,20 @@ class SyncNutritionUseCase @Inject constructor(
             val result = foodLogRepository.getFoodLog(baseUrl, apiKey, dateStr)
 
             if (result.isSuccess) {
-                val entries = result.getOrThrow()
-                if (entries.isNotEmpty()) {
-                    totalEntriesFetched += entries.size
-                    val written = nutritionRepository.writeNutritionRecords(dateStr, entries)
-                    if (written) {
-                        totalRecordsSynced += entries.size
-                        entries.forEach { entry -> syncedEntries.add(Pair(dateStr, entry)) }
+                when (val foodLogResult = result.getOrThrow()) {
+                    is FoodLogResult.Data -> {
+                        val entries = foodLogResult.entries
+                        if (entries.isNotEmpty()) {
+                            totalEntriesFetched += entries.size
+                            val written = nutritionRepository.writeNutritionRecords(dateStr, entries)
+                            if (written) {
+                                totalRecordsSynced += entries.size
+                                entries.forEach { entry -> syncedEntries.add(Pair(dateStr, entry)) }
+                            }
+                        }
+                    }
+                    is FoodLogResult.NotModified -> {
+                        Timber.d("getFoodLog(%s) not modified, skipping HC write", dateStr)
                     }
                 }
                 successfulDays++
@@ -115,23 +123,26 @@ class SyncNutritionUseCase @Inject constructor(
         }
 
         // Persist last 3 meals: sort by date desc, then time desc (null time sorts last)
-        try {
-            val summaries = syncedEntries
-                .sortedWith(
-                    compareByDescending<Pair<String, FoodLogEntry>> { it.first }
-                        .thenByDescending { it.second.time ?: "" },
-                )
-                .take(3)
-                .map { (_, entry) ->
-                    SyncedMealSummary(
-                        foodName = entry.foodName,
-                        mealType = entry.mealType,
-                        calories = entry.calories.roundToInt().coerceAtLeast(0),
+        // Only update if we have new entries — don't overwrite with empty list when all dates are NotModified
+        if (syncedEntries.isNotEmpty()) {
+            try {
+                val summaries = syncedEntries
+                    .sortedWith(
+                        compareByDescending<Pair<String, FoodLogEntry>> { it.first }
+                            .thenByDescending { it.second.time ?: "" },
                     )
-                }
-            settingsRepository.setLastSyncedMeals(summaries)
-        } catch (e: Exception) {
-            Timber.w(e, "Failed to persist synced meal summaries")
+                    .take(3)
+                    .map { (_, entry) ->
+                        SyncedMealSummary(
+                            foodName = entry.foodName,
+                            mealType = entry.mealType,
+                            calories = entry.calories.roundToInt().coerceAtLeast(0),
+                        )
+                    }
+                settingsRepository.setLastSyncedMeals(summaries)
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to persist synced meal summaries")
+            }
         }
 
         return when {

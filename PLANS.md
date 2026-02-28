@@ -241,3 +241,47 @@ Meal persistence fix:
 **Risks/Considerations:**
 - Existing tests (14 API client tests, 18 use case tests) need mechanical updates for new return types — high line count but low risk
 - If Food Scanner server removes ETag support, behavior gracefully degrades: no `If-None-Match` sent (etag is null), server returns 200 with full data, everything works as before
+
+---
+
+## Iteration 1
+
+**Implemented:** 2026-02-28
+**Method:** Single-agent (2 independent units, 9 effort points — below worker threshold)
+
+### Tasks Completed This Iteration
+- Task 1: Add FoodLogResult domain model — sealed class with Data/NotModified variants
+- Task 2: Add ETag storage to SettingsRepository — per-date JSON map in DataStore with 7-day pruning
+- Task 3: Add ETag support to FoodScannerApiClient — If-None-Match header, 304 handling, ETag extraction
+- Task 4: Wire ETag through FoodScannerFoodLogRepository — inject SettingsRepository, map to FoodLogResult, store ETags
+- Task 5: Handle FoodLogResult.NotModified in SyncNutritionUseCase — skip HC writes, fix meal persistence guard
+
+### Files Modified
+- `app/src/main/kotlin/com/healthhelper/app/domain/model/FoodLogResult.kt` — New sealed class (Data/NotModified)
+- `app/src/main/kotlin/com/healthhelper/app/data/api/FoodLogApiResponse.kt` — New API response DTO with entries, etag, notModified
+- `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt` — Added etag parameter, 304 handling, ETag header extraction
+- `app/src/main/kotlin/com/healthhelper/app/domain/repository/SettingsRepository.kt` — Added getETag/setETag interface methods
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` — Implemented ETag storage with JSON map and 7-day pruning
+- `app/src/main/kotlin/com/healthhelper/app/domain/repository/FoodLogRepository.kt` — Changed return type to Result<FoodLogResult>
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/FoodScannerFoodLogRepository.kt` — Added SettingsRepository injection, ETag wiring, FoodLogResult mapping
+- `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt` — Added SettingsRepository to FoodLogRepository provider
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt` — Handle NotModified branch, guard meal persistence with syncedEntries.isNotEmpty()
+- `app/src/test/kotlin/com/healthhelper/app/domain/model/FoodLogResultTest.kt` — New: 3 tests for sealed class
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/ETagStorageTest.kt` — New: 6 tests for ETag storage
+- `app/src/test/kotlin/com/healthhelper/app/data/api/FoodScannerApiClientTest.kt` — Updated existing tests + 5 new ETag tests
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/FoodScannerFoodLogRepositoryTest.kt` — New: 8 tests for repository ETag wiring
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt` — Migrated 22 existing tests + 5 new NotModified tests
+
+### Linear Updates
+- HEA-129: Todo → In Progress → Review
+- HEA-130: Todo → In Progress → Review
+- HEA-131: Todo → In Progress → Review
+- HEA-132: Todo → In Progress → Review
+- HEA-133: Todo → In Progress → Review
+
+### Pre-commit Verification
+- bug-hunter: Found 2 bugs (1 HIGH: setETag exception propagation, 1 MEDIUM: hardcoded test dates), both fixed
+- verifier: All tests pass, zero warnings
+
+### Continuation Status
+All tasks completed.
