@@ -82,6 +82,12 @@ dependencies {
     // Encrypted SharedPreferences
     implementation(libs.security.crypto)
 
+    // CameraX
+    implementation(libs.camera.core)
+    implementation(libs.camera.camera2)
+    implementation(libs.camera.lifecycle)
+    implementation(libs.camera.view)
+
     // WorkManager
     implementation(libs.work.runtime.ktx)
     implementation(libs.hilt.work)

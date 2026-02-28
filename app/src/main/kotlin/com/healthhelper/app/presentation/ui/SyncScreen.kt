@@ -42,6 +42,7 @@ private val NUTRITION_PERMISSION = HealthPermission.getWritePermission(Nutrition
 @Composable
 fun SyncScreen(
     onNavigateToSettings: () -> Unit,
+    onNavigateToCamera: () -> Unit = {},
     viewModel: SyncViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()

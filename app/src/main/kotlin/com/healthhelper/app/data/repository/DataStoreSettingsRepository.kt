@@ -46,6 +46,7 @@ class DataStoreSettingsRepository @Inject constructor(
         val LAST_SYNCED_MEALS = stringPreferencesKey("last_synced_meals")
         const val DEFAULT_SYNC_INTERVAL = 15
         const val ENCRYPTED_API_KEY = "api_key"
+        const val ENCRYPTED_ANTHROPIC_API_KEY = "anthropic_api_key"
     }
 
     private val migrationMutex = Mutex()
@@ -104,6 +105,17 @@ class DataStoreSettingsRepository @Inject constructor(
 
     override val lastSyncTimestampFlow: Flow<Long> =
         dataStore.data.map { it[LAST_SYNC_TIMESTAMP] ?: 0L }
+
+    override val anthropicApiKeyFlow: Flow<String> = callbackFlow {
+        trySend(encryptedPrefs.getString(ENCRYPTED_ANTHROPIC_API_KEY, "") ?: "")
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == ENCRYPTED_ANTHROPIC_API_KEY) {
+                trySend(encryptedPrefs.getString(ENCRYPTED_ANTHROPIC_API_KEY, "") ?: "")
+            }
+        }
+        encryptedPrefs.registerOnSharedPreferenceChangeListener(listener)
+        awaitClose { encryptedPrefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
 
     override val lastSyncedMealsFlow: Flow<List<SyncedMealSummary>> =
         dataStore.data.map { prefs ->
