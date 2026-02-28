@@ -54,7 +54,7 @@ fun AppNavigation() {
                     navController.navigate("sync") {
                         popUpTo("sync") { inclusive = true }
                     }
-                    navController.currentBackStackEntry?.savedStateHandle?.set("snackbar_msg", snackbarMsg)
+                    navController.getBackStackEntry("sync").savedStateHandle["snackbar_msg"] = snackbarMsg
                 },
                 onCancel = {
                     navController.navigate("sync") {

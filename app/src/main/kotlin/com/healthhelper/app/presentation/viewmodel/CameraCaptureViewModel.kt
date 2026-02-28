@@ -5,13 +5,12 @@ import android.graphics.BitmapFactory
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.healthhelper.app.data.api.AnthropicApiClient
+import com.healthhelper.app.di.DefaultDispatcher
 import com.healthhelper.app.domain.model.BloodPressureParseResult
 import com.healthhelper.app.domain.repository.SettingsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
-import com.healthhelper.app.di.DefaultDispatcher
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -122,12 +121,16 @@ class CameraCaptureViewModel @Inject constructor(
 
             val bitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
                 ?: return imageBytes
-            val scaled = Bitmap.createScaledBitmap(bitmap, newWidth, newHeight, true)
-            val outputStream = ByteArrayOutputStream()
-            scaled.compress(Bitmap.CompressFormat.JPEG, 85, outputStream)
-            bitmap.recycle()
-            if (scaled !== bitmap) scaled.recycle()
-            outputStream.toByteArray()
+            var scaled: Bitmap? = null
+            try {
+                scaled = Bitmap.createScaledBitmap(bitmap, newWidth, newHeight, true)
+                val outputStream = ByteArrayOutputStream()
+                scaled.compress(Bitmap.CompressFormat.JPEG, 85, outputStream)
+                outputStream.toByteArray()
+            } finally {
+                bitmap.recycle()
+                if (scaled != null && scaled !== bitmap) scaled.recycle()
+            }
         } catch (e: Exception) {
             Timber.w(e, "resizeImageIfNeeded: resize failed, using original bytes")
             imageBytes

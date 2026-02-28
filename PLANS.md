@@ -757,3 +757,69 @@ Summary: 14 issue(s) found, creating Fix Plan (Team: security, reliability, qual
 
 1. In `CameraCaptureViewModelTest.kt:229-250`, replace the assertion with `assertFailsWith<CancellationException>` to actually verify the exception propagates
 2. In `HealthConnectBloodPressureRepositoryTest.kt`, add a new test `getLastReadingPropagatesCancellationException` following the same pattern as the existing `writeBloodPressureRecordPropagatesCancellationException` test
+
+---
+
+## Iteration 2
+
+**Implemented:** 2026-02-28
+**Method:** Agent team (3 workers, worktree-isolated)
+
+### Tasks Completed This Iteration
+- Fix 1: Silent plaintext fallback when Keystore unavailable (HEA-110, worker-1)
+- Fix 2: SettingsViewModel API keys exposed via toString() (HEA-111, worker-1)
+- Fix 3: SettingsViewModel.save() CancellationException + concurrent guard (HEA-112, worker-1)
+- Fix 4: HC writeBloodPressureRecord missing timeout (HEA-113, worker-2)
+- Fix 5: CameraCaptureScreen resource management (HEA-114, worker-3)
+- Fix 6: Image size validation before Anthropic API call (HEA-115, worker-3)
+- Fix 7: Snackbar message wiring in AppNavigation (HEA-116, worker-3)
+- Fix 8: GetLastBloodPressureReadingUseCase missing error logging (HEA-117, worker-2)
+- Fix 9: BloodPressureRecordMapper toInt() truncation (HEA-118, worker-2)
+- Fix 10: AnthropicApiClient elapsed time logging (HEA-119, worker-2)
+- Fix 11: CancellationException test quality (HEA-120, worker-3)
+
+### Files Modified
+- `app/src/main/kotlin/.../di/AppModule.kt` — Nullable encrypted prefs, extracted testable factory, added DefaultDispatcher provider
+- `app/src/main/kotlin/.../di/DispatcherQualifiers.kt` — Created @DefaultDispatcher qualifier
+- `app/src/main/kotlin/.../data/repository/DataStoreSettingsRepository.kt` — Nullable encryptedPrefs support (no-op when null)
+- `app/src/main/kotlin/.../data/repository/HealthConnectBloodPressureRepository.kt` — Added withTimeout(10_000L) to write, elapsed time logging
+- `app/src/main/kotlin/.../data/repository/BloodPressureRecordMapper.kt` — Changed toInt() to roundToInt()
+- `app/src/main/kotlin/.../data/api/AnthropicApiClient.kt` — Moved elapsed time log before status check
+- `app/src/main/kotlin/.../presentation/viewmodel/SettingsViewModel.kt` — toString() redaction, save() concurrent guard, CancellationException rethrow
+- `app/src/main/kotlin/.../presentation/viewmodel/CameraCaptureViewModel.kt` — Added resizeImageIfNeeded() with bitmap leak protection, DI dispatcher
+- `app/src/main/kotlin/.../presentation/ui/CameraCaptureScreen.kt` — try/finally for ImageProxy, removed unused executor
+- `app/src/main/kotlin/.../presentation/ui/AppNavigation.kt` — Snackbar message via getBackStackEntry savedStateHandle
+- `app/src/main/kotlin/.../presentation/ui/SyncScreen.kt` — Added SnackbarHost, snackbarMessage/onSnackbarShown params
+- `app/src/main/kotlin/.../domain/usecase/GetLastBloodPressureReadingUseCase.kt` — No change (domain purity preserved, test coverage confirmed)
+- `app/src/test/.../di/AppModuleTest.kt` — Created (encrypted prefs factory tests)
+- `app/src/test/.../data/repository/DataStoreSettingsRepositoryTest.kt` — Added null encryptedPrefs tests
+- `app/src/test/.../data/repository/HealthConnectBloodPressureRepositoryTest.kt` — Added timeout test, getLastReading CancellationException test
+- `app/src/test/.../data/repository/BloodPressureRecordMapperTest.kt` — Added rounding test
+- `app/src/test/.../presentation/viewmodel/SettingsViewModelTest.kt` — Added toString redaction, concurrent save, CancellationException tests
+- `app/src/test/.../presentation/viewmodel/CameraCaptureViewModelTest.kt` — Improved CancellationException test, added resize verification
+
+### Linear Updates
+- HEA-110 through HEA-120: Todo → In Progress → Review
+
+### Pre-commit Verification
+- bug-hunter: Found 4 bugs (1 high, 1 medium, 2 low), all fixed before committing
+- verifier: All tests pass, build successful, zero warnings
+
+### Work Partition
+- Worker 1: Fix 1, 2, 3 (security/settings — AppModule plaintext fallback, toString redaction, save guards)
+- Worker 2: Fix 4, 8, 9, 10 (data layer — HC timeout, use case logging, mapper rounding, API client logging)
+- Worker 3: Fix 5, 6, 7, 11 (presentation/UI — ImageProxy resources, image resize, snackbar wiring, test quality)
+
+### Merge Summary
+- Worker 2: fast-forward (first merge, no conflicts)
+- Worker 1: merged cleanly, no conflicts
+- Worker 3: 1 conflict in AppModule.kt (both worker-1 and worker-3 added code at end of object), resolved keeping both additions
+
+### Bug Fixes Applied
+- Fixed snackbar message lost due to NavController back stack race (currentBackStackEntry → getBackStackEntry)
+- Fixed bitmap leak in resizeImageIfNeeded when compress() throws (added try/finally for recycle)
+- Removed unused `import kotlinx.coroutines.Dispatchers`
+- Fixed import ordering in CameraCaptureViewModel
+
+### Continuation Status
+All tasks completed.
