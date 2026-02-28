@@ -44,7 +44,7 @@ class DataStoreSettingsRepository @Inject constructor(
         val LAST_SYNCED_DATE = stringPreferencesKey("last_synced_date")
         val LAST_SYNC_TIMESTAMP = longPreferencesKey("last_sync_timestamp")
         val LAST_SYNCED_MEALS = stringPreferencesKey("last_synced_meals")
-        const val DEFAULT_SYNC_INTERVAL = 5
+        const val DEFAULT_SYNC_INTERVAL = 15
         const val ENCRYPTED_API_KEY = "api_key"
     }
 

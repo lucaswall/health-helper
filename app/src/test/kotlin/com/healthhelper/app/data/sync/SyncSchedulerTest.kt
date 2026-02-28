@@ -2,15 +2,21 @@ package com.healthhelper.app.data.sync
 
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequest
+import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
 import io.mockk.verify
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.util.concurrent.Future
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SyncSchedulerTest {
@@ -98,6 +104,43 @@ class SyncSchedulerTest {
                 any(),
             )
         }
+    }
+
+    // --- Task 9: getNextSyncTimeFlow ---
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `getNextSyncTimeFlow emits timestamp from WorkInfo`() = runTest {
+        val futureTime = System.currentTimeMillis() + 60_000L
+        val workInfoMock = mockk<WorkInfo>()
+        every { workInfoMock.nextScheduleTimeMillis } returns futureTime
+        every { workManager.getWorkInfosForUniqueWorkFlow(SyncScheduler.WORK_NAME) } returns
+            flowOf(listOf(workInfoMock))
+
+        val result = syncScheduler.getNextSyncTimeFlow().first()
+        assertEquals(futureTime, result)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `getNextSyncTimeFlow emits null when no work is scheduled`() = runTest {
+        every { workManager.getWorkInfosForUniqueWorkFlow(SyncScheduler.WORK_NAME) } returns
+            flowOf(emptyList())
+
+        val result = syncScheduler.getNextSyncTimeFlow().first()
+        assertNull(result)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `getNextSyncTimeFlow emits null when nextScheduleTimeMillis is MAX_VALUE`() = runTest {
+        val workInfoMock = mockk<WorkInfo>()
+        every { workInfoMock.nextScheduleTimeMillis } returns Long.MAX_VALUE
+        every { workManager.getWorkInfosForUniqueWorkFlow(SyncScheduler.WORK_NAME) } returns
+            flowOf(listOf(workInfoMock))
+
+        val result = syncScheduler.getNextSyncTimeFlow().first()
+        assertNull(result)
     }
 
 }

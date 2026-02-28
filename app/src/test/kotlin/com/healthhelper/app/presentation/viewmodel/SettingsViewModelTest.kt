@@ -328,9 +328,9 @@ class SettingsViewModelTest {
     }
 
     @Test
-    fun `default SettingsUiState has syncInterval of 5`() {
+    fun `default SettingsUiState has syncInterval of 15`() {
         val state = SettingsUiState()
-        assertEquals(5, state.syncInterval)
+        assertEquals(15, state.syncInterval)
     }
 
     @Test

@@ -5,6 +5,8 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 
@@ -38,4 +40,11 @@ class SyncScheduler @Inject constructor(
     fun updateInterval(minutes: Int) {
         schedulePeriodic(minutes)
     }
+
+    fun getNextSyncTimeFlow(): Flow<Long?> =
+        workManager.getWorkInfosForUniqueWorkFlow(WORK_NAME).map { workInfos ->
+            val info = workInfos.firstOrNull() ?: return@map null
+            val nextTime = info.nextScheduleTimeMillis
+            if (nextTime == Long.MAX_VALUE) null else nextTime
+        }
 }
