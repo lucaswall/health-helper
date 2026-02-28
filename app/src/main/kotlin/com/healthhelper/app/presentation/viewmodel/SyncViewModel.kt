@@ -2,14 +2,17 @@ package com.healthhelper.app.presentation.viewmodel
 
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.permission.HealthPermission
+import androidx.health.connect.client.records.BloodPressureRecord
 import androidx.health.connect.client.records.NutritionRecord
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.healthhelper.app.data.sync.SyncScheduler
+import com.healthhelper.app.domain.model.BloodPressureReading
 import com.healthhelper.app.domain.model.SyncProgress
 import com.healthhelper.app.domain.model.SyncResult
 import com.healthhelper.app.domain.model.SyncedMealSummary
 import com.healthhelper.app.domain.repository.SettingsRepository
+import com.healthhelper.app.domain.usecase.GetLastBloodPressureReadingUseCase
 import com.healthhelper.app.domain.usecase.SyncNutritionUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.Instant
@@ -39,8 +42,12 @@ data class SyncUiState(
     val lastSyncTime: String = "",
     val healthConnectAvailable: Boolean = false,
     val permissionGranted: Boolean = false,
+    val cameraPermissionGranted: Boolean = false,
     val lastSyncedMeals: List<SyncedMealSummary> = emptyList(),
     val nextSyncTime: String = "",
+    val lastBpReading: BloodPressureReading? = null,
+    val lastBpReadingDisplay: String = "",
+    val lastBpReadingTime: String = "",
 )
 
 @HiltViewModel
@@ -48,11 +55,16 @@ class SyncViewModel @Inject constructor(
     private val syncNutritionUseCase: SyncNutritionUseCase,
     private val settingsRepository: SettingsRepository,
     private val syncScheduler: SyncScheduler,
+    private val getLastBpReadingUseCase: GetLastBloodPressureReadingUseCase,
     private val healthConnectClient: HealthConnectClient?,
 ) : ViewModel() {
 
     companion object {
-        val WRITE_NUTRITION_PERMISSION = HealthPermission.getWritePermission(NutritionRecord::class)
+        val REQUIRED_HC_PERMISSIONS = setOf(
+            HealthPermission.getWritePermission(NutritionRecord::class),
+            HealthPermission.getWritePermission(BloodPressureRecord::class),
+            HealthPermission.getReadPermission(BloodPressureRecord::class),
+        )
     }
 
     private val _uiState = MutableStateFlow(SyncUiState())
@@ -76,12 +88,17 @@ class SyncViewModel @Inject constructor(
                     }
                     val elapsed = System.currentTimeMillis() - startTime
                     Timber.d("getGrantedPermissions() took ${elapsed}ms")
-                    _uiState.update { it.copy(permissionGranted = granted.contains(WRITE_NUTRITION_PERMISSION)) }
+                    _uiState.update { it.copy(permissionGranted = granted.containsAll(REQUIRED_HC_PERMISSIONS)) }
                 } catch (e: Exception) {
                     Timber.e(e, "Failed to check Health Connect permissions")
                     // Leave permissionGranted = false
                 }
             }
+        }
+
+        // Load last BP reading on launch
+        viewModelScope.launch {
+            loadLastBpReading()
         }
 
         // Observe all settings flows for UI state — isConfigured derived reactively
@@ -117,6 +134,13 @@ class SyncViewModel @Inject constructor(
                 delay(30_000)
                 if (lastSyncTimestamp > 0) {
                     _uiState.update { it.copy(lastSyncTime = formatRelativeTime(lastSyncTimestamp)) }
+                }
+                // Also refresh BP reading time display
+                val currentReading = _uiState.value.lastBpReading
+                if (currentReading != null) {
+                    _uiState.update {
+                        it.copy(lastBpReadingTime = formatRelativeTime(currentReading.timestamp.toEpochMilli()))
+                    }
                 }
             }
         }
@@ -165,6 +189,28 @@ class SyncViewModel @Inject constructor(
         }
     }
 
+    private suspend fun loadLastBpReading() {
+        try {
+            val reading = getLastBpReadingUseCase.invoke()
+            _uiState.update {
+                it.copy(
+                    lastBpReading = reading,
+                    lastBpReadingDisplay = if (reading != null) "${reading.systolic}/${reading.diastolic} mmHg" else "",
+                    lastBpReadingTime = if (reading != null) formatRelativeTime(reading.timestamp.toEpochMilli()) else "",
+                )
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to load last BP reading")
+            // Leave lastBpReading = null
+        }
+    }
+
+    fun refreshLastBpReading() {
+        viewModelScope.launch {
+            loadLastBpReading()
+        }
+    }
+
     private fun formatNextSyncTime(nextSyncMs: Long): String {
         val diffMs = nextSyncMs - System.currentTimeMillis()
         if (diffMs <= 0) return "Sync pending..."
@@ -181,6 +227,10 @@ class SyncViewModel @Inject constructor(
 
     fun onPermissionResult(granted: Boolean) {
         _uiState.update { it.copy(permissionGranted = granted) }
+    }
+
+    fun onCameraPermissionResult(granted: Boolean) {
+        _uiState.update { it.copy(cameraPermissionGranted = granted) }
     }
 
     fun triggerSync() {
