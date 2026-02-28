@@ -1,343 +1,511 @@
 # Implementation Plan
 
-**Status:** COMPLETE
-**Branch:** feat/HEA-80-settings-save-reset
-**Issues:** HEA-80, HEA-81, HEA-82, HEA-79, HEA-78
+**Status:** IN_PROGRESS
+**Branch:** feat/HEA-90-sync-ux-improvements
+**Issues:** HEA-90, HEA-91, HEA-92, HEA-93, HEA-94, HEA-95
 **Created:** 2026-02-27
 **Last Updated:** 2026-02-27
 
 ## Summary
 
-Implement Settings Save/Reset workflow, reduce sync interval minimum, disable navigation transitions, and improve tooling (bug-hunter agent and plan templates). The primary change (HEA-80) decouples settings input from persistence — users edit freely and explicitly save or discard changes. Supporting changes improve UX (HEA-81, HEA-82) and strengthen the development pipeline (HEA-78, HEA-79).
+Six improvements to the sync experience: fix the misleading sync interval slider (bug), check Health Connect permission on launch (bug), enrich sync result summaries, store and display when sync actually ran, show next scheduled sync time, and show the last 3 synced meals on the main screen.
 
 ## Issues
 
-### HEA-80: Settings screen persists every keystroke to DataStore instead of explicit save
+### HEA-90: Sync interval slider allows values below WorkManager 15-minute minimum
 
 **Priority:** Medium
-**Labels:** Improvement
-**Description:** The Settings screen text fields and slider write to DataStore on every change via ViewModel update methods. This causes wasteful I/O and gives the user no way to discard changes. Add Save and Reset buttons with dirty-state tracking.
+**Labels:** Bug
+**Description:** The Settings screen slider allows 5–120 minutes, but WorkManager enforces a 15-minute minimum. Values under 15 are silently clamped by `SyncScheduler.MIN_INTERVAL_MINUTES`, misleading users into thinking sync runs every 5 minutes.
 
 **Acceptance Criteria:**
-- [ ] Text field and slider changes update only local UI state (no immediate persistence)
-- [ ] Save button persists all current settings to repository
-- [ ] Reset button reverts UI to last-persisted values
-- [ ] Both buttons disabled when there are no unsaved changes
-- [ ] Save errors are handled gracefully (log + user feedback)
-- [ ] Existing test coverage updated for new behavior
+- [ ] Slider range is 15–120 minutes with 5-minute increments
+- [ ] Default sync interval is 15 (not 5) in SettingsUiState, PersistedSettings, and DataStoreSettingsRepository
+- [ ] Existing users with interval < 15 stored in DataStore see 15 on the slider (clamped to range start)
 
-### HEA-81: Sync interval minimum is too high and default should be 5 minutes
+### HEA-91: Health Connect permission status not checked on app launch
+
+**Priority:** High
+**Labels:** —
+**Description:** `SyncUiState.permissionGranted` defaults to `false` and is only updated when the user taps the permission button. On every app launch, users see "Write Nutrition permission is required" and the Sync Now button is disabled — even when permission has already been granted.
+
+**Acceptance Criteria:**
+- [ ] Permission status checked in `SyncViewModel.init` via `HealthConnectClient.permissionController.getGrantedPermissions()`
+- [ ] If already granted, Sync Now button is immediately enabled on launch
+- [ ] If check fails (exception), falls back to current behavior (show permission prompt)
+- [ ] If HC client is null, `permissionGranted` stays false
+
+### HEA-92: Store and display last sync timestamp
+
+**Priority:** Medium
+**Labels:** Feature
+**Description:** Currently shows "Last synced: 2026-02-27" (calendar date range), not when sync actually ran. Users can't tell if sync ran 5 minutes ago or 5 hours ago.
+
+**Acceptance Criteria:**
+- [ ] Actual sync completion timestamp (epoch millis) stored in DataStore
+- [ ] Displayed as relative time: "Just now", "5 min ago", "2 hr ago", "3 days ago"
+- [ ] Refreshes periodically (~30s) while screen is visible
+- [ ] Persisted across app restarts
+- [ ] Timestamp set for both manual sync (via SyncNutritionUseCase) and background sync (SyncWorker calls the same use case)
+
+### HEA-93: Improve sync result summary line
 
 **Priority:** Low
 **Labels:** Improvement
-**Description:** The sync interval slider minimum is 15 minutes with a default of 15. Change minimum to 5 minutes and default to 5 minutes.
+**Description:** Sync result shows "Synced 12 records" with no context on how many days were covered. The day count is available in `SyncProgress` but discarded after sync completes.
 
 **Acceptance Criteria:**
-- [ ] Slider range is 5-120 minutes
-- [ ] Default sync interval is 5 minutes (UI state and repository default)
-- [ ] Slider steps recalculated for 5-minute increments
-- [ ] Default is consistent between SettingsUiState, DataStoreSettingsRepository, and SyncScheduler
+- [ ] Success format: "Synced X meals across Y days" (or "1 day" singular)
+- [ ] Zero records format: "No new meals"
+- [ ] Day count comes from `SyncResult.Success` (enriched model), not from transient progress
 
-### HEA-82: Screen transitions show distracting fade/flash animation
+### HEA-94: Show next scheduled sync time
 
 **Priority:** Low
-**Labels:** Improvement
-**Description:** Navigation between Sync and Settings screens uses default crossfade transition which creates a visible flash. Disable transitions for instant screen switches.
+**Labels:** Feature
+**Description:** Users don't know when the next background sync will run. No visibility into the WorkManager schedule.
 
 **Acceptance Criteria:**
-- [ ] No fade/flash animation on screen navigation
-- [ ] Both forward navigation and back navigation are instant
+- [ ] Shows "Next sync in ~Xm" or "Next sync at HH:MM" on main screen
+- [ ] Shows "Auto-sync: off" when not configured or sync not scheduled
+- [ ] Updates after sync completes or interval changes
+- [ ] Works on API 28+ with fallback from `WorkInfo.nextScheduleTimeMillis`
 
-### HEA-79: Bug-hunter agent misses durability semantics, dead test code, and UI-exposed internals
+### HEA-95: Show last 3 synced meals on main screen
 
 **Priority:** Medium
-**Labels:** Improvement
-**Description:** Bug-hunter agent missed 3 categories of bugs in the HEA-44 audit. Add checks for: SharedPreferences durability (apply vs commit), dead test variables, and raw exception messages reaching UI.
+**Labels:** Feature
+**Description:** After sync, users see "Synced 12 records" with no detail about what was actually synced. Show the 3 most recent synced meals in a compact format, persisted across app restarts.
 
 **Acceptance Criteria:**
-- [ ] Bug-hunter checks for SharedPreferences/DataStore write durability in suspend functions
-- [ ] Bug-hunter checks for declared-but-unasserted variables in test files
-- [ ] Bug-hunter checks for raw Exception.message or server text flowing to UI state
-
-### HEA-78: Plan template missing cross-cutting requirements checklist
-
-**Priority:** Medium
-**Labels:** Improvement
-**Description:** Plans miss cross-cutting concerns that span multiple files. Add a pattern-triggered checklist to plan-backlog and plan-inline skills that catches: networking -> timeouts, UI error messages -> sanitization, coroutine launch -> error handling, SharedPreferences -> durability.
-
-**Acceptance Criteria:**
-- [ ] plan-backlog SKILL.md has a cross-cutting requirements checklist
-- [ ] plan-inline SKILL.md has a cross-cutting requirements checklist
-- [ ] Checklist is triggered by patterns in proposed tasks
+- [ ] Compact format: "Chicken Salad · Lunch · 450 cal"
+- [ ] Shows max 3 meals, most recent first
+- [ ] Persisted in DataStore as JSON string
+- [ ] Visible immediately on app launch (loaded from storage)
+- [ ] Updated after each successful sync
 
 ## Prerequisites
 
-- [ ] Build compiles successfully (`./gradlew assembleDebug`)
-- [ ] All tests pass (`./gradlew test`)
-- [ ] Working tree is clean on main branch
+- [ ] Build compiles: `./gradlew assembleDebug`
+- [ ] Tests pass: `./gradlew test`
+- [ ] On `main` branch with clean working tree
 
 ## Implementation Tasks
 
-### Task 1: Decouple SettingsViewModel update methods from persistence
+### Task 1: Fix sync interval slider minimum and defaults
 
-**Issue:** HEA-80
+**Issue:** HEA-90
 **Files:**
-- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModel.kt` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModel.kt` (modify — `SettingsUiState` and `PersistedSettings` defaults)
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` (modify — `DEFAULT_SYNC_INTERVAL`)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SettingsScreen.kt` (modify — slider `valueRange` and `steps`)
 - `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModelTest.kt` (modify)
 
 **TDD Steps:**
 
-1. **RED** - Write failing tests:
-   - Test: `updateApiKey updates UI state but does not persist to repository`
-     - Create ViewModel, advanceUntilIdle
-     - Call `viewModel.updateApiKey("new-key")`, advanceUntilIdle
-     - Assert `uiState.apiKey == "new-key"`
-     - Assert `coVerify(exactly = 0) { settingsRepository.setApiKey(any()) }`
-   - Test: `updateBaseUrl updates UI state but does not persist to repository`
-     - Same pattern for baseUrl
-   - Test: `updateSyncInterval updates UI state but does not persist to repository`
-     - Same pattern for syncInterval
+1. **RED** — Update default interval test:
+   - In `SettingsViewModelTest`, change the `default SettingsUiState has syncInterval of 5` test to assert `syncInterval == 15`
    - Run: `./gradlew test --tests "com.healthhelper.app.presentation.viewmodel.SettingsViewModelTest"`
-   - Verify: Tests fail because current implementation calls repository on every update
+   - Verify: fails (default is still 5)
 
-2. **GREEN** - Make tests pass:
-   - Remove the `viewModelScope.launch { settingsRepository.set*() }` blocks from `updateApiKey()`, `updateBaseUrl()`, `updateSyncInterval()`
-   - Keep the existing `_uiState.update { it.copy(...) }` calls (these are correct)
-   - Run tests, verify pass
+2. **GREEN** — Apply fixes:
+   - Change `SettingsUiState.syncInterval` default from `5` to `15`
+   - Change `SettingsViewModel.PersistedSettings.syncInterval` default from `5` to `15`
+   - Change `DataStoreSettingsRepository.DEFAULT_SYNC_INTERVAL` from `5` to `15`
+   - Change slider in `SettingsScreen.kt`: `valueRange = 15f..120f`, `steps = 20`
+   - Run tests: verify passes
 
-3. **REFACTOR** - Update existing tests:
-   - Invert or remove the 3 existing tests that assert `coVerify { settingsRepository.set*() }` after calling update methods — these should now verify the opposite (no repository call)
-   - Clean up any stale test setup
-
-**Notes:**
-- After this task, settings edits are local only. Persistence is restored in Task 2 via `save()`
-- Pattern reference: existing `_uiState.update { it.copy(...) }` in `SettingsViewModel.kt:54`
-- Pattern reference: `SettingsViewModelTest.kt` for test conventions (StandardTestDispatcher, Turbine, MockK)
-
-### Task 2: Add hasUnsavedChanges, save(), and reset() to SettingsViewModel
-
-**Issue:** HEA-80
-**Files:**
-- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModel.kt` (modify)
-- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModelTest.kt` (modify)
-
-**TDD Steps:**
-
-1. **RED** - Write failing tests:
-   - Test: `hasUnsavedChanges is false when UI matches persisted state`
-     - Create ViewModel, advanceUntilIdle
-     - Assert `uiState.hasUnsavedChanges == false`
-   - Test: `hasUnsavedChanges is true after updateApiKey with different value`
-     - Create ViewModel, advanceUntilIdle
-     - Call `updateApiKey("changed-key")`
-     - Assert `uiState.hasUnsavedChanges == true`
-   - Test: `hasUnsavedChanges is true after updateBaseUrl with different value`
-   - Test: `hasUnsavedChanges is true after updateSyncInterval with different value`
-   - Test: `save persists all current settings to repository`
-     - Create ViewModel, advanceUntilIdle
-     - Call `updateApiKey("new")`, `updateBaseUrl("new-url")`, `updateSyncInterval(60)`
-     - Call `save()`, advanceUntilIdle
-     - `coVerify { settingsRepository.setApiKey("new") }`
-     - `coVerify { settingsRepository.setBaseUrl("new-url") }`
-     - `coVerify { settingsRepository.setSyncInterval(60) }`
-   - Test: `save sets hasUnsavedChanges to false`
-     - After `save()`, assert `uiState.hasUnsavedChanges == false`
-   - Test: `reset reverts UI state to persisted values`
-     - Create ViewModel (persisted: apiKey="test-key"), advanceUntilIdle
-     - Call `updateApiKey("changed")`, assert apiKey == "changed"
-     - Call `reset()`
-     - Assert apiKey == "test-key" (original persisted value)
-   - Test: `reset sets hasUnsavedChanges to false`
-   - Test: `save handles repository exception gracefully`
-     - Mock repository to throw on `setApiKey()`
-     - Call `save()`, advanceUntilIdle
-     - Assert no crash, verify Timber.e was called or error state is set
-   - Run: `./gradlew test --tests "com.healthhelper.app.presentation.viewmodel.SettingsViewModelTest"`
-   - Verify: Tests fail (methods don't exist yet)
-
-2. **GREEN** - Make tests pass:
-   - Add `hasUnsavedChanges: Boolean = false` to `SettingsUiState`
-   - Track persisted state separately (private snapshot of last-loaded/saved settings)
-   - Init block: when repository flows emit, update both persisted state and UI state (only update UI state if no unsaved changes exist)
-   - `save()`: persist all 3 settings via repository in `viewModelScope.launch`, update persisted state on success, recalculate `hasUnsavedChanges`
-   - `reset()`: copy persisted state back to UI state, set `hasUnsavedChanges = false`
-   - After each update method, recalculate `hasUnsavedChanges` by comparing apiKey/baseUrl/syncInterval between UI and persisted state
-   - Run tests, verify pass
-
-3. **REFACTOR** - Clean up:
-   - Ensure `isConfigured` is still derived from current UI values (not part of dirty tracking)
-   - Ensure hasUnsavedChanges comparison excludes `isConfigured` (it's computed)
+3. **REFACTOR** — Keep `SyncScheduler.MIN_INTERVAL_MINUTES` clamp as a defensive safety net. Do not remove it.
 
 **Defensive Requirements:**
-- `save()` must catch exceptions from repository calls, log with Timber, and not crash
-- `save()` should attempt all 3 persist operations even if one fails (don't fail fast)
-- `reset()` is purely local state manipulation — no error path needed
-- No timeout needed (DataStore writes are local disk I/O)
+- Existing users with `syncInterval < 15` in DataStore will read a value < 15. The Compose Slider clamps displayed position to range start (15f). `SyncScheduler.MIN_INTERVAL_MINUTES` ensures WorkManager interval is never < 15 regardless.
+- No new error paths introduced.
 
 **Notes:**
-- Pattern reference: `SyncViewModel` for `viewModelScope.launch` error handling
-- Pattern reference: existing `SettingsViewModel` init block for flow collection
-- The `isConfigured` field remains computed from apiKey and baseUrl emptiness
+- Slider `steps = 20` gives 22 total discrete values: 15, 20, 25, ..., 120 (5-min increments). Formula: `(120 - 15) / 5 + 1 = 22 values`, `steps = 22 - 2 = 20`.
+- Reference: `SettingsScreen.kt:111-117` for current slider, `DataStoreSettingsRepository.kt:32` for default
 
-### Task 3: Add Save and Reset buttons to SettingsScreen
+---
 
-**Issue:** HEA-80
+### Task 2: Check Health Connect permission on app launch
+
+**Issue:** HEA-91
 **Files:**
-- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SettingsScreen.kt` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` (modify — init block)
+- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt` (modify)
 
 **TDD Steps:**
 
-1. **RED** - No unit test (Compose UI). Verified via build check and manual testing.
+1. **RED** — Write tests for permission check on init:
+   - Test: `permissionGranted is true on init when permission already granted` — mock `healthConnectClient.permissionController.getGrantedPermissions()` to return a set containing the write NutritionRecord permission, create ViewModel, assert `permissionGranted == true`
+   - Test: `permissionGranted stays false on init when permission not granted` — mock `getGrantedPermissions()` to return empty set, assert `permissionGranted == false`
+   - Test: `permissionGranted stays false when getGrantedPermissions throws` — mock to throw RuntimeException, assert `permissionGranted == false` (graceful fallback)
+   - Run: `./gradlew test --tests "com.healthhelper.app.presentation.viewmodel.SyncViewModelTest"`
+   - Verify: new tests fail
 
-2. **GREEN** - Implement:
-   - Add a `Row` after the Slider containing two buttons with `Arrangement.spacedBy(8.dp)`:
-     - `OutlinedButton` for Reset: calls `viewModel.reset()`, enabled when `uiState.hasUnsavedChanges`, label "Reset"
-     - `Button` (filled) for Save: calls `viewModel.save()`, enabled when `uiState.hasUnsavedChanges`, label "Save"
-   - Both buttons should use `Modifier.weight(1f)` within the Row for equal sizing
-   - Import `Button`, `OutlinedButton`, `Row` from `androidx.compose.material3`
+2. **GREEN** — Add permission check in `SyncViewModel.init`:
+   - After the existing `healthConnectAvailable` update, launch a new coroutine that:
+     - Guards on `healthConnectClient != null`
+     - Calls `healthConnectClient.permissionController.getGrantedPermissions()`
+     - Checks if result contains `HealthPermission.getWritePermission(NutritionRecord::class)`
+     - Updates `_uiState` with `permissionGranted = true` or `false`
+     - Wraps in try-catch: on any exception, log with `Timber.e` and leave `permissionGranted = false`
+   - Run tests: verify passes
 
-3. **REFACTOR** - Ensure consistent styling with rest of screen
+3. **REFACTOR** — Consider extracting the permission constant to a companion object on `SyncViewModel` to share with `SyncScreen.kt:38` (currently defined as `NUTRITION_PERMISSION` private val in SyncScreen)
+
+**Defensive Requirements:**
+- `getGrantedPermissions()` is a suspend function that can throw if Health Connect service is unavailable or the app process is in a bad state. Must wrap in try-catch.
+- If `healthConnectClient` is null, skip the check entirely — do not attempt any calls.
+- The permission check must not block other init work (settings flows, sync scheduling). Run in a separate coroutine.
 
 **Notes:**
-- Pattern reference: `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SyncScreen.kt:132-139` for Material 3 Button usage
-- Trailing commas on multi-line parameter lists per project conventions
-- Buttons placed after Slider, before any future content
+- Existing `onPermissionResult()` method remains — still needed for the launcher callback when user manually grants/revokes permission.
+- The HealthConnectClient mock in tests is already `mockk(relaxed = true)` — the `permissionController` mock needs explicit setup for `getGrantedPermissions()`.
+- Reference: `SyncScreen.kt:38` for the permission constant, `SyncViewModel.kt:47-86` for existing init coroutines
 
-### Task 4: Update sync interval range and default
+---
 
-**Issue:** HEA-81
+### Task 3: Enrich sync result with day count
+
+**Issue:** HEA-93
 **Files:**
-- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModel.kt` (modify)
-- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SettingsScreen.kt` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/domain/model/SyncResult.kt` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt` (modify)
+
+**TDD Steps:**
+
+1. **RED** — Update model and tests:
+   - Add `daysProcessed: Int` parameter to `SyncResult.Success`
+   - All existing tests referencing `SyncResult.Success(recordCount)` will fail to compile — update them to `SyncResult.Success(recordCount, expectedDays)`
+   - Add use case test: `singleDaySync` asserts `result.daysProcessed == 1`
+   - Add use case test: `multiDaySync` with 2 past days asserts `result.daysProcessed == 2`
+   - Add ViewModel test: result formatted as "Synced X meals across Y days"
+   - Add ViewModel test: "No new meals" when `recordsSynced == 0` and result is Success
+   - Add ViewModel test: singular "1 day" when `daysProcessed == 1`
+   - Run: `./gradlew test`
+   - Verify: tests fail
+
+2. **GREEN** — Implement:
+   - Change `SyncResult.Success` from `data class Success(val recordsSynced: Int)` to `data class Success(val recordsSynced: Int, val daysProcessed: Int)`
+   - In `SyncNutritionUseCase.invoke()`, pass `successfulDays` as `daysProcessed` in the return: `SyncResult.Success(totalRecordsSynced, successfulDays)`
+   - In `SyncViewModel.triggerSync()`, update result message formatting:
+     - `recordsSynced == 0` → "No new meals"
+     - `daysProcessed == 1` → "Synced {recordsSynced} meals across 1 day"
+     - `daysProcessed > 1` → "Synced {recordsSynced} meals across {daysProcessed} days"
+   - Run tests: verify passes
+
+3. **REFACTOR** — Verify all test files updated consistently for the new `SyncResult.Success` constructor
+
+**Defensive Requirements:**
+- `daysProcessed` is always >= 0. It represents days where the API returned successfully, not total days attempted.
+- No new error paths — purely a data enrichment change.
+
+**Notes:**
+- The `successfulDays` variable already exists in `SyncNutritionUseCase.kt:44` — just needs to be passed to the return value.
+- Reference: `SyncNutritionUseCase.kt:102-107` for current return, `SyncViewModel.kt:101-105` for current formatting
+
+---
+
+### Task 4: Store last sync timestamp in repository
+
+**Issue:** HEA-92
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/domain/repository/SettingsRepository.kt` (modify)
 - `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` (modify)
-- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModelTest.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepositoryTest.kt` (modify)
 
 **TDD Steps:**
 
-1. **RED** - Write failing test:
-   - Test: `default SettingsUiState has syncInterval of 5`
-     - Assert `SettingsUiState().syncInterval == 5`
-   - Run: `./gradlew test --tests "com.healthhelper.app.presentation.viewmodel.SettingsViewModelTest"`
-   - Verify: Test fails (default is still 15)
+1. **RED** — Write repository tests:
+   - Test: `lastSyncTimestampFlow emits 0L by default`
+   - Test: `setLastSyncTimestamp stores value and emits it`
+   - Run: `./gradlew test --tests "com.healthhelper.app.data.repository.DataStoreSettingsRepositoryTest"`
+   - Verify: fails (property doesn't exist)
 
-2. **GREEN** - Make changes:
-   - `SettingsUiState`: change default `syncInterval` from `15` to `5`
-   - `DataStoreSettingsRepository.kt:32`: change `DEFAULT_SYNC_INTERVAL` from `15` to `5`
-   - `SettingsScreen.kt`: change Slider `valueRange` from `15f..120f` to `5f..120f`
-   - `SettingsScreen.kt`: change Slider `steps` from `6` to `22`
-   - Run tests, verify pass
+2. **GREEN** — Implement:
+   - Add to `SettingsRepository` interface:
+     - `val lastSyncTimestampFlow: Flow<Long>`
+     - `suspend fun setLastSyncTimestamp(value: Long)`
+   - Add to `DataStoreSettingsRepository`:
+     - `LAST_SYNC_TIMESTAMP = longPreferencesKey("last_sync_timestamp")` in companion object
+     - `lastSyncTimestampFlow = dataStore.data.map { it[LAST_SYNC_TIMESTAMP] ?: 0L }`
+     - `setLastSyncTimestamp` via `dataStore.edit { it[LAST_SYNC_TIMESTAMP] = value }`
+   - Run tests: verify passes
 
-3. **REFACTOR** - Update any tests referencing old default:
-   - Search test files for hardcoded `15` as sync interval — update to `5` where it represents the default
-   - Ensure `setUp()` mock values are intentional (current setup uses `30`, which is fine as a non-default test value)
+3. **REFACTOR** — Update all mock setups across test files to provide a default for `lastSyncTimestampFlow`: `every { settingsRepository.lastSyncTimestampFlow } returns flowOf(0L)`
+
+**Defensive Requirements:**
+- `0L` as default clearly indicates "never synced" — the UI layer must treat 0L as "no timestamp available" and show nothing.
+- DataStore handles corruption internally; `dataStore.data.map` won't throw.
 
 **Notes:**
-- Slider steps calculation: range 5-120 with 5-min increments -> (120-5)/5 = 23 intervals -> 24 positions -> steps = 24 - 2 = 22
-- `DEFAULT_SYNC_INTERVAL` in `DataStoreSettingsRepository.kt:32` must match `SettingsUiState` default
-- Also check `SyncScheduler` or `SyncWorker` for any hardcoded interval defaults and update if found
+- Follow exact pattern of `syncIntervalFlow` at `DataStoreSettingsRepository.kt:84-85`
+- Need `longPreferencesKey` import from `androidx.datastore.preferences.core`
+- All test files that mock `SettingsRepository` must be updated: `SyncViewModelTest`, `SyncNutritionUseCaseTest`, `SettingsViewModelTest`, `DataStoreSettingsRepositoryTest`
 
-### Task 5: Disable navigation transition animations
+---
 
-**Issue:** HEA-82
+### Task 5: Save sync timestamp and display relative time
+
+**Issue:** HEA-92
 **Files:**
-- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/AppNavigation.kt` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` (modify — SyncUiState + init + helper)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SyncScreen.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt` (modify)
 
 **TDD Steps:**
 
-1. **RED** - No unit test (Compose navigation UI). Verified manually.
+1. **RED** — Write tests:
+   - Use case test: `invoke sets lastSyncTimestamp on successful sync` — verify `settingsRepository.setLastSyncTimestamp()` is called with a value > 0
+   - Use case test: `invoke does not set lastSyncTimestamp when all days fail` — verify `setLastSyncTimestamp` is NOT called when result is Error (all days failed)
+   - ViewModel test: `lastSyncTime formats recent timestamp as relative time` — mock `lastSyncTimestampFlow` to emit `System.currentTimeMillis() - 300_000` (5 min ago), assert `lastSyncTime` contains "min ago"
+   - ViewModel test: `lastSyncTime is empty when timestamp is 0` — assert empty string when no sync has occurred
+   - Run: `./gradlew test`
+   - Verify: fails
 
-2. **GREEN** - Implement:
-   - Add transition parameters to the `NavHost` composable:
-     - `enterTransition = { EnterTransition.None }`
-     - `exitTransition = { ExitTransition.None }`
-     - `popEnterTransition = { EnterTransition.None }`
-     - `popExitTransition = { ExitTransition.None }`
-   - Add imports for `androidx.compose.animation.EnterTransition` and `androidx.compose.animation.ExitTransition`
+2. **GREEN** — Implement:
+   - In `SyncNutritionUseCase.invoke()`, after the sync loop and before the return statement, call `settingsRepository.setLastSyncTimestamp(System.currentTimeMillis())` when `successfulDays > 0`
+   - Add `lastSyncTime: String = ""` to `SyncUiState`
+   - Create a private helper function `formatRelativeTime(timestampMillis: Long): String` in the SyncViewModel file:
+     - `0L` → `""`
+     - `< 60 seconds ago` → `"Just now"`
+     - `< 60 minutes` → `"X min ago"`
+     - `< 24 hours` → `"X hr ago"`
+     - `< 7 days` → `"X days ago"`
+     - `>= 7 days` → date string (e.g., "Feb 20")
+   - In `SyncViewModel.init`, collect `settingsRepository.lastSyncTimestampFlow` and format to relative time string in `_uiState.lastSyncTime`
+   - Add periodic refresh: launch a coroutine with `while(isActive) { delay(30_000); re-format the timestamp }` to keep "5 min ago" fresh
+   - In `SyncScreen`, display `uiState.lastSyncTime` when non-empty. This replaces or supplements the existing "Last synced: {lastSyncedDate}" display
+   - Run tests: verify passes
 
-3. **REFACTOR** - No further cleanup needed
+3. **REFACTOR** — Ensure the periodic refresh coroutine is in `viewModelScope` for automatic cancellation
 
-**Notes:**
-- Set transitions at NavHost level so they apply globally to all destinations
-- Per-destination overrides can be added later if different transitions are desired for specific routes
-
-### Task 6: Add missing checks to bug-hunter agent
-
-**Issue:** HEA-79
-**Files:**
-- `.claude/agents/bug-hunter.md` (modify)
-
-**Steps:**
-
-1. Add three new check items to existing sections in `bug-hunter.md`:
-
-   **Under "Resource Management" section, add a "Data Persistence" subsection:**
-   - "SharedPreferences writes in suspend functions — verify `commit()` or DataStore `edit {}` for durability, not `apply()` which is fire-and-forget and may lose data if process dies"
-
-   **Under "Test Changes > Test Validity" section, add:**
-   - "Variables declared and populated in tests but never referenced in assertions or verify calls — dead test code that gives false confidence in coverage"
-
-   **Under a new "UI Safety" subsection (after Security section):**
-   - "Raw `Exception.message`, `e.localizedMessage`, or server/API response text flowing directly to UI-visible state (Text composable, Toast, Snackbar, error state fields) — use generic user-facing messages and log the raw message for debugging only"
-
-2. Verify the new checks don't duplicate existing items and fit naturally in the document structure.
+**Defensive Requirements:**
+- `System.currentTimeMillis()` in the use case makes deterministic testing harder. Use `coVerify { setLastSyncTimestamp(match { it > 0 }) }` for assertions.
+- The periodic refresh coroutine must be in `viewModelScope` to auto-cancel when ViewModel is cleared.
+- Handle edge cases in `formatRelativeTime`: timestamp `0L` (never synced), future timestamps (clock skew — treat as "Just now"), very old timestamps (show date).
+- Wrap `setLastSyncTimestamp` in try-catch in the use case — do not let timestamp storage failure break the sync flow. Log with Timber on failure.
 
 **Notes:**
-- These are pattern-based checks applied when reviewing diffs
-- Discovered from HEA-44 audit where the 3-reviewer review caught bugs that bug-hunter missed
-- Each check should be concrete enough for the agent to grep/pattern-match in diffs
+- `formatRelativeTime` uses pure Kotlin (`System.currentTimeMillis()` and arithmetic) — no Android `DateUtils` dependency, so it's testable in JUnit.
+- The periodic refresh ensures "5 min ago" becomes "6 min ago" etc. while screen is visible.
+- Reference: `SyncViewModel.kt:47-69` for existing init flow collection pattern
+- Reference: `SyncNutritionUseCase.kt:98-100` for where to add the timestamp save (after contiguous date logic)
 
-### Task 7: Add cross-cutting requirements checklist to plan skills
+---
 
-**Issue:** HEA-78
+### Task 6: Create SyncedMealSummary model and repository storage
+
+**Issue:** HEA-95
 **Files:**
-- `.claude/skills/plan-backlog/SKILL.md` (modify)
-- `.claude/skills/plan-inline/SKILL.md` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/domain/model/SyncedMealSummary.kt` (create)
+- `app/src/main/kotlin/com/healthhelper/app/domain/repository/SettingsRepository.kt` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/domain/model/SyncedMealSummaryTest.kt` (create)
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepositoryTest.kt` (modify)
 
-**Steps:**
+**TDD Steps:**
 
-1. Add a "Cross-Cutting Requirements Checklist" to both skill files. The checklist is a table of pattern triggers and required specifications:
+1. **RED** — Write model and repository tests:
+   - Model test: `SyncedMealSummary holds foodName, mealType, and calories`
+   - Model test: `SyncedMealSummary requires non-negative calories` — verify `IllegalArgumentException` on negative calories
+   - Model test: `SyncedMealSummary requires non-blank foodName` — verify `IllegalArgumentException` on blank name
+   - Repository test: `lastSyncedMealsFlow emits empty list by default`
+   - Repository test: `setLastSyncedMeals stores meals and emits them`
+   - Repository test: `setLastSyncedMeals with empty list clears stored meals`
+   - Run: `./gradlew test`
+   - Verify: fails
 
-   | Pattern Detected in Plan | Required Specification |
-   |--------------------------|----------------------|
-   | Networking code (HTTP client, API calls, Ktor) | Timeout value and timeout error handling behavior |
-   | Error messages shown to users (UI state error fields, Toast, Snackbar) | Sanitization — generic user message, raw error logged only |
-   | `viewModelScope.launch` or coroutine builders | Error handling (try-catch) and behavior on exception |
-   | SharedPreferences / DataStore writes in suspend context | Durability semantics (commit vs apply, edit vs write) |
-   | Health Connect operations | Timeout, permission check, SDK availability check |
-   | Intent / Activity launch | ActivityNotFoundException handling and fallback |
-   | Repeated user-triggered operations (button clicks, pull-to-refresh) | Cancellation of in-flight work before starting new |
+2. **GREEN** — Implement:
+   - Create `SyncedMealSummary` data class in `domain/model/`:
+     - `foodName: String` — name of the food item
+     - `mealType: MealType` — reuses existing `MealType` enum
+     - `calories: Int` — rounded from `FoodLogEntry.calories`
+     - `init` block: `require(calories >= 0)`, `require(foodName.isNotBlank())`
+   - Add to `SettingsRepository` interface:
+     - `val lastSyncedMealsFlow: Flow<List<SyncedMealSummary>>`
+     - `suspend fun setLastSyncedMeals(meals: List<SyncedMealSummary>)`
+   - In `DataStoreSettingsRepository`:
+     - Add `LAST_SYNCED_MEALS = stringPreferencesKey("last_synced_meals")` to companion object
+     - Create an internal `@Serializable` DTO data class (e.g., `SyncedMealDto`) with `foodName: String`, `mealType: String`, `calories: Int` for JSON serialization
+     - Implement `setLastSyncedMeals`: map domain models to DTOs, serialize to JSON via `Json.encodeToString()`, store in DataStore
+     - Implement `lastSyncedMealsFlow`: read from DataStore, deserialize JSON, map DTOs back to domain models. On parse failure, return empty list (try-catch around deserialization)
+   - Run tests: verify passes
 
-2. **In plan-backlog SKILL.md**: Integrate into the existing Section 4.4 "Validate Plan Against CLAUDE.md" — add the cross-cutting table as an additional validation pass after the existing per-task checks.
+3. **REFACTOR** — Ensure JSON deserialization handles corrupt/empty data gracefully with try-catch returning `emptyList()`
 
-3. **In plan-inline SKILL.md**: Add to the validation step (step 8 in the workflow: "Validate plan against CLAUDE.md") with the same cross-cutting table.
-
-4. The validation instruction should say: "After writing all tasks, scan the entire plan for these patterns. If a pattern is detected in ANY task, verify the corresponding specification exists in that task's Defensive Requirements or TDD steps. If missing, add it before finalizing the plan."
+**Defensive Requirements:**
+- JSON deserialization must not throw on corrupt data. Wrap in try-catch and return empty list.
+- `SyncedMealSummary.calories` must be non-negative (validated in init block).
+- `SyncedMealSummary.foodName` must not be blank.
+- Empty string in DataStore → empty list (no meals stored yet).
 
 **Notes:**
-- This supplements per-task "Defensive Requirements" with a global sweep across all tasks
-- The checklist triggers on patterns found anywhere in the plan, not just per-task
-- Reference: HEA-44 audit — HttpTimeout was missing because no single issue's scope explicitly included networking, but the plan added Ktor client code
+- `kotlinx-serialization-json` is already in `libs.versions.toml:55` and the `kotlin-serialization` plugin is declared at `libs.versions.toml:68`
+- The `@Serializable` DTO stays in the data layer (not the domain model), following the pattern in `data/api/dto/FoodLogResponse.kt`
+- `MealType` is serialized as its `name` string in the DTO, deserialized via `MealType.valueOf()`
+- Reference: `FoodLogEntry.kt` for domain model validation pattern, `FoodLogResponse.kt` for `@Serializable` DTO pattern
+- All test files mocking `SettingsRepository` must add: `every { settingsRepository.lastSyncedMealsFlow } returns flowOf(emptyList())`
 
-### Task 8: Integration & Verification
+---
 
-**Issue:** HEA-80, HEA-81, HEA-82, HEA-79, HEA-78
+### Task 7: Collect and persist last 3 meals during sync
+
+**Issue:** HEA-95
 **Files:**
-- All files from previous tasks
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt` (modify)
+
+**TDD Steps:**
+
+1. **RED** — Write use case tests for meal collection:
+   - Test: `invoke persists last 3 meals sorted by date descending then time descending` — sync 2 days with 2 entries each, verify `setLastSyncedMeals` called with the 3 most recent entries
+   - Test: `invoke persists fewer than 3 meals when fewer were synced` — sync with 1 entry total, verify list has 1 item
+   - Test: `invoke sets empty meals list when no records synced` — sync with 0 entries, verify `setLastSyncedMeals(emptyList())` called
+   - Test: `invoke maps FoodLogEntry to SyncedMealSummary correctly` — verify foodName, mealType, and `calories.toInt()` rounding
+   - Test: `invoke handles null time in FoodLogEntry for meal sorting` — entries without time sort after entries with time on the same date
+   - Run: `./gradlew test --tests "com.healthhelper.app.domain.usecase.SyncNutritionUseCaseTest"`
+   - Verify: fails
+
+2. **GREEN** — Implement:
+   - In `SyncNutritionUseCase.invoke()`, declare a list to accumulate synced entries with their date: `val syncedEntries = mutableListOf<Pair<String, FoodLogEntry>>()`
+   - Inside the sync loop, when `result.isSuccess && entries.isNotEmpty()`, add each entry paired with `dateStr`
+   - After the sync loop (before the return), sort `syncedEntries` by date descending then time descending, take first 3
+   - Map to `SyncedMealSummary(entry.foodName, entry.mealType, entry.calories.toInt())`
+   - Call `settingsRepository.setLastSyncedMeals(summaries)`
+   - Run tests: verify passes
+
+3. **REFACTOR** — Consider optimizing: since dates are processed newest-first, stop accumulating after collecting 3 entries to avoid holding all entries in memory for large syncs
+
+**Defensive Requirements:**
+- `FoodLogEntry.time` is nullable — entries without time should sort after entries with time for the same date
+- `FoodLogEntry.calories` is Double — round to Int with `toInt()` (truncation is acceptable for display)
+- Wrap `setLastSyncedMeals` in try-catch — do not let meal persistence failure break the sync flow. Log error with Timber.
+
+**Notes:**
+- The sync loop processes dates newest-first (today, then backwards), so the first day's entries are likely the most recent meals
+- Reference: `SyncNutritionUseCase.kt:49-86` for the sync loop where entries are available
+- `FoodLogEntry` fields needed: `foodName`, `mealType`, `calories`, `time`
+
+---
+
+### Task 8: Display synced meals on main screen
+
+**Issue:** HEA-95
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` (modify — SyncUiState)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SyncScreen.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt` (modify)
+
+**TDD Steps:**
+
+1. **RED** — Write ViewModel tests:
+   - Test: `lastSyncedMeals populated from repository flow` — mock `lastSyncedMealsFlow` to emit 3 meals, assert `SyncUiState.lastSyncedMeals` contains them
+   - Test: `lastSyncedMeals is empty list by default` — assert empty when no meals stored
+   - Run: `./gradlew test --tests "com.healthhelper.app.presentation.viewmodel.SyncViewModelTest"`
+   - Verify: fails
+
+2. **GREEN** — Implement:
+   - Add `lastSyncedMeals: List<SyncedMealSummary> = emptyList()` to `SyncUiState`
+   - In `SyncViewModel.init`, collect `settingsRepository.lastSyncedMealsFlow` and update `_uiState` with the meals list
+   - In `SyncScreen`, add a "Recent syncs" section below the sync result area:
+     - Only display when `lastSyncedMeals` is non-empty
+     - Show header text: "Recent syncs:"
+     - For each meal, display: `"{foodName} · {MealType display name} · {calories} cal"`
+     - Format `MealType` for display: `name.lowercase().replaceFirstChar { it.uppercase() }` (e.g., "Breakfast", "Lunch")
+     - Use `Text` composables with `bodySmall` or `bodyMedium` typography
+   - Run tests: verify passes
+
+3. **REFACTOR** — Ensure the UI section is visually compact (no cards, no excessive padding)
+
+**Defensive Requirements:**
+- Empty list → section not displayed at all (no empty "Recent syncs:" header)
+- Long food names handled by Compose text overflow (single-line with ellipsis via `maxLines = 1` and `overflow = TextOverflow.Ellipsis`)
+
+**Notes:**
+- The meals flow can be collected separately from the existing settings `combine` in `SyncViewModel.init`, or added to it. A separate collector is simpler and avoids changing the existing combine signature.
+- Reference: `SyncScreen.kt:107-113` for conditional display pattern
+- Reference: `SyncScreen.kt:84-101` for existing content layout structure
+
+---
+
+### Task 9: Show next scheduled sync time
+
+**Issue:** HEA-94
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/data/sync/SyncScheduler.kt` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` (modify — SyncUiState + init)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SyncScreen.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/data/sync/SyncSchedulerTest.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt` (modify)
+
+**TDD Steps:**
+
+1. **RED** — Write tests:
+   - SyncScheduler test: `getNextSyncTimeFlow emits timestamp from WorkInfo` — mock WorkManager to return WorkInfo with a future `nextScheduleTimeMillis`
+   - SyncScheduler test: `getNextSyncTimeFlow emits null when no work is scheduled` — mock WorkManager to return empty list
+   - SyncScheduler test: `getNextSyncTimeFlow emits null when nextScheduleTimeMillis is MAX_VALUE` — treat unknown as null
+   - ViewModel test: `nextSyncTime shows formatted time when sync is scheduled` — mock SyncScheduler flow to emit a future timestamp
+   - ViewModel test: `nextSyncTime shows empty string when not configured` — assert empty/hidden
+   - ViewModel test: `nextSyncTime shows fallback estimate when SyncScheduler returns null` — compute from `lastSyncTimestamp + interval * 60_000`
+   - Run: `./gradlew test`
+   - Verify: fails
+
+2. **GREEN** — Implement:
+   - In `SyncScheduler`, add `fun getNextSyncTimeFlow(): Flow<Long?>`:
+     - Use `workManager.getWorkInfosForUniqueWorkFlow(WORK_NAME)` → `Flow<List<WorkInfo>>`
+     - Map: extract `firstOrNull()?.nextScheduleTimeMillis`, return null if list is empty or value is `Long.MAX_VALUE`
+   - Add `nextSyncTime: String = ""` to `SyncUiState`
+   - In `SyncViewModel.init`, combine `syncScheduler.getNextSyncTimeFlow()`, `settingsRepository.lastSyncTimestampFlow`, `settingsRepository.syncIntervalFlow`, and `isConfigured` status to compute `nextSyncTime`:
+     - Not configured → `""`
+     - WorkManager provides valid future timestamp → format as "Next sync at HH:MM" (for > 1 hour) or "Next sync in ~Xm" (for < 1 hour)
+     - WorkManager returns null → estimate from `lastSyncTimestamp + interval * 60_000`:
+       - If estimate is in the future → format same as above
+       - If estimate is in the past or lastSyncTimestamp is 0 → "Sync pending..."
+     - If sync not scheduled at all and not configured → `""` (hidden)
+   - In `SyncScreen`, display `nextSyncTime` when non-empty, positioned near the sync status area
+   - Run tests: verify passes
+
+3. **REFACTOR** — Consider extracting time formatting helpers shared between Task 5 (relative time) and this task
+
+**Defensive Requirements:**
+- `getWorkInfosForUniqueWorkFlow()` can emit empty list if work was never scheduled — handle as null.
+- `WorkInfo.nextScheduleTimeMillis` returns `Long.MAX_VALUE` when next run time is unknown — treat as unavailable, use fallback.
+- WorkManager Flow collection should not crash if WorkManager is not properly initialized — wrap in try-catch or use `catch` operator on the Flow.
+- The fallback calculation is approximate — WorkManager has flex time and system-imposed delays. The UI should indicate approximation with "~".
+
+**Notes:**
+- `WorkManager.getWorkInfosForUniqueWorkFlow()` is available in WorkManager 2.7+ (project uses 2.10.1 at `libs.versions.toml:21`)
+- `WorkInfo.getNextScheduleTimeMillis()` is available in WorkManager 2.8+
+- For time formatting: use `java.time.Instant`, `java.time.ZoneId`, `java.time.format.DateTimeFormatter` for "HH:MM" format
+- Reference: `SyncScheduler.kt:15` for `WORK_NAME` constant
+
+---
+
+### Task 10: Integration & Verification
+
+**Issue:** HEA-90, HEA-91, HEA-92, HEA-93, HEA-94, HEA-95
+**Files:** All modified files from Tasks 1–9
 
 **Steps:**
 
 1. Run full test suite: `./gradlew test`
 2. Build check: `./gradlew assembleDebug`
-3. Manual verification:
-   - [ ] Settings screen: type in text fields — no DataStore writes until Save pressed
-   - [ ] Settings screen: change slider — no DataStore write until Save pressed
-   - [ ] Settings screen: Save button persists all values, buttons become disabled
-   - [ ] Settings screen: Reset button reverts to last-saved values, buttons become disabled
-   - [ ] Settings screen: Save/Reset buttons are disabled when no changes made
-   - [ ] Settings screen: slider range starts at 5 minutes, default is 5 minutes
-   - [ ] Navigation: no fade/flash between Sync and Settings screens
-   - [ ] Bug-hunter agent: review `.claude/agents/bug-hunter.md` for 3 new checks present
-   - [ ] Plan skills: review `.claude/skills/plan-backlog/SKILL.md` and `.claude/skills/plan-inline/SKILL.md` for cross-cutting checklist
+3. Manual verification on device/emulator:
+   - [ ] Settings slider starts at 15, increments by 5, max 120
+   - [ ] App launch with previously granted permission → Sync Now button enabled immediately
+   - [ ] After sync, result shows "Synced X meals across Y days"
+   - [ ] After sync, "Last synced: X min ago" appears and refreshes over time
+   - [ ] After sync, last 3 meals displayed compactly below results
+   - [ ] Next sync time displayed and updates after sync or interval change
+   - [ ] App restart preserves last synced meals, timestamp, and next sync info
+   - [ ] All info hidden/defaults when app is freshly installed (no data stored)
 
 ## MCP Usage During Implementation
 
@@ -349,170 +517,33 @@ Implement Settings Save/Reset workflow, reduce sync interval minimum, disable na
 
 | Error Scenario | Expected Behavior | Test Coverage |
 |---------------|-------------------|---------------|
-| Repository throws on save() | Log error with Timber, don't crash, optionally set error state | Unit test (Task 2) |
-| Individual setter fails in save() | Continue with remaining setters, don't fail fast | Unit test (Task 2) |
-| Empty apiKey/baseUrl saved | Allowed — isConfigured becomes false | Existing unit test |
+| `getGrantedPermissions()` throws | `permissionGranted` stays false, Timber.e logged | Unit test (Task 2) |
+| JSON deserialization of stored meals fails | Return empty list, no crash | Unit test (Task 6) |
+| WorkManager `getWorkInfosForUniqueWorkFlow` returns empty | `nextSyncTime` shows fallback estimate or empty | Unit test (Task 9) |
+| `setLastSyncTimestamp` throws during sync | Sync succeeds, timestamp not persisted, error logged | Unit test (Task 5) |
+| `setLastSyncedMeals` throws during sync | Sync succeeds, meals not persisted, error logged | Unit test (Task 7) |
+| Stored `syncInterval` is < 15 (legacy data) | Slider clamps to 15, `SyncScheduler` clamps to 15 | Defensive (Task 1) |
 
 ## Risks & Open Questions
 
-- [ ] Back navigation with unsaved changes: Currently no confirmation dialog planned. Could be a future enhancement but out of scope for HEA-80.
-- [ ] Slider with 22 steps (5-min increments from 5 to 120) may feel crowded on small screens. Acceptable for now; can be refined to coarser steps later.
-- [ ] SyncScheduler/SyncWorker may have hardcoded interval defaults — implementer should check and update if found.
+- [ ] `WorkInfo.nextScheduleTimeMillis` accuracy on API 28–30 may vary. The fallback estimate (`lastSyncTimestamp + interval`) is approximate. Acceptable for a "next sync" indicator.
+- [ ] kotlinx-serialization-json is already a direct dependency (`libs.versions.toml:55`). Verify the `kotlin-serialization` plugin is applied in `app/build.gradle.kts` — the DTOs in `data/api/dto/` compile with `@Serializable`, so it should be.
+- [ ] Periodic refresh of relative time (Task 5) adds a long-lived coroutine in `viewModelScope`. This is fine — it auto-cancels when ViewModel is cleared.
 
 ## Scope Boundaries
 
 **In Scope:**
-- Settings Save/Reset workflow with dirty-state tracking (HEA-80)
-- Sync interval range 5-120 with 5-minute default (HEA-81)
-- Disable navigation transitions (HEA-82)
-- Bug-hunter agent: 3 new check categories (HEA-79)
-- Plan skills: cross-cutting requirements checklist (HEA-78)
+- Fix slider range and defaults (HEA-90)
+- Check permission on init (HEA-91)
+- Enrich sync result summary with day count (HEA-93)
+- Store and display last sync timestamp with relative formatting (HEA-92)
+- Show next scheduled sync time with fallback estimation (HEA-94)
+- Store and display last 3 synced meals (HEA-95)
 
 **Out of Scope:**
-- Unsaved changes confirmation dialog on back navigation
-- Non-linear slider step distribution
-- Automated testing of agent/skill markdown changes
-- Any other Backlog issues not listed above
-
----
-
-## Iteration 1
-
-**Implemented:** 2026-02-27
-**Method:** Single-agent
-
-### Tasks Completed This Iteration
-- Task 1: Decouple SettingsViewModel update methods from persistence
-- Task 2: Add hasUnsavedChanges, save(), and reset() to SettingsViewModel
-- Task 3: Add Save and Reset buttons to SettingsScreen
-- Task 4: Update sync interval range and default
-- Task 5: Disable navigation transition animations
-- Task 6: Add missing checks to bug-hunter agent
-- Task 7: Add cross-cutting requirements checklist to plan skills
-- Task 8: Integration & Verification
-
-### Files Modified
-- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModel.kt` — Decoupled update methods from persistence, added `hasUnsavedChanges`, `save()`, `reset()`, `PersistedSettings` tracking, partial-failure-safe save with `withDirtyFlag()`, changed default syncInterval to 5
-- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModelTest.kt` — Replaced 3 persist-on-update tests with no-persist assertions, added 9 new tests for dirty state, save, reset, error handling
-- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SettingsScreen.kt` — Added Save/Reset buttons, changed slider range to 5-120 with 22 steps
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` — Changed DEFAULT_SYNC_INTERVAL from 15 to 5
-- `app/src/test/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepositoryTest.kt` — Updated default sync interval test from 15 to 5
-- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/AppNavigation.kt` — Added EnterTransition.None/ExitTransition.None to NavHost
-- `.claude/agents/bug-hunter.md` — Added Data Persistence, dead test code, and UI Safety check sections
-- `.claude/skills/plan-backlog/SKILL.md` — Added cross-cutting requirements sweep (Section 4.5)
-- `.claude/skills/plan-inline/SKILL.md` — Added cross-cutting requirements sweep (step 9)
-
-### Linear Updates
-- HEA-80: Todo → In Progress → Review
-- HEA-81: Todo → In Progress → Review
-- HEA-82: Todo → In Progress → Review
-- HEA-79: Todo → In Progress → Review
-- HEA-78: Todo → In Progress → Review
-
-### Pre-commit Verification
-- bug-hunter: Found 2 bugs (partial save corruption, weak error test), fixed before proceeding
-- verifier: All 138 tests pass, zero warnings, build successful
-
-### Review Findings
-
-Summary: 12 findings evaluated, 8 require fix (Team: security, reliability, quality reviewers)
-- FIX: 7 issue(s) — Linear issues created
-- DISCARDED: 4 finding(s) — false positives / not applicable
-
-**Issues requiring fix:**
-- [HIGH] BUG: Race condition — combine collector overwrites UI state during save() (`SettingsViewModel.kt:41-62,82-117`) — HEA-83
-- [MEDIUM] COROUTINE: Unhandled exceptions in settings flow collection and API key migration (`SettingsViewModel.kt:41`, `DataStoreSettingsRepository.kt:68-78`) — HEA-84
-- [MEDIUM] BUG: isConfigured() returns incorrect result before API key migration (`DataStoreSettingsRepository.kt:107-112`) — HEA-85
-- [MEDIUM] SECURITY: EncryptedSharedPreferences crypto operations block main thread (`DataStoreSettingsRepository.kt:43,56,108`) — HEA-86
-- [LOW] BUG: No user-visible error feedback when settings save fails (`SettingsViewModel.kt:82-117`) — HEA-87
-- [LOW] CONVENTION: Misleading isConfigured test name and dead mock (`SettingsViewModelTest.kt:280-294`) — HEA-88
-- [LOW] CONVENTION: Partial assertion in reset test — only checks apiKey (`SettingsViewModelTest.kt:219-235`) — HEA-89
-
-**Discarded findings (not bugs):**
-- [DISCARDED] SECURITY: API key may remain in plaintext if Keystore fails persistently (`DataStoreSettingsRepository.kt:28`) — Code correctly handles retry via `migrationComplete` flag; system-level Keystore failure is not actionable by app code
-- [DISCARDED] SECURITY: API key held as plain String in JVM heap (`SettingsViewModel.kt:17`) — Inherent to displaying the value in a UI text field; no practical fix exists
-- [DISCARDED] CONVENTION: Dead mock setup in setUp() for lastSyncedDateFlow and isConfigured() (`SettingsViewModelTest.kt:38-39`) — Style-only; standard test class pattern with zero correctness impact
-- [DISCARDED] CONVENTION: Migration retry path untested (`DataStoreSettingsRepositoryTest.kt:127-148`) — Core safety behavior (migration not falsely marked complete on failure) is tested; retry mechanism is straightforward
-
-### Linear Updates
-- HEA-80: Review → Merge (original task completed)
-- HEA-81: Review → Merge (original task completed)
-- HEA-82: Review → Merge (original task completed)
-- HEA-79: Review → Merge (original task completed)
-- HEA-78: Review → Merge (original task completed)
-- HEA-83: Created in Todo (Fix: race condition in save)
-- HEA-84: Created in Todo (Fix: unhandled exceptions in flow collection)
-- HEA-85: Created in Todo (Fix: isConfigured pre-migration)
-- HEA-86: Created in Todo (Fix: EncryptedPrefs main thread blocking)
-- HEA-87: Created in Todo (Fix: save error UI feedback)
-- HEA-88: Created in Todo (Fix: misleading test name)
-- HEA-89: Created in Todo (Fix: partial reset assertion)
-
-<!-- REVIEW COMPLETE -->
-
-### Continuation Status
-All tasks completed. Fix Plan required.
-
----
-
-## Fix Plan
-
-**Source:** Review findings from Iteration 1
-**Linear Issues:** [HEA-83](https://linear.app/lw-claude/issue/HEA-83), [HEA-84](https://linear.app/lw-claude/issue/HEA-84), [HEA-85](https://linear.app/lw-claude/issue/HEA-85), [HEA-86](https://linear.app/lw-claude/issue/HEA-86), [HEA-87](https://linear.app/lw-claude/issue/HEA-87), [HEA-88](https://linear.app/lw-claude/issue/HEA-88), [HEA-89](https://linear.app/lw-claude/issue/HEA-89)
-
-### Fix 1: Race condition — combine collector overwrites UI during save
-**Linear Issue:** [HEA-83](https://linear.app/lw-claude/issue/HEA-83)
-
-1. Write test in `SettingsViewModelTest.kt`: `save does not overwrite UI state with intermediate flow emissions` — modify apiKey, baseUrl, syncInterval, call save(), verify UI state retains all 3 values throughout (not just after completion)
-2. Add `isSaving` flag to `SettingsViewModel`. Set `true` before launching save coroutine, `false` after all writes complete
-3. In the `combine().collect` handler: when `isSaving` is true, update `persistedSettings` but skip `_uiState.update` — the save coroutine handles UI state when it finishes
-4. After save completes: update `persistedSettings` with successfully saved values, recalculate dirty flag, clear `isSaving`
-
-### Fix 2: Unhandled exceptions in flow collection and migration
-**Linear Issue:** [HEA-84](https://linear.app/lw-claude/issue/HEA-84)
-
-1. Write test in `SettingsViewModelTest.kt`: `init handles repository flow exception gracefully` — mock apiKeyFlow to throw IOException, verify ViewModel doesn't crash and UI stays at defaults
-2. Write test in `DataStoreSettingsRepositoryTest.kt`: `apiKeyFlow handles migration failure gracefully` — configure encryptedPrefs to throw on getString, verify flow still emits (empty default)
-3. Wrap `migrateIfNeeded()` call in `callbackFlow` with try-catch; on failure, log with Timber and emit empty default
-4. Wrap `combine().collect` in `SettingsViewModel.init` with try-catch; on failure, log with Timber (UI stays at defaults)
-
-### Fix 3: isConfigured() missing migration call
-**Linear Issue:** [HEA-85](https://linear.app/lw-claude/issue/HEA-85)
-
-1. Write test in `DataStoreSettingsRepositoryTest.kt`: `isConfigured returns true when API key exists only in DataStore (pre-migration)` — populate DataStore with legacy key, verify `isConfigured()` returns true
-2. Add `migrateIfNeeded()` call at the start of `isConfigured()`
-
-### Fix 4: EncryptedPrefs reads on main thread
-**Linear Issue:** [HEA-86](https://linear.app/lw-claude/issue/HEA-86)
-
-1. Wrap `migrateIfNeeded()` body entirely in `withContext(Dispatchers.IO)` (lines 40-65) — this covers getString calls at lines 43 and 56, plus the existing commit at line 52-53 (already IO but nested is fine)
-2. Wrap `isConfigured()` body in `withContext(Dispatchers.IO)` (lines 107-112) — covers getString at line 108
-
-### Fix 5: Save error UI feedback
-**Linear Issue:** [HEA-87](https://linear.app/lw-claude/issue/HEA-87)
-
-1. Write test in `SettingsViewModelTest.kt`: `save sets error message when repository write fails` — mock setApiKey to throw, call save(), verify `uiState.saveError` is non-null with user-facing message
-2. Write test: `saveError is cleared on next successful save`
-3. Add `saveError: String? = null` field to `SettingsUiState`
-4. In `save()`: if `anyFailed`, set `saveError = "Some settings could not be saved. Please try again."`; if all succeed, set `saveError = null`
-5. In `SettingsScreen.kt`: show `saveError` as a `Text` with `MaterialTheme.colorScheme.error` color, below the Save/Reset buttons, when non-null
-
-### Fix 6: Misleading test name and dead mock
-**Linear Issue:** [HEA-88](https://linear.app/lw-claude/issue/HEA-88)
-
-1. Rename test from `isConfigured state reflects repository isConfigured` to `isConfigured is false when apiKey and baseUrl are empty`
-2. Remove the dead `coEvery { settingsRepository.isConfigured() } returns false` line from the test
-3. Remove the dead `coEvery { settingsRepository.isConfigured() } returns true` line from `setUp()` (line 39)
-
-### Fix 7: Partial assertion in reset test
-**Linear Issue:** [HEA-89](https://linear.app/lw-claude/issue/HEA-89)
-
-1. In the existing `reset reverts UI state to persisted values` test:
-   - Before reset: also call `updateBaseUrl("changed-url")` and `updateSyncInterval(99)`
-   - After reset: add assertions for `baseUrl == "https://example.com"` and `syncInterval == 30` (the persisted values from setUp mock)
-
----
-
-## Status: COMPLETE
-
-All tasks implemented and reviewed successfully. All Linear issues moved to Merge.
+- Full meal history or browsing all synced data
+- Push notifications for sync completion
+- Detailed sync error diagnostics
+- Sync conflict resolution UI
+- Room database for meal storage (DataStore JSON is sufficient for 3 items)
+- Removing `SyncScheduler.MIN_INTERVAL_MINUTES` clamp (kept as safety net)
