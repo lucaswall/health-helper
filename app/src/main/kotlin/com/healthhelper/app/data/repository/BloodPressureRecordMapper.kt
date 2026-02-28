@@ -7,6 +7,7 @@ import com.healthhelper.app.domain.model.BloodPressureReading
 import com.healthhelper.app.domain.model.BodyPosition
 import com.healthhelper.app.domain.model.MeasurementLocation
 import java.time.ZoneId
+import kotlin.math.roundToInt
 
 fun mapToBloodPressureRecord(reading: BloodPressureReading): BloodPressureRecord {
     val zoneOffset = ZoneId.systemDefault().rules.getOffset(reading.timestamp)
@@ -58,8 +59,8 @@ fun mapToBloodPressureReading(record: BloodPressureRecord): BloodPressureReading
     }
 
     return BloodPressureReading(
-        systolic = record.systolic.inMillimetersOfMercury.toInt(),
-        diastolic = record.diastolic.inMillimetersOfMercury.toInt(),
+        systolic = record.systolic.inMillimetersOfMercury.roundToInt(),
+        diastolic = record.diastolic.inMillimetersOfMercury.roundToInt(),
         bodyPosition = bodyPosition,
         measurementLocation = measurementLocation,
         timestamp = record.time,

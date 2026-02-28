@@ -88,6 +88,7 @@ Do not include any other text."""
             }
 
             val elapsed = System.currentTimeMillis() - startTime
+            Timber.d("parseBloodPressureImage completed in ${elapsed}ms")
 
             if (!response.status.isSuccess()) {
                 val status = response.status.value
@@ -109,8 +110,6 @@ Do not include any other text."""
                 .firstOrNull { it.type == "text" }
                 ?.text
                 ?: return BloodPressureParseResult.Error("No text content in response")
-
-            Timber.d("parseBloodPressureImage completed in ${elapsed}ms")
 
             parseResponseText(textContent)
         } catch (e: CancellationException) {

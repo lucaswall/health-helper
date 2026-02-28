@@ -19,6 +19,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
@@ -71,6 +72,20 @@ class HealthConnectBloodPressureRepositoryTest {
     fun writeReturnsFalseOnGeneralException() = runTest {
         val mockClient = mockk<HealthConnectClient>()
         coEvery { mockClient.insertRecords(any()) } throws RuntimeException("Unexpected error")
+
+        val repository = HealthConnectBloodPressureRepository(mockClient)
+        val result = repository.writeBloodPressureRecord(testReading)
+        assertFalse(result)
+    }
+
+    @Test
+    @DisplayName("writeBloodPressureRecord returns false when insertRecords exceeds 10s timeout")
+    fun writeReturnsFalseOnTimeout() = runTest {
+        val mockClient = mockk<HealthConnectClient>()
+        coEvery { mockClient.insertRecords(any()) } coAnswers {
+            delay(15_000L)
+            mockk<InsertRecordsResponse>()
+        }
 
         val repository = HealthConnectBloodPressureRepository(mockClient)
         val result = repository.writeBloodPressureRecord(testReading)

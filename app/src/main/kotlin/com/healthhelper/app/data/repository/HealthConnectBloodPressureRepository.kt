@@ -7,6 +7,7 @@ import androidx.health.connect.client.time.TimeRangeFilter
 import com.healthhelper.app.domain.model.BloodPressureReading
 import com.healthhelper.app.domain.repository.BloodPressureRepository
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 import timber.log.Timber
 import java.time.Instant
@@ -23,10 +24,21 @@ class HealthConnectBloodPressureRepository @Inject constructor(
             return false
         }
         return try {
+            val startMs = System.currentTimeMillis()
             val record = mapToBloodPressureRecord(reading)
-            healthConnectClient.insertRecords(listOf(record))
-            Timber.d("writeBloodPressureRecord: wrote BP reading %d/%d", reading.systolic, reading.diastolic)
+            withTimeout(10_000L) {
+                healthConnectClient.insertRecords(listOf(record))
+            }
+            Timber.d(
+                "writeBloodPressureRecord: wrote BP reading %d/%d in %dms",
+                reading.systolic,
+                reading.diastolic,
+                System.currentTimeMillis() - startMs,
+            )
             true
+        } catch (e: TimeoutCancellationException) {
+            Timber.e("writeBloodPressureRecord: timed out after 10s")
+            false
         } catch (e: SecurityException) {
             Timber.e(e, "writeBloodPressureRecord: permission denied")
             false

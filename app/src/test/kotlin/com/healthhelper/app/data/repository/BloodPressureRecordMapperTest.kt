@@ -1,6 +1,8 @@
 package com.healthhelper.app.data.repository
 
 import androidx.health.connect.client.records.BloodPressureRecord
+import androidx.health.connect.client.records.metadata.Metadata
+import androidx.health.connect.client.units.Pressure
 import com.healthhelper.app.domain.model.BloodPressureReading
 import com.healthhelper.app.domain.model.BodyPosition
 import com.healthhelper.app.domain.model.MeasurementLocation
@@ -8,6 +10,7 @@ import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import java.time.Instant
 import java.time.ZoneId
+import java.time.ZoneOffset
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
@@ -124,6 +127,21 @@ class BloodPressureRecordMapperTest {
         val timestamp = Instant.parse("2026-01-15T10:00:00Z")
         val record = mapToBloodPressureRecord(createReading(timestamp = timestamp))
         assertEquals(timestamp, record.time)
+    }
+
+    @Test
+    @DisplayName("rounds fractional mmHg values to nearest integer when mapping record to reading")
+    fun roundsFractionalMmHgToNearestInteger() {
+        val record = BloodPressureRecord(
+            time = Instant.parse("2026-01-15T10:00:00Z"),
+            zoneOffset = ZoneOffset.UTC,
+            systolic = Pressure.millimetersOfMercury(120.9),
+            diastolic = Pressure.millimetersOfMercury(79.6),
+            metadata = Metadata.manualEntry(),
+        )
+        val reading = mapToBloodPressureReading(record)
+        assertEquals(121, reading.systolic)
+        assertEquals(80, reading.diastolic)
     }
 
     @Test
