@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Heart shape centered in the 108x108 adaptive icon safe zone (centered at 54,54) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,78
+            C54,78 30,60 30,45
+            C30,37.5 36,31.5 43.5,31.5
+            C48,31.5 51.75,34 54,37.5
+            C56.25,34 60,31.5 64.5,31.5
+            C72,31.5 78,37.5 78,45
+            C78,60 54,78 54,78z" />
+    <!-- Plus/cross symbol inside the heart -->
+    <path
+        android:fillColor="#4CAF50"
+        android:pathData="M51.5,44h5v14h-5z" />
+    <path
+        android:fillColor="#4CAF50"
+        android:pathData="M47,49h14v5H47z" />
+</vector>
