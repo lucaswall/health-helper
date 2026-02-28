@@ -81,6 +81,7 @@ Invoke with `/<skill-name>`. All skills in `.claude/skills/<name>/SKILL.md`.
 | `deep-review` | Deep analysis of a single screen or feature |
 | `frontend-review` | Compose UI review (accessibility, design, performance) |
 | `investigate` | Research and investigate a topic or bug |
+| `push-to-production` | Release a new version with debug APK on GitHub |
 | `tools-improve` | Create or improve Claude Code skills, agents, and CLAUDE.md |
 
 ## Agents
