@@ -1,518 +1,215 @@
 # Implementation Plan
 
-**Status:** COMPLETE
 **Created:** 2026-02-28
-**Source:** Inline request: Blood Pressure Scanner — photograph BP monitor, extract readings via Claude Haiku, write BloodPressureRecord to Health Connect
-**Linear Issues:** [HEA-98](https://linear.app/lw-claude/issue/HEA-98), [HEA-99](https://linear.app/lw-claude/issue/HEA-99), [HEA-100](https://linear.app/lw-claude/issue/HEA-100), [HEA-101](https://linear.app/lw-claude/issue/HEA-101), [HEA-102](https://linear.app/lw-claude/issue/HEA-102), [HEA-103](https://linear.app/lw-claude/issue/HEA-103), [HEA-104](https://linear.app/lw-claude/issue/HEA-104), [HEA-105](https://linear.app/lw-claude/issue/HEA-105), [HEA-106](https://linear.app/lw-claude/issue/HEA-106), [HEA-107](https://linear.app/lw-claude/issue/HEA-107), [HEA-108](https://linear.app/lw-claude/issue/HEA-108), [HEA-109](https://linear.app/lw-claude/issue/HEA-109)
+**Source:** Inline request: Add ETag support to food sync — the Food Scanner API already returns ETag headers and handles If-None-Match / 304 Not Modified. Update the client to cache ETags per date, send If-None-Match on requests, and skip Health Connect writes when data hasn't changed. This eliminates redundant HC upserts every 15 minutes for today's food.
+**Linear Issues:** [HEA-129](https://linear.app/lw-claude/issue/HEA-129), [HEA-130](https://linear.app/lw-claude/issue/HEA-130), [HEA-131](https://linear.app/lw-claude/issue/HEA-131), [HEA-132](https://linear.app/lw-claude/issue/HEA-132), [HEA-133](https://linear.app/lw-claude/issue/HEA-133)
 
 ## Context Gathered
 
 ### Codebase Analysis
-- **Health Connect pattern:** `HealthConnectNutritionRepository` writes records via `healthConnectClient.insertRecords()`, returns Boolean, catches SecurityException and CancellationException — follow this exactly for BP records
-- **API client pattern:** `FoodScannerApiClient` (Ktor-based, `HttpClient` with OkHttp engine, 30s timeout, kotlinx-serialization) — follow for Anthropic API client
-- **Record mapper pattern:** `NutritionRecordMapper.kt` — standalone `mapTo*Record()` function, uses `Metadata.manualEntry(clientRecordId = "...")`, handles time zones
-- **Settings pattern:** API key in encrypted `SharedPreferences` via `ENCRYPTED_API_KEY`, non-sensitive settings in `DataStore` — follow for Anthropic API key
-- **ViewModel pattern:** `SyncViewModel` uses `MutableStateFlow` + `StateFlow`, `viewModelScope.launch`, collects repository flows in `init`
-- **Screen pattern:** `SyncScreen` uses `Scaffold` + `Column`, `collectAsStateWithLifecycle()`, `hiltViewModel()`
-- **Navigation:** `AppNavigation.kt` — `NavHost` with string routes ("sync", "settings"), simple `composable()` blocks
-- **Test pattern:** JUnit 5 + MockK + Turbine, `viewModelTest` wrapper cancels `viewModelScope`, `StandardTestDispatcher`, `advanceTimeBy`
-- **Domain model pattern:** `FoodLogEntry` — data class with `init` block `require()` validation
-- **Existing permissions:** Only `WRITE_NUTRITION` and `INTERNET` in AndroidManifest
-- **No CameraX or Anthropic dependencies exist** — need to add both
+- **Food Scanner server**: ETag fully deployed (v1.16.0). `GET /api/v1/food-log` returns `ETag` header (SHA-256 of response data, first 16 hex chars). Handles `If-None-Match` → responds 304 with empty body when data unchanged.
+- **Health Helper client**: Zero ETag support. `FoodScannerApiClient` sends plain GET with Bearer auth. No `If-None-Match`, no 304 handling, no ETag storage.
+- **API client**: Ktor 3.1.1 + OkHttp engine, `ContentNegotiation` + `HttpTimeout` (30s). Returns `Result<List<FoodLogEntry>>`.
+- **Repository**: `FoodScannerFoodLogRepository` is a pass-through wrapper over the API client.
+- **Use case**: `SyncNutritionUseCase` always re-syncs today, writes to Health Connect via `insertRecords()` (upserts via `clientRecordId`). No harm from duplicate writes, but wasteful.
+- **Settings storage**: `DataStoreSettingsRepository` uses DataStore<Preferences> for non-sensitive data, JSON serialization for complex types (meals list pattern).
+- **DI**: `AppModule` provides `FoodLogRepository` as `FoodScannerFoodLogRepository(apiClient)` — will need `SettingsRepository` added.
+- **Test patterns**: Ktor `MockEngine` for API client tests, MockK for repository/use-case mocks. JUnit 5 + `@DisplayName` + `runTest`.
+- **Callers of `FoodLogRepository.getFoodLog()`**: Only `SyncNutritionUseCase`.
 
 ### MCP Context
-- **MCPs used:** Linear (Health Helper team, ID `7b911426-efe2-48cb-93a4-4d69cd4592a6`)
-- **Findings:** No existing BP-related Linear issues. No glucose scanner issues either — all scanner features are in ROADMAP.md only.
+- **Linear team**: Health Helper (ID: `7b911426-efe2-48cb-93a4-4d69cd4592a6`)
 
 ## Original Plan
 
-### Task 1: Add CameraX dependencies and camera feature declaration
-**Linear Issue:** [HEA-98](https://linear.app/lw-claude/issue/HEA-98)
+### Task 1: Add FoodLogResult domain model
+**Linear Issue:** [HEA-129](https://linear.app/lw-claude/issue/HEA-129)
 
-1. Add CameraX version (`1.5.1` or latest stable) to `gradle/libs.versions.toml` under `[versions]`
-2. Add library entries under `[libraries]`: `camera-core`, `camera-camera2`, `camera-lifecycle`, `camera-compose`
-3. Add `implementation` dependencies to `app/build.gradle.kts`
-4. Add `<uses-feature android:name="android.hardware.camera" android:required="false" />` to `app/src/main/AndroidManifest.xml` — `required="false"` because the app functions without camera (nutrition sync still works)
-5. Run verifier — build must compile successfully
+A sealed class representing the outcome of a food log fetch — either new data or "not modified". This is the domain-layer concept that abstracts away the HTTP ETag mechanism.
 
-**Notes:**
-- CameraX `camera-compose` provides `CameraXViewfinder` composable for Compose-native preview (no `AndroidView` wrapper needed)
-- All CameraX artifacts should use the same version
-- `camera-camera2` is the Camera2 implementation backend
+**File:** `app/src/main/kotlin/com/healthhelper/app/domain/model/FoodLogResult.kt`
 
----
-
-### Task 2: BloodPressureReading domain model and enums
-**Linear Issue:** [HEA-99](https://linear.app/lw-claude/issue/HEA-99)
-
-**Files:**
-- `app/src/main/kotlin/com/healthhelper/app/domain/model/BodyPosition.kt` (create)
-- `app/src/main/kotlin/com/healthhelper/app/domain/model/MeasurementLocation.kt` (create)
-- `app/src/main/kotlin/com/healthhelper/app/domain/model/BloodPressureReading.kt` (create)
-- `app/src/main/kotlin/com/healthhelper/app/domain/model/BloodPressureParseResult.kt` (create)
-- `app/src/test/kotlin/com/healthhelper/app/domain/model/BloodPressureReadingTest.kt` (create)
+**Specification:**
+- `FoodLogResult.Data(entries: List<FoodLogEntry>)` — fresh data from API
+- `FoodLogResult.NotModified` — data unchanged since last fetch (object, no fields)
+- Follow existing sealed class pattern from `SyncResult.kt`
 
 **TDD Steps:**
-
-1. **RED** — Write tests:
-   - Valid reading (120, 80) with defaults succeeds
-   - Systolic below 60 throws `IllegalArgumentException`
-   - Systolic above 300 throws `IllegalArgumentException`
-   - Diastolic below 30 throws `IllegalArgumentException`
-   - Diastolic above 200 throws `IllegalArgumentException`
-   - Systolic <= diastolic throws `IllegalArgumentException`
-   - All `BodyPosition` enum values exist: STANDING_UP, SITTING_DOWN, LYING_DOWN, RECLINING, UNKNOWN
-   - All `MeasurementLocation` enum values exist: LEFT_UPPER_ARM, RIGHT_UPPER_ARM, LEFT_WRIST, RIGHT_WRIST, UNKNOWN
-   - `BloodPressureParseResult.Success` holds systolic and diastolic integers
-   - `BloodPressureParseResult.Error` holds message string
-   - Run verifier (expect fail)
-
-2. **GREEN** — Implement:
-   - `BodyPosition` enum with values matching Health Connect constants
-   - `MeasurementLocation` enum with values matching Health Connect constants
-   - `BloodPressureReading` data class: `systolic: Int`, `diastolic: Int`, `bodyPosition: BodyPosition = BodyPosition.UNKNOWN`, `measurementLocation: MeasurementLocation = MeasurementLocation.UNKNOWN`, `timestamp: java.time.Instant = Instant.now()`
-   - `init` block with `require(systolic in 60..300)`, `require(diastolic in 30..200)`, `require(systolic > diastolic)`
-   - `BloodPressureParseResult` sealed class: `Success(systolic: Int, diastolic: Int)`, `Error(message: String)`
-   - Follow validation pattern from `FoodLogEntry.kt`
-   - Run verifier (expect pass)
-
-**Defensive Requirements:**
-- Domain models must be pure Kotlin (no Android imports) per CLAUDE.md
-- `timestamp` uses `java.time.Instant` (pure Java, not Android-specific)
+1. Write test in `app/src/test/kotlin/com/healthhelper/app/domain/model/FoodLogResultTest.kt`
+   - Test `FoodLogResult.Data` holds entries correctly
+   - Test `FoodLogResult.NotModified` is a singleton (`assertSame`)
+   - Test pattern matching (when expression) covers both branches
+2. Run verifier (expect fail — class doesn't exist)
+3. Create `FoodLogResult.kt` with the sealed class
+4. Run verifier (expect pass)
 
 ---
 
-### Task 3: Blood pressure Health Connect repository
-**Linear Issue:** [HEA-100](https://linear.app/lw-claude/issue/HEA-100)
+### Task 2: Add ETag storage to SettingsRepository
+**Linear Issue:** [HEA-130](https://linear.app/lw-claude/issue/HEA-130)
 
-**Files:**
-- `app/src/main/kotlin/com/healthhelper/app/domain/repository/BloodPressureRepository.kt` (create)
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodPressureRepository.kt` (create)
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/BloodPressureRecordMapper.kt` (create)
-- `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt` (modify)
-- `app/src/test/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodPressureRepositoryTest.kt` (create)
-- `app/src/test/kotlin/com/healthhelper/app/data/repository/BloodPressureRecordMapperTest.kt` (create)
+Store per-date ETags so the client can send `If-None-Match` on subsequent requests. ETags are stored as a JSON-serialized `Map<String, String>` (date → ETag) in DataStore. Old entries are pruned to prevent unbounded growth.
+
+**Files modified:**
+- `app/src/main/kotlin/com/healthhelper/app/domain/repository/SettingsRepository.kt` — add interface methods
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` — implement
+
+**Specification:**
+- `suspend fun getETag(date: String): String?` — returns stored ETag for given date, or null
+- `suspend fun setETag(date: String, etag: String)` — stores ETag for date; prunes entries older than 7 days from today to prevent unbounded map growth
+- DataStore key: `stringPreferencesKey("food_log_etags")`, stored as JSON object `{"2026-02-28":"\"abc123\"","2026-02-27":"\"def456\""}`
+- Serialization: `kotlinx.serialization.json.Json.encodeToString()` / `decodeFromString()` using `Map<String, String>`
+- Pruning: on each `setETag` call, parse the existing map, remove entries with date keys older than `LocalDate.now().minusDays(7)`, then write back
+- Malformed JSON in DataStore → log warning, return null / start fresh (don't throw)
 
 **TDD Steps:**
+1. Write tests in `app/src/test/kotlin/com/healthhelper/app/data/repository/ETagStorageTest.kt`
+   - Test `getETag` returns null when no ETag stored
+   - Test `setETag` then `getETag` returns stored value
+   - Test `setETag` overwrites previous ETag for same date
+   - Test `setETag` prunes entries older than 7 days
+   - Test `getETag` with malformed JSON in DataStore returns null (does not throw)
+   - Test ETags for different dates are independent
+2. Run verifier (expect fail)
+3. Add `getETag`/`setETag` to `SettingsRepository` interface
+4. Add `FOOD_LOG_ETAGS` key and implement methods in `DataStoreSettingsRepository`
+5. Run verifier (expect pass)
 
-1. **RED** — Write tests:
-   - Repository: `writeBloodPressureRecord` returns false when `HealthConnectClient` is null
-   - Repository: `writeBloodPressureRecord` returns true on successful insert
-   - Repository: `writeBloodPressureRecord` returns false on `SecurityException`
-   - Repository: `writeBloodPressureRecord` returns false on general `Exception`
-   - Repository: `CancellationException` propagates (not caught)
-   - Repository: `getLastReading` returns null when `HealthConnectClient` is null
-   - Repository: `getLastReading` returns null when no records exist
-   - Repository: `getLastReading` returns most recent reading
-   - Repository: `getLastReading` returns null on exception (does not throw)
-   - Mapper: maps `BloodPressureReading` to `BloodPressureRecord` with correct systolic/diastolic `Pressure.millimetersOfMercury()` values
-   - Mapper: maps `BodyPosition` enum values to Health Connect `BODY_POSITION_*` constants
-   - Mapper: maps `MeasurementLocation` enum values to Health Connect `MEASUREMENT_LOCATION_*` constants
-   - Mapper: sets `Metadata.manualEntry()` with clientRecordId prefix `"bloodpressure-"`
-   - Mapper: sets time and zoneOffset from the reading's timestamp
-   - Follow test pattern from `HealthConnectNutritionRepositoryTest.kt`
-   - Run verifier (expect fail)
-
-2. **GREEN** — Implement:
-   - `BloodPressureRepository` interface: `suspend fun writeBloodPressureRecord(reading: BloodPressureReading): Boolean`, `suspend fun getLastReading(): BloodPressureReading?`
-   - `HealthConnectBloodPressureRepository` with `@Inject constructor(healthConnectClient: HealthConnectClient?)` — follow `HealthConnectNutritionRepository` pattern exactly
-   - `getLastReading()`: use `healthConnectClient.readRecords(ReadRecordsRequest(BloodPressureRecord::class, TimeRangeFilter.after(...)))`, sort by time descending, take first, map back to domain model
-   - `mapToBloodPressureRecord()` function — follow `NutritionRecordMapper.kt` pattern
-   - Reverse mapper from `BloodPressureRecord` to `BloodPressureReading` for `getLastReading()`
-   - Add `provideBloodPressureRepository` to `AppModule.kt` — `@Provides @Singleton`
-   - Run verifier (expect pass)
-
-**Defensive Requirements:**
-- `getLastReading()` must catch all exceptions (including SecurityException) and return null — do not let read failures crash the app
-- Use `TimeRangeFilter.after(Instant.now().minus(30, ChronoUnit.DAYS))` for the read query — Health Connect limits reads to 30 days
-- Timeout: `readRecords` call should be wrapped in `withTimeout(10_000L)` to prevent blocking on HC IPC
+**Note:** Existing tests that mock `SettingsRepository` (SyncNutritionUseCaseTest, SettingsViewModelTest) will need stub responses for the new methods. Add `coEvery { settingsRepository.getETag(any()) } returns null` and `coEvery { settingsRepository.setETag(any(), any()) } returns Unit` to the `configureSettings()` helper in `SyncNutritionUseCaseTest.kt`.
 
 ---
 
-### Task 4: Anthropic API key in settings
-**Linear Issue:** [HEA-101](https://linear.app/lw-claude/issue/HEA-101)
+### Task 3: Add ETag support to FoodScannerApiClient
+**Linear Issue:** [HEA-131](https://linear.app/lw-claude/issue/HEA-131)
 
-**Files:**
-- `app/src/main/kotlin/com/healthhelper/app/domain/repository/SettingsRepository.kt` (modify)
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` (modify)
-- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModel.kt` (modify)
-- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SettingsScreen.kt` (modify)
-- `app/src/test/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepositoryTest.kt` (modify)
-- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModelTest.kt` (modify)
+Update the HTTP client to accept an optional ETag, send `If-None-Match` header, handle 304 responses, and extract the `ETag` response header from 200 responses.
+
+**File modified:** `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt`
+**New file:** `app/src/main/kotlin/com/healthhelper/app/data/api/FoodLogApiResponse.kt`
+
+**Specification:**
+
+New data class `FoodLogApiResponse`:
+- `entries: List<FoodLogEntry>` — parsed food entries (empty for 304)
+- `etag: String?` — ETag from response header (null if not present)
+- `notModified: Boolean` — true when server returned 304
+
+Method signature change: `getFoodLog(baseUrl, apiKey, date, etag: String? = null): Result<FoodLogApiResponse>`
+
+Behavior changes:
+- When `etag` parameter is non-null: add `If-None-Match` request header with the ETag value (via `header(HttpHeaders.IfNoneMatch, etag)`)
+- When response status is 304: return `Result.success(FoodLogApiResponse(emptyList(), etag = null, notModified = true))`. Do NOT attempt to parse the body (it's empty).
+- When response status is 2xx: extract `ETag` header from response (`response.headers[HttpHeaders.ETag]`), parse body as before, return `FoodLogApiResponse(entries, etag = extractedETag, notModified = false)`
+- 304 check must happen BEFORE the existing `!response.status.isSuccess()` check (since 304 is not a success status)
+- All other behavior unchanged (401, 429, error handling, HTTPS validation, CancellationException propagation)
 
 **TDD Steps:**
-
-1. **RED** — Write tests:
-   - Repository: `anthropicApiKeyFlow` emits empty string by default
-   - Repository: `setAnthropicApiKey` stores value and emits it
-   - ViewModel: initial state has empty `anthropicApiKey`
-   - ViewModel: `updateAnthropicApiKey` sets `hasUnsavedChanges` to true
-   - ViewModel: `save()` calls `settingsRepository.setAnthropicApiKey()`
-   - ViewModel: `reset()` restores persisted anthropicApiKey
-   - All existing tests that mock `SettingsRepository` must add: `every { settingsRepository.anthropicApiKeyFlow } returns flowOf("")`
-   - Run verifier (expect fail)
-
-2. **GREEN** — Implement:
-   - Add to `SettingsRepository` interface: `val anthropicApiKeyFlow: Flow<String>`, `suspend fun setAnthropicApiKey(value: String)`
-   - Add to `DataStoreSettingsRepository`: `ENCRYPTED_ANTHROPIC_KEY = "anthropic_api_key"` constant, `anthropicApiKeyFlow` using `callbackFlow` on `encryptedPrefs` (same pattern as `apiKeyFlow`), `setAnthropicApiKey` via `encryptedPrefs.edit().putString().commit()`
-   - Add `anthropicApiKey: String = ""` to `SettingsUiState`
-   - Add to `SettingsViewModel`: `updateAnthropicApiKey()` function, include in `save()` and `reset()`, add to `PersistedSettings`, include `anthropicApiKeyFlow` in the `combine` collector
-   - Add `OutlinedTextField` to `SettingsScreen` for "Anthropic API Key" with same password visibility toggle pattern as existing API Key field
-   - Run verifier (expect pass)
-
-**Defensive Requirements:**
-- Anthropic API key stored in `EncryptedSharedPreferences` (same as Food Scanner API key) — never in plaintext DataStore
-- `callbackFlow` must register/unregister `OnSharedPreferenceChangeListener` — follow `apiKeyFlow` pattern exactly
-- `save()` must handle `setAnthropicApiKey` failure independently of other fields (same try-catch pattern as existing save)
-
-**Notes:**
-- All test files mocking `SettingsRepository` need the new flow mock added: `SyncViewModelTest`, `SyncNutritionUseCaseTest`, `SettingsViewModelTest`, `DataStoreSettingsRepositoryTest`
-- Reference: `DataStoreSettingsRepository.kt:80-94` for `apiKeyFlow` pattern, `SettingsViewModel.kt:90-135` for save pattern
+1. Write tests in `app/src/test/kotlin/com/healthhelper/app/data/api/FoodScannerApiClientTest.kt` (add to existing file)
+   - Test: `If-None-Match` header is sent when `etag` parameter is provided — capture request headers, assert `If-None-Match` equals the provided ETag
+   - Test: `If-None-Match` header is NOT sent when `etag` is null — capture request headers, assert header absent
+   - Test: 304 response returns `FoodLogApiResponse` with `notModified = true` and empty entries — mock engine returns `respond("", status = HttpStatusCode(304, "Not Modified"))`, assert result is success, `notModified == true`, `entries.isEmpty()`
+   - Test: 200 response with `ETag` header returns it in `FoodLogApiResponse.etag` — mock engine returns success with `ETag` response header, assert `etag` field matches
+   - Test: 200 response without `ETag` header returns `etag = null`
+   - Update all existing tests to unwrap `FoodLogApiResponse` (change `result.getOrThrow()` to `result.getOrThrow().entries` and add `assertFalse(result.getOrThrow().notModified)` where applicable)
+2. Run verifier (expect fail — new tests fail, existing tests fail due to return type change)
+3. Create `FoodLogApiResponse.kt` data class
+4. Update `getFoodLog()` in `FoodScannerApiClient`: add `etag` parameter, handle 304, extract ETag header, return `FoodLogApiResponse`
+5. Run verifier (expect pass)
 
 ---
 
-### Task 5: AnthropicApiClient for blood pressure image analysis
-**Linear Issue:** [HEA-102](https://linear.app/lw-claude/issue/HEA-102)
+### Task 4: Wire ETag through FoodScannerFoodLogRepository
+**Linear Issue:** [HEA-132](https://linear.app/lw-claude/issue/HEA-132)
 
-**Files:**
-- `app/src/main/kotlin/com/healthhelper/app/data/api/AnthropicApiClient.kt` (create)
-- `app/src/main/kotlin/com/healthhelper/app/data/api/dto/AnthropicDtos.kt` (create)
-- `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt` (modify)
-- `app/src/test/kotlin/com/healthhelper/app/data/api/AnthropicApiClientTest.kt` (create)
+Update the repository to: (1) change its return type to `FoodLogResult`, (2) inject `SettingsRepository` for ETag storage, (3) read the stored ETag before calling the API, (4) store the new ETag on 200, and (5) map the API response to the domain `FoodLogResult`.
+
+**Files modified:**
+- `app/src/main/kotlin/com/healthhelper/app/domain/repository/FoodLogRepository.kt` — change return type
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/FoodScannerFoodLogRepository.kt` — add SettingsRepository, wire ETag
+- `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt` — add SettingsRepository to FoodLogRepository provider
+
+**Specification:**
+
+Interface change:
+```
+getFoodLog(baseUrl, apiKey, date): Result<FoodLogResult>
+```
+
+Repository logic:
+1. Call `settingsRepository.getETag(date)` to get cached ETag
+2. Call `apiClient.getFoodLog(baseUrl, apiKey, date, etag)` with the cached ETag
+3. On success with `notModified = true` → return `Result.success(FoodLogResult.NotModified)`
+4. On success with `notModified = false`:
+   - If `apiResponse.etag` is non-null → call `settingsRepository.setETag(date, apiResponse.etag)`
+   - Return `Result.success(FoodLogResult.Data(apiResponse.entries))`
+5. On failure → propagate `Result.failure()` unchanged
+
+DI change in `AppModule.provideFoodLogRepository()`: add `settingsRepository: SettingsRepository` parameter, pass to `FoodScannerFoodLogRepository(apiClient, settingsRepository)`.
 
 **TDD Steps:**
-
-1. **RED** — Write tests:
-   - Returns `BloodPressureParseResult.Success(120, 80)` when Haiku responds with valid systolic/diastolic
-   - Returns `BloodPressureParseResult.Error` when Haiku response indicates unreadable display
-   - Returns `BloodPressureParseResult.Error` on HTTP 401 (bad API key)
-   - Returns `BloodPressureParseResult.Error` on HTTP 429 (rate limited)
-   - Returns `BloodPressureParseResult.Error` on network timeout
-   - Returns `BloodPressureParseResult.Error` on malformed response JSON
-   - Validates parsed systolic is in 60-300 range, diastolic in 30-200, systolic > diastolic — otherwise returns Error
-   - CancellationException propagates
-   - Use `ktor-client-mock` (already in test deps) to mock HTTP responses — follow `FoodScannerApiClientTest.kt` pattern
-   - Run verifier (expect fail)
-
-2. **GREEN** — Implement:
-   - Create `@Serializable` DTO classes for Anthropic Messages API request/response in `AnthropicDtos.kt`
-   - `AnthropicApiClient` with `@Inject constructor(httpClient: HttpClient)`:
-     - `suspend fun parseBloodPressureImage(apiKey: String, imageBytes: ByteArray): BloodPressureParseResult`
-     - POST to `https://api.anthropic.com/v1/messages`
-     - Headers: `x-api-key`, `anthropic-version: 2023-06-01`, `content-type: application/json`
-     - Body: model `claude-haiku-4-5-20251001`, max_tokens 256, messages with image (base64-encoded JPEG) and text prompt
-     - System prompt instructs Haiku to: identify systolic (largest/topmost number), diastolic (middle number), ignore pulse/heart rate, return JSON `{"systolic": N, "diastolic": N}` or `{"error": "reason"}`
-     - Parse response text as JSON, validate ranges, return `BloodPressureParseResult`
-   - Add `provideAnthropicApiClient` to `AppModule.kt`
-   - Run verifier (expect pass)
-
-**Defensive Requirements:**
-- API key must never be logged — only log "Authentication failed" on 401, not the key value
-- Timeout: 30s (inherited from existing HttpClient config in AppModule)
-- CancellationException must propagate (follow `FoodScannerApiClient.kt` pattern)
-- Error messages returned to caller must be sanitized (generic user-facing text, raw error logged via Timber only)
-- Base64 encoding of image bytes should happen inside the client
-- Validate response JSON defensively — malformed/missing fields return Error, not crash
-
-**Notes:**
-- The existing `HttpClient` in AppModule has `ContentNegotiation` with `Json { ignoreUnknownKeys = true }` and `HttpTimeout { requestTimeoutMillis = 30_000L }` — reuse for Anthropic calls
-- Reference: `FoodScannerApiClient.kt` for error handling patterns, `FoodScannerApiClientTest.kt` for Ktor mock client testing
-- Image should be resized to max 1568px on long edge before sending (reduces tokens and latency without losing accuracy)
+1. Write tests in `app/src/test/kotlin/com/healthhelper/app/data/repository/FoodScannerFoodLogRepositoryTest.kt`
+   - Test: successful API response maps to `FoodLogResult.Data` with correct entries
+   - Test: 304 API response maps to `FoodLogResult.NotModified`
+   - Test: ETag from settings is passed to API client
+   - Test: new ETag from API response is stored via `settingsRepository.setETag()`
+   - Test: null ETag from API response does NOT call `setETag()`
+   - Test: API failure propagates as `Result.failure()`
+   - Test: `getETag` failure (exception) does not prevent API call (graceful degradation — call API without ETag)
+2. Run verifier (expect fail)
+3. Update `FoodLogRepository` interface return type
+4. Add `SettingsRepository` to `FoodScannerFoodLogRepository` constructor, implement ETag wiring
+5. Update `AppModule.provideFoodLogRepository()` to inject `SettingsRepository`
+6. Run verifier (expect pass)
 
 ---
 
-### Task 6: Blood pressure use cases
-**Linear Issue:** [HEA-103](https://linear.app/lw-claude/issue/HEA-103)
+### Task 5: Handle FoodLogResult.NotModified in SyncNutritionUseCase
+**Linear Issue:** [HEA-133](https://linear.app/lw-claude/issue/HEA-133)
 
-**Files:**
-- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/WriteBloodPressureReadingUseCase.kt` (create)
-- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/GetLastBloodPressureReadingUseCase.kt` (create)
-- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/WriteBloodPressureReadingUseCaseTest.kt` (create)
-- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/GetLastBloodPressureReadingUseCaseTest.kt` (create)
+Update the sync algorithm to skip Health Connect writes when the API returns NotModified. Also fix a subtle bug: when all dates return NotModified (no new entries collected), don't overwrite `lastSyncedMeals` with an empty list.
+
+**File modified:** `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt`
+
+**Specification:**
+
+When `FoodLogResult.NotModified`:
+- Count as a successful day (`successfulDays++`)
+- Mark in `pastDateResults` as `true` (for contiguous watermark)
+- Do NOT call `nutritionRepository.writeNutritionRecords()`
+- Do NOT add to `syncedEntries`
+- Do NOT increment `totalEntriesFetched` or `totalRecordsSynced`
+- Log at debug level: `"getFoodLog(%s) not modified, skipping HC write"`
+
+When `FoodLogResult.Data`:
+- Existing behavior: check entries, write to HC, track counts
+
+Meal persistence fix:
+- Only call `settingsRepository.setLastSyncedMeals(summaries)` if `syncedEntries.isNotEmpty()`
+- If `syncedEntries` is empty (all dates were NotModified or had no food), skip meal persistence to preserve the previously stored meals
+
+**Defensive Requirements:**
+- `CancellationException`: must still re-throw (verify in tests)
+- `FoodLogResult` exhaustive `when`: compiler-enforced by sealed class
+- If new `FoodLogResult` variants are added in the future, the `when` block should fail at compile time (no `else` branch)
 
 **TDD Steps:**
-
-1. **RED** — Write tests for `WriteBloodPressureReadingUseCase`:
-   - Returns true when repository write succeeds
-   - Returns false when repository write fails
-   - Passes the `BloodPressureReading` domain model to repository
-   - Test with various valid readings (different body positions, measurement locations)
-   - Run verifier (expect fail)
-
-2. **GREEN** — Implement `WriteBloodPressureReadingUseCase`:
-   - `@Inject constructor(bloodPressureRepository: BloodPressureRepository)`
-   - `suspend fun invoke(reading: BloodPressureReading): Boolean` — delegates to `repository.writeBloodPressureRecord(reading)`
-   - Run verifier (expect pass)
-
-3. **RED** — Write tests for `GetLastBloodPressureReadingUseCase`:
-   - Returns reading when repository has data
-   - Returns null when repository returns null
-   - Returns null when repository throws (does not propagate exception)
-   - Run verifier (expect fail)
-
-4. **GREEN** — Implement `GetLastBloodPressureReadingUseCase`:
-   - `@Inject constructor(bloodPressureRepository: BloodPressureRepository)`
-   - `suspend fun invoke(): BloodPressureReading?` — delegates to `repository.getLastReading()`, wraps in try-catch returning null on failure
-   - Run verifier (expect pass)
-
-**Defensive Requirements:**
-- `GetLastBloodPressureReadingUseCase` must not throw — catch all exceptions, log with Timber, return null
-- Both use cases are pure domain layer — no Android imports
-
----
-
-### Task 7: Update AndroidManifest permissions and upfront permission request
-**Linear Issue:** [HEA-104](https://linear.app/lw-claude/issue/HEA-104)
-
-**Files:**
-- `app/src/main/AndroidManifest.xml` (modify)
-- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SyncScreen.kt` (modify)
-- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` (modify)
-- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt` (modify)
-
-**TDD Steps:**
-
-1. **RED** — Write tests:
-   - ViewModel: permission check on init verifies ALL Health Connect permissions (WRITE_NUTRITION, WRITE_BLOOD_PRESSURE, READ_BLOOD_PRESSURE)
-   - ViewModel: `permissionGranted` is true only when ALL required HC permissions are granted
-   - ViewModel: `cameraPermissionGranted` field tracks camera permission separately
-   - Run verifier (expect fail)
-
-2. **GREEN** — Implement:
-   - Add to `AndroidManifest.xml`: `<uses-permission android:name="android.permission.health.WRITE_BLOOD_PRESSURE" />`, `<uses-permission android:name="android.permission.health.READ_BLOOD_PRESSURE" />`, `<uses-permission android:name="android.permission.CAMERA" />`
-   - Update `SyncViewModel` companion object: define all required HC permissions as a `Set` (WRITE_NUTRITION, WRITE_BLOOD_PRESSURE, READ_BLOOD_PRESSURE)
-   - Update permission check in `SyncViewModel.init`: check all HC permissions are granted (current check only verifies WRITE_NUTRITION)
-   - Add `cameraPermissionGranted: Boolean = false` to `SyncUiState`
-   - Update `SyncScreen`: request ALL HC permissions at once via `permissionLauncher.launch(allHcPermissions)`, add separate camera permission launcher using `ActivityResultContracts.RequestPermission()` for `CAMERA`, trigger both on first launch via `LaunchedEffect`
-   - Update `onPermissionResult` to accept the full set of granted permissions and check all required ones
-   - Run verifier (expect pass)
-
-**Defensive Requirements:**
-- If any HC permission is denied, show which permissions are still needed
-- Camera permission failure should not block the rest of the app — only the "Log Blood Pressure" button should be disabled
-- Permission check in init must handle `getGrantedPermissions()` throwing — leave all permissions false on failure (existing pattern)
-- Both permission dialogs should show on first launch: HC permissions first, then camera permission
-
-**Notes:**
-- Health Connect permissions use `PermissionController.createRequestPermissionResultContract()` — supports requesting multiple HC permissions in one call
-- Camera permission uses standard Android `ActivityResultContracts.RequestPermission()`
-- Reference: `SyncScreen.kt:50-54` for current permission launcher, `SyncViewModel.kt:70-85` for current permission check
-
----
-
-### Task 8: Restructure home screen with fixed sections and last BP reading
-**Linear Issue:** [HEA-105](https://linear.app/lw-claude/issue/HEA-105)
-
-**Files:**
-- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` (modify)
-- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SyncScreen.kt` (modify)
-- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt` (modify)
-
-**TDD Steps:**
-
-1. **RED** — Write tests:
-   - ViewModel: `lastBpReading` is null by default
-   - ViewModel: `lastBpReading` populated after init loads from `GetLastBloodPressureReadingUseCase`
-   - ViewModel: `lastBpReadingDisplay` formats as "120/80 mmHg" when reading exists
-   - ViewModel: `lastBpReadingTime` formats as relative time (e.g., "2 hr ago") when reading exists
-   - ViewModel: `refreshLastBpReading()` reloads from use case (called after returning from BP flow)
-   - Run verifier (expect fail)
-
-2. **GREEN** — Implement:
-   - Add `GetLastBloodPressureReadingUseCase` as dependency to `SyncViewModel` constructor
-   - Add to `SyncUiState`: `lastBpReading: BloodPressureReading? = null`, `lastBpReadingDisplay: String = ""`, `lastBpReadingTime: String = ""`
-   - In `SyncViewModel.init`, launch coroutine to load last BP reading and format for display
-   - Add `refreshLastBpReading()` function that re-loads the last reading
-   - Restructure `SyncScreen` layout:
-     - Wrap content in `Column` with `verticalScroll(rememberScrollState())`
-     - **Section 1: Nutrition Sync** — wrap existing sync content in a `Card` or `Surface` with `Modifier.fillMaxWidth()` and a minimum height. Include: permission status, configuration status, last sync time, next sync time, sync result, recent meals, sync button
-     - **Section 2: Blood Pressure** — new `Card` or `Surface` with `Modifier.fillMaxWidth()` and minimum height. Include: last reading display ("120/80 mmHg · Sitting · 2 hr ago") or "No readings yet" placeholder, "Log Blood Pressure" button (enabled when HC permissions + camera permission granted)
-     - Both sections always visible with fixed vertical space allocation, even when empty
-   - Run verifier (expect pass)
-
-**Defensive Requirements:**
-- `GetLastBloodPressureReadingUseCase` is nullable in practice (returns null if no readings) — handle gracefully
-- Periodic refresh of `lastBpReadingTime` reuses existing `formatRelativeTime()` helper
-- "Log Blood Pressure" button enabled only when `permissionGranted && cameraPermissionGranted` — both HC and camera permissions required
-
-**Notes:**
-- The `SyncViewModel` constructor grows by one dependency (`GetLastBloodPressureReadingUseCase`) — update all test `createViewModel()` helpers
-- Consider `Modifier.defaultMinSize(minHeight = X.dp)` for section cards to maintain fixed space
-- Reference: `SyncScreen.kt` for existing layout, `SyncViewModel.kt` for existing state management
-
----
-
-### Task 9: Camera capture screen with CameraX and Haiku integration
-**Linear Issue:** [HEA-106](https://linear.app/lw-claude/issue/HEA-106)
-
-**Files:**
-- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/CameraCaptureViewModel.kt` (create)
-- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt` (create)
-- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/CameraCaptureViewModelTest.kt` (create)
-
-**TDD Steps:**
-
-1. **RED** — Write ViewModel tests:
-   - Initial state: `isCapturing = false`, `isProcessing = false`, `error = null`
-   - `onPhotoCaptured(bytes)` sets `isProcessing = true`, calls `AnthropicApiClient`
-   - On `BloodPressureParseResult.Success`: sets `navigateToConfirmation` event with systolic/diastolic values
-   - On `BloodPressureParseResult.Error`: sets `error` with message, `isProcessing = false`
-   - `onRetake()` clears error, returns to camera state
-   - `onPhotoCaptured` while already processing is ignored (guard)
-   - API call failure (network error) shows generic error message, raw error logged
-   - CancellationException propagates
-   - Run verifier (expect fail)
-
-2. **GREEN** — Implement:
-   - `CameraCaptureUiState` data class: `isProcessing: Boolean = false`, `error: String? = null`
-   - `CameraCaptureViewModel` with `@Inject constructor(anthropicApiClient: AnthropicApiClient, settingsRepository: SettingsRepository)`
-   - Navigation event: `navigateToConfirmation: SharedFlow<Pair<Int, Int>>` (systolic, diastolic) — one-shot event via `MutableSharedFlow`
-   - `onPhotoCaptured(imageBytes: ByteArray)`: guard on not already processing, set processing, launch coroutine to call `anthropicApiClient.parseBloodPressureImage(apiKey, imageBytes)`, handle result
-   - `onRetake()`: clear error state
-   - `CameraCaptureScreen` composable:
-     - CameraX preview using `CameraXViewfinder` composable (or `PreviewView` via `AndroidView` if `camera-compose` API differs)
-     - `ImageCapture` use case for photo capture
-     - Shutter button at bottom
-     - When processing: overlay with loading indicator
-     - When error: error message + "Retake" button
-     - Collect `navigateToConfirmation` flow for navigation
-   - Run verifier (expect pass)
-
-**Defensive Requirements:**
-- API key read from `settingsRepository.anthropicApiKeyFlow` — must be non-empty before calling API. If empty, show "Configure Anthropic API key in Settings"
-- Image bytes should be resized before sending to API (max 1568px on long edge) to control token cost
-- `isProcessing` guard prevents double-tap of shutter sending two API calls
-- Error messages shown to user must be generic — raw API errors logged via Timber only
-- CameraX lifecycle must be properly bound to the composable's lifecycle
-
-**Notes:**
-- `CameraX` setup: `ProcessCameraProvider` → bind `Preview` + `ImageCapture` use cases
-- `ImageCapture.takePicture()` with `OutputFileOptions` for temp file, then read bytes
-- Navigation event pattern: `MutableSharedFlow<T>(replay = 0, extraBufferCapacity = 1)` with `tryEmit()` — one-shot navigation events
-
----
-
-### Task 10: Blood pressure confirmation screen
-**Linear Issue:** [HEA-107](https://linear.app/lw-claude/issue/HEA-107)
-
-**Files:**
-- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/BpConfirmationViewModel.kt` (create)
-- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/BpConfirmationScreen.kt` (create)
-- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/BpConfirmationViewModelTest.kt` (create)
-
-**TDD Steps:**
-
-1. **RED** — Write ViewModel tests:
-   - Initial state populated from constructor args (systolic, diastolic)
-   - `updateSystolic(value)` updates state, validates range 60-300
-   - `updateDiastolic(value)` updates state, validates range 30-200
-   - `isSaveEnabled` is false when systolic <= diastolic
-   - `isSaveEnabled` is false when systolic out of range
-   - `isSaveEnabled` is false when diastolic out of range
-   - `isSaveEnabled` is true when all validations pass
-   - `updateBodyPosition(position)` updates state
-   - `updateMeasurementLocation(location)` updates state
-   - `save()` calls `WriteBloodPressureReadingUseCase` with correct domain model
-   - `save()` on success emits `navigateHome` event
-   - `save()` on failure sets error message
-   - `save()` while already saving is ignored (guard)
-   - Run verifier (expect fail)
-
-2. **GREEN** — Implement:
-   - `BpConfirmationUiState` data class: `systolic: String`, `diastolic: String`, `bodyPosition: BodyPosition = UNKNOWN`, `measurementLocation: MeasurementLocation = UNKNOWN`, `timestamp: Instant = Instant.now()`, `isSaveEnabled: Boolean`, `isSaving: Boolean = false`, `error: String? = null`, `validationError: String? = null`
-   - `BpConfirmationViewModel` with `@HiltViewModel @Inject constructor(savedStateHandle: SavedStateHandle, writeBloodPressureReadingUseCase: WriteBloodPressureReadingUseCase)`
-   - Read systolic/diastolic from `savedStateHandle` (navigation arguments)
-   - Validation: parse string to Int, check ranges, check systolic > diastolic — update `isSaveEnabled` and `validationError` reactively
-   - `save()`: guard on not already saving, construct `BloodPressureReading`, call use case, emit `navigateHome` on success
-   - Navigation event: `navigateHome: SharedFlow<String>` emitting snackbar message like "120/80 mmHg saved"
-   - `BpConfirmationScreen` composable:
-     - Scaffold with TopAppBar "Confirm Reading"
-     - Systolic and Diastolic as `OutlinedTextField` with number keyboard type (`KeyboardType.Number`)
-     - Body Position dropdown using `ExposedDropdownMenuBox`
-     - Measurement Location dropdown using `ExposedDropdownMenuBox`
-     - Timestamp display (default now, tappable to edit — use `DatePickerDialog` + `TimePickerDialog` or simplified display)
-     - Validation error text when present
-     - Row with "Cancel" (`OutlinedButton`) and "Save" (`Button`, enabled by `isSaveEnabled && !isSaving`)
-     - Cancel navigates back to home
-   - Run verifier (expect pass)
-
-**Defensive Requirements:**
-- String-to-Int parsing must handle non-numeric input gracefully — show validation error, not crash
-- `save()` guard prevents double-tap writing duplicate records
-- Error on save shows generic message ("Failed to save reading"), raw error logged via Timber
-- Timestamp defaults to `Instant.now()` at the time the screen loads, not at save time
-
-**Notes:**
-- Use `SavedStateHandle` to receive navigation args — matches Compose Navigation pattern
-- Dropdowns: `BodyPosition.entries` and `MeasurementLocation.entries` for enum values, format display name as `name.replace("_", " ").lowercase().replaceFirstChar { it.uppercase() }`
-- Reference: `SettingsScreen.kt` for `OutlinedTextField` patterns
-
----
-
-### Task 11: Navigation integration and wiring
-**Linear Issue:** [HEA-108](https://linear.app/lw-claude/issue/HEA-108)
-
-**Files:**
-- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/AppNavigation.kt` (modify)
-- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SyncScreen.kt` (modify)
-- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` (modify)
-
-**TDD Steps:**
-
-1. **RED** — Write tests:
-   - ViewModel: `refreshLastBpReading()` is callable (used when returning from BP flow)
-   - Run verifier (expect fail — if any wiring issues)
-
-2. **GREEN** — Implement:
-   - Add routes to `AppNavigation.kt`:
-     - `composable("camera-bp") { CameraCaptureScreen(onNavigateToConfirmation = { sys, dia -> navController.navigate("bp-confirm/$sys/$dia") }, onNavigateBack = { navController.popBackStack() }) }`
-     - `composable("bp-confirm/{systolic}/{diastolic}", arguments = listOf(navArgument("systolic") { type = NavType.IntType }, navArgument("diastolic") { type = NavType.IntType })) { BpConfirmationScreen(onNavigateHome = { snackbarMsg -> navController.navigate("sync") { popUpTo("sync") { inclusive = true } }; /* pass snackbar message */ }, onCancel = { navController.navigate("sync") { popUpTo("sync") { inclusive = true } } }) }`
-   - Wire `SyncScreen` "Log Blood Pressure" button to `onNavigateToCamera` callback → `navController.navigate("camera-bp")`
-   - Add `onNavigateToCamera: () -> Unit` parameter to `SyncScreen`
-   - Handle snackbar message: use `SnackbarHostState` in `SyncScreen`'s Scaffold, pass result via savedStateHandle or navigation result
-   - After returning from BP flow, call `viewModel.refreshLastBpReading()` to update the last reading display
-   - Run verifier (expect pass)
-
-**Defensive Requirements:**
-- Navigation `popUpTo("sync") { inclusive = true }` ensures we don't stack multiple home screens
-- Snackbar message must survive navigation — use Scaffold's `SnackbarHostState` with `LaunchedEffect` on a navigation result
-- Back press from camera screen goes to home, not back through confirmation
-
-**Notes:**
-- Reference: `AppNavigation.kt` for existing route pattern
-- Navigation arguments `{systolic}/{diastolic}` are typed as `NavType.IntType`
-- Consider adding `SnackbarHost` to the Scaffold in SyncScreen if not already present
-
----
-
-### Task 12: Integration & Verification
-**Linear Issue:** [HEA-109](https://linear.app/lw-claude/issue/HEA-109)
-
-**Files:** All modified files from Tasks 1–11
-
-**Steps:**
-
-1. Run full test suite: `./gradlew test`
-2. Build check: `./gradlew assembleDebug`
-3. Run `bug-hunter` agent — review all changes for bugs
-4. Run `verifier` agent — verify all tests pass and zero warnings
-
-**Manual verification checklist:**
-- [ ] App launch requests all permissions at once (HC nutrition, HC BP read/write, camera)
-- [ ] Home screen has two fixed sections: Nutrition Sync and Blood Pressure
-- [ ] Blood Pressure section shows "No readings yet" initially
-- [ ] "Log Blood Pressure" button navigates to camera
-- [ ] Camera viewfinder displays, shutter button captures photo
-- [ ] Photo sent to Haiku, loading indicator shown
-- [ ] On parse success, confirmation screen shows systolic/diastolic
-- [ ] Confirmation screen dropdowns work (body position, measurement location)
-- [ ] Save writes to Health Connect, returns to home with snackbar "120/80 mmHg saved"
-- [ ] Home screen now shows last BP reading with relative time
-- [ ] Cancel from confirmation returns to home without saving
-- [ ] Parse error shows message with retake option
-- [ ] Retake returns to camera viewfinder
-- [ ] Anthropic API key configurable in Settings
-- [ ] App works without camera permission (nutrition sync unaffected, BP button disabled)
+1. Update existing tests in `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt`
+   - Update `configureSettings()` helper: add `coEvery { settingsRepository.getETag(any()) } returns null` and `coEvery { settingsRepository.setETag(any(), any()) } returns Unit`
+   - Update all existing `coEvery { foodLogRepository.getFoodLog(...) } returns Result.success(listOf(...))` to `returns Result.success(FoodLogResult.Data(listOf(...)))`
+   - Update all `Result.success(emptyList())` to `Result.success(FoodLogResult.Data(emptyList()))`
+   - Run verifier to ensure existing tests still pass after migration
+2. Write new tests:
+   - Test: `NotModified` for today skips HC write, returns Success with 0 records synced and 1 day processed
+   - Test: `NotModified` for a past date counts as successful in contiguous watermark — setup 3 past dates where middle date returns NotModified, verify `lastSyncedDate` advances through it (unlike a failure which breaks the chain)
+   - Test: mix of `Data` and `NotModified` — today returns NotModified, yesterday returns Data with entries → HC write called only for yesterday, records count = yesterday's entries
+   - Test: all dates return `NotModified` → `setLastSyncedMeals` is NOT called (preserves existing meals)
+   - Test: some dates return `Data` with entries, others `NotModified` → `setLastSyncedMeals` IS called with entries from `Data` dates only
+3. Run verifier (expect fail for new tests)
+4. Update `SyncNutritionUseCase.invoke()`:
+   - Change `foodLogRepository.getFoodLog()` result handling to `when` on `FoodLogResult`
+   - Add `FoodLogResult.NotModified` branch
+   - Guard `setLastSyncedMeals` with `syncedEntries.isNotEmpty()`
+5. Run verifier (expect pass)
 
 ## Post-Implementation Checklist
 1. Run `bug-hunter` agent — Review changes for bugs
@@ -522,160 +219,101 @@
 
 ## Plan Summary
 
-**Objective:** Add Blood Pressure Scanner — photograph a BP monitor, extract systolic/diastolic via Claude Haiku, write BloodPressureRecord to Health Connect
+**Objective:** Add ETag support to food sync to eliminate redundant Health Connect writes every 15 minutes
 
-**Request:** Build the BP Scanner feature from the roadmap: camera capture → Haiku image analysis → confirmation screen → Health Connect write. All permissions upfront, structured home screen with fixed sections, last reading displayed on home.
+**Request:** The Food Scanner API already supports ETags. Adapt the Health Helper client to send If-None-Match headers, handle 304 Not Modified responses, and skip Health Connect writes when food data hasn't changed.
 
-**Linear Issues:** HEA-98, HEA-99, HEA-100, HEA-101, HEA-102, HEA-103, HEA-104, HEA-105, HEA-106, HEA-107, HEA-108, HEA-109
+**Linear Issues:** HEA-129, HEA-130, HEA-131, HEA-132, HEA-133
 
-**Approach:** Layer-by-layer implementation following existing Clean Architecture patterns. Start with domain models and dependencies, build up through repository/Health Connect integration, add Anthropic API client for Haiku image analysis, create use cases, then build the three new screens (restructured home, camera capture, BP confirmation). CameraX Compose-native integration for camera, Ktor for Haiku API calls, existing encrypted prefs pattern for API key storage.
+**Approach:** Add a `FoodLogResult` sealed class to the domain layer to represent "data" vs "not modified" outcomes. Store per-date ETags in DataStore (pruned after 7 days). Update the API client to send `If-None-Match` and handle 304 responses. Wire ETag storage through the repository layer. Update the use case to skip HC writes on NotModified and fix a subtle bug where empty sync cycles would overwrite persisted meal summaries.
 
 **Scope:**
-- Tasks: 12
-- Files affected: ~25 (15 new, 10 modified)
-- New tests: yes (8 new test files)
+- Tasks: 5
+- Files affected: 8 modified, 3 new (model, DTO, tests)
+- New tests: yes (ETag storage tests, API client ETag tests, repository ETag wiring tests, use case NotModified tests)
 
 **Key Decisions:**
-- BP Scanner built first (before Glucose Scanner) — shared camera/Haiku infrastructure will be reusable
-- Anthropic API key stored alongside Food Scanner API key in EncryptedSharedPreferences
-- CameraX Compose-native API (`camera-compose`) for camera preview
-- Navigation arguments pass systolic/diastolic between camera and confirmation screens
-- SyncViewModel extended with BP reading data (not a separate ViewModel) to keep the home screen simple
-- All permissions (HC nutrition, HC BP read/write, camera) requested upfront on first launch
+- ETag is an HTTP detail handled in data layer; domain layer only sees `FoodLogResult.NotModified`
+- ETags stored per-date in DataStore as JSON map, pruned after 7 days
+- 304 NotModified counts as "successful day" for the contiguous watermark — data was already synced, no gap
+- Meal summary persistence guarded by `syncedEntries.isNotEmpty()` to avoid overwriting with empty list
 
 **Risks/Considerations:**
-- CameraX has a known bug on API 28/29 ("Camera is closed") — needs testing on those API levels
-- Image quality (~18% rejection rate in research) means good error UX is critical
-- Anthropic API key needs to be obtained by user separately — clear guidance in settings UI
-- CameraX `camera-compose` API may vary between versions — verify against actual stable release
+- Existing tests (14 API client tests, 18 use case tests) need mechanical updates for new return types — high line count but low risk
+- If Food Scanner server removes ETag support, behavior gracefully degrades: no `If-None-Match` sent (etag is null), server returns 200 with full data, everything works as before
 
 ---
 
 ## Iteration 1
 
 **Implemented:** 2026-02-28
-**Method:** Agent team (4 workers, worktree-isolated)
+**Method:** Single-agent (2 independent units, 9 effort points — below worker threshold)
 
 ### Tasks Completed This Iteration
-- Task 1: Add CameraX dependencies and camera feature declaration (HEA-98, worker-1)
-- Task 2: BloodPressureReading domain model and enums (HEA-99, worker-1)
-- Task 3: Blood pressure Health Connect repository (HEA-100, worker-1)
-- Task 4: Anthropic API key in settings (HEA-101, worker-2)
-- Task 5: AnthropicApiClient for blood pressure image analysis (HEA-102, worker-2)
-- Task 6: Blood pressure use cases (HEA-103, worker-1)
-- Task 7: Update AndroidManifest permissions and upfront permission request (HEA-104, worker-3)
-- Task 8: Restructure home screen with fixed sections and last BP reading (HEA-105, worker-3)
-- Task 9: Camera capture screen with CameraX and Haiku integration (HEA-106, worker-4)
-- Task 10: Blood pressure confirmation screen (HEA-107, worker-4)
-- Task 11: Navigation integration and wiring (HEA-108, worker-4)
-- Task 12: Integration & Verification (HEA-109, lead)
+- Task 1: Add FoodLogResult domain model — sealed class with Data/NotModified variants
+- Task 2: Add ETag storage to SettingsRepository — per-date JSON map in DataStore with 7-day pruning
+- Task 3: Add ETag support to FoodScannerApiClient — If-None-Match header, 304 handling, ETag extraction
+- Task 4: Wire ETag through FoodScannerFoodLogRepository — inject SettingsRepository, map to FoodLogResult, store ETags
+- Task 5: Handle FoodLogResult.NotModified in SyncNutritionUseCase — skip HC writes, fix meal persistence guard
 
 ### Files Modified
-- `gradle/libs.versions.toml` — Added CameraX 1.5.1 with camera-compose and camera-view
-- `app/build.gradle.kts` — Added CameraX dependencies
-- `app/src/main/AndroidManifest.xml` — Added CAMERA permission, camera uses-feature, WRITE/READ_BLOOD_PRESSURE permissions
-- `app/src/main/kotlin/.../domain/model/BodyPosition.kt` — Created enum
-- `app/src/main/kotlin/.../domain/model/MeasurementLocation.kt` — Created enum
-- `app/src/main/kotlin/.../domain/model/BloodPressureReading.kt` — Created domain model with validation
-- `app/src/main/kotlin/.../domain/model/BloodPressureParseResult.kt` — Created sealed class
-- `app/src/main/kotlin/.../domain/repository/BloodPressureRepository.kt` — Created repository interface
-- `app/src/main/kotlin/.../domain/repository/SettingsRepository.kt` — Added anthropicApiKeyFlow, setAnthropicApiKey
-- `app/src/main/kotlin/.../domain/usecase/WriteBloodPressureReadingUseCase.kt` — Created use case
-- `app/src/main/kotlin/.../domain/usecase/GetLastBloodPressureReadingUseCase.kt` — Created use case
-- `app/src/main/kotlin/.../data/repository/HealthConnectBloodPressureRepository.kt` — Created HC repository
-- `app/src/main/kotlin/.../data/repository/BloodPressureRecordMapper.kt` — Created record mapper
-- `app/src/main/kotlin/.../data/repository/DataStoreSettingsRepository.kt` — Added Anthropic API key storage
-- `app/src/main/kotlin/.../data/api/AnthropicApiClient.kt` — Created Anthropic Messages API client
-- `app/src/main/kotlin/.../data/api/dto/AnthropicDtos.kt` — Created DTO classes
-- `app/src/main/kotlin/.../di/AppModule.kt` — Added BP repository and API client providers
-- `app/src/main/kotlin/.../presentation/viewmodel/SettingsViewModel.kt` — Added Anthropic API key support
-- `app/src/main/kotlin/.../presentation/viewmodel/SyncViewModel.kt` — Added BP reading display, camera permission, HC permission set
-- `app/src/main/kotlin/.../presentation/viewmodel/CameraCaptureViewModel.kt` — Created camera capture ViewModel
-- `app/src/main/kotlin/.../presentation/viewmodel/BpConfirmationViewModel.kt` — Created BP confirmation ViewModel
-- `app/src/main/kotlin/.../presentation/ui/SyncScreen.kt` — Restructured with Nutrition Sync + Blood Pressure cards
-- `app/src/main/kotlin/.../presentation/ui/SettingsScreen.kt` — Added Anthropic API Key field
-- `app/src/main/kotlin/.../presentation/ui/CameraCaptureScreen.kt` — Created camera capture screen
-- `app/src/main/kotlin/.../presentation/ui/BpConfirmationScreen.kt` — Created BP confirmation screen
-- `app/src/main/kotlin/.../presentation/ui/AppNavigation.kt` — Added camera-bp and bp-confirm routes
-- 8 new test files + 4 modified test files (284 total tests)
+- `app/src/main/kotlin/com/healthhelper/app/domain/model/FoodLogResult.kt` — New sealed class (Data/NotModified)
+- `app/src/main/kotlin/com/healthhelper/app/data/api/FoodLogApiResponse.kt` — New API response DTO with entries, etag, notModified
+- `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt` — Added etag parameter, 304 handling, ETag header extraction
+- `app/src/main/kotlin/com/healthhelper/app/domain/repository/SettingsRepository.kt` — Added getETag/setETag interface methods
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` — Implemented ETag storage with JSON map and 7-day pruning
+- `app/src/main/kotlin/com/healthhelper/app/domain/repository/FoodLogRepository.kt` — Changed return type to Result<FoodLogResult>
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/FoodScannerFoodLogRepository.kt` — Added SettingsRepository injection, ETag wiring, FoodLogResult mapping
+- `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt` — Added SettingsRepository to FoodLogRepository provider
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt` — Handle NotModified branch, guard meal persistence with syncedEntries.isNotEmpty()
+- `app/src/test/kotlin/com/healthhelper/app/domain/model/FoodLogResultTest.kt` — New: 3 tests for sealed class
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/ETagStorageTest.kt` — New: 6 tests for ETag storage
+- `app/src/test/kotlin/com/healthhelper/app/data/api/FoodScannerApiClientTest.kt` — Updated existing tests + 5 new ETag tests
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/FoodScannerFoodLogRepositoryTest.kt` — New: 8 tests for repository ETag wiring
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt` — Migrated 22 existing tests + 5 new NotModified tests
 
 ### Linear Updates
-- HEA-98 through HEA-109: Todo → In Progress → Review
+- HEA-129: Todo → In Progress → Review
+- HEA-130: Todo → In Progress → Review
+- HEA-131: Todo → In Progress → Review
+- HEA-132: Todo → In Progress → Review
+- HEA-133: Todo → In Progress → Review
 
 ### Pre-commit Verification
-- bug-hunter: Found 12 bugs (2 critical, 5 high, 4 medium, 1 low), all fixed before committing
-- verifier: All 284 tests pass, build successful, zero warnings
-
-### Work Partition
-- Worker 1: Tasks 1, 2, 3, 6 (domain + data foundation — models, enums, HC repository, use cases, CameraX deps)
-- Worker 2: Tasks 4, 5 (settings + API client — Anthropic key storage, Anthropic API client)
-- Worker 3: Tasks 7, 8 (permissions + home screen — manifest, permission request, SyncScreen restructuring)
-- Worker 4: Tasks 9, 10, 11 (screens + navigation — camera capture, BP confirmation, route wiring)
-
-### Merge Summary
-- Worker 1: fast-forward (first merge, no conflicts)
-- Worker 2: 1 conflict in BloodPressureParseResult.kt (both workers created it), resolved keeping worker-2's version
-- Worker 3: 5 conflicts in domain model stubs + AndroidManifest (resolved keeping worker-1's authoritative implementations, merging manifest additions)
-- Worker 4: Multiple stub conflicts + CameraX version conflict (resolved stubs with checkout --ours, kept CameraX 1.5.1)
-- Post-merge fix: duplicate anthropicApiKeyFlow declaration in SettingsRepository.kt (both worker-2 and worker-3 added it)
-
-### Bug Fixes Applied
-- Removed duplicate `anthropicApiKeyFlow` in SettingsRepository interface
-- Fixed `GetLastBloodPressureReadingUseCase` swallowing CancellationException
-- Removed dead `OutputFileOptions` code and unused `ByteArrayOutputStream` import in CameraCaptureScreen
-- Removed unused `android.util.Base64` import in AnthropicApiClient
-- Stopped logging health data (BP values) in AnthropicApiClient debug output
-- Separated camera permission request from Health Connect availability gate in SyncScreen
-- Replaced `!!` force-unwraps with safe `?.let` in BpConfirmationScreen
-- Added `DisposableEffect` cleanup for `cameraExecutor` in CameraCaptureScreen
-- Removed unused `executor` parameter from `capturePhoto` function
-- Changed `CAPTURE_MODE_MINIMIZE_LATENCY` to `CAPTURE_MODE_MAXIMIZE_QUALITY` for better OCR accuracy
-- Added `onCaptureError` callback to surface camera failures to UI via ViewModel
-- Replaced `Log.e` with `Timber.e` in CameraCaptureScreen
-
-### Continuation Status
-All tasks completed.
+- bug-hunter: Found 2 bugs (1 HIGH: setETag exception propagation, 1 MEDIUM: hardcoded test dates), both fixed
+- verifier: All tests pass, zero warnings
 
 ### Review Findings
 
-Summary: 14 issue(s) found, creating Fix Plan (Team: security, reliability, quality reviewers)
-- FIX: 14 issue(s) — Linear issues created (HEA-110 through HEA-120)
-- DISCARDED: 6 finding(s) — false positives / not applicable
+Summary: 4 issue(s) found (Team: security, reliability, quality reviewers)
+- FIX: 4 issue(s) — Linear issues created
+- DISCARDED: 7 finding(s) — false positives / not applicable
 
 **Issues requiring fix:**
-- [CRITICAL] SECURITY: Silent plaintext fallback when Keystore unavailable (`app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt:64-67`) — API keys stored in cleartext when EncryptedSharedPreferences fails (HEA-110)
-- [HIGH] SECURITY: API keys exposed via ViewModel data class toString() (`app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModel.kt:16-24, 34-39`) — crash reporters/loggers can leak keys (HEA-111)
-- [HIGH] COROUTINE: SettingsViewModel.save() swallows CancellationException + missing concurrent guard (`app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModel.kt:100-154`) — 4 catch blocks catch CancellationException; no guard prevents concurrent saves (HEA-112)
-- [HIGH] TIMEOUT: HC writeBloodPressureRecord missing timeout (`app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodPressureRepository.kt:26-27`) — getLastReading has withTimeout but write does not (HEA-113)
-- [MEDIUM] RESOURCE: CameraCaptureScreen ImageProxy not closed in finally + unused ExecutorService (`app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt:58-61, 190-195`) — OOM during buffer read leaks ImageProxy; cameraExecutor created but never used (HEA-114)
-- [MEDIUM] BUG: No image size validation before Anthropic API call (`app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt:191-195`) — large images exceed API limit, base64 on main thread risks ANR (HEA-115)
-- [MEDIUM] BUG: Snackbar message silently dropped after BP save (`app/src/main/kotlin/com/healthhelper/app/presentation/ui/AppNavigation.kt:51-55`) — snackbarMsg parameter received but unused (HEA-116)
-- [MEDIUM] ERROR: GetLastBloodPressureReadingUseCase swallows exceptions without logging (`app/src/main/kotlin/com/healthhelper/app/domain/usecase/GetLastBloodPressureReadingUseCase.kt:15-16`) — catch returns null with no Timber log (HEA-117)
-- [MEDIUM] TEST: CancellationException tests incomplete (`CameraCaptureViewModelTest.kt:229-250`, `HealthConnectBloodPressureRepositoryTest.kt`) — test doesn't verify propagation; missing getLastReading test (HEA-120)
-- [LOW] BUG: BloodPressureRecordMapper toInt() truncates instead of rounding (`app/src/main/kotlin/com/healthhelper/app/data/repository/BloodPressureRecordMapper.kt:61-62`) — should use roundToInt() (HEA-118)
-- [LOW] BUG: AnthropicApiClient elapsed time only logged on success path (`app/src/main/kotlin/com/healthhelper/app/data/api/AnthropicApiClient.kt:90-113`) — error paths skip duration log (HEA-119)
+- [MEDIUM] COROUTINE: CancellationException swallowed in apiKeyFlow callbackFlow (`app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt:93`) — `catch (e: Exception)` catches CancellationException without rethrowing, breaking cooperative cancellation
+- [MEDIUM] BUG: setLastSyncTimestamp called before HC write result checked (`app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt:117-123`) — timestamp updated when `successfulDays > 0` but before checking if HC writes succeeded; misleads UI on failed syncs
+- [MEDIUM] LOGGING: Server error logged at DEBUG level instead of WARN (`app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt:65`) — `Timber.d` makes server-reported errors invisible in production
+- [LOW] LOGGING: HTTP 429 rate-limited logged at ERROR level instead of WARN (`app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt:55`) — rate limiting is a transient condition, not an app error
 
 **Discarded findings (not bugs):**
-- [DISCARDED] SECURITY: security-crypto alpha version (libs.versions.toml:24) — 1.1.0-alpha06 is accepted industry practice; stable 1.0.0 has known device compatibility issues; widely used in production Android apps
-- [DISCARDED] BUG: Image format mismatch YUV vs JPEG (CameraCaptureScreen.kt:187-195) — false positive; CameraX `ImageCapture.OnImageCapturedCallback` returns JPEG format by default; `planes[0].buffer` contains JPEG bytes
-- [DISCARDED] TYPE: Force-unwrap !! on nullable in SyncViewModelTest (SyncViewModelTest.kt:461) — false positive; `mockk(relaxed = true)` always returns non-null mock; the !! is safe in practice
-- [DISCARDED] BUG: CameraCaptureViewModel stale processing guard (CameraCaptureViewModel.kt:47-52) — false positive; `viewModelScope` uses `Dispatchers.Main.immediate`, so the launched coroutine sets `isProcessing=true` before `onPhotoCaptured` returns, making the guard effective
-- [DISCARDED] CONVENTION: Timber string interpolation (CameraCaptureViewModel.kt:68) — style-only, no correctness impact; `Timber.w("BP parse error: ${result.message}")` vs format args is cosmetic
-- [DISCARDED] TEST: Trivial enum existence tests (BloodPressureReadingTest.kt:72-129) — tests aren't wrong, just low value; they guard against enum constant removal but add no behavioral coverage
+- [DISCARDED] SECURITY: ETag CRLF injection risk (`FoodScannerApiClient.kt:89`) — OkHttp validates header values and throws on CR/LF characters; server is already trusted (auth token sent). Defense exists at HTTP client layer.
+- [DISCARDED] SECURITY: No certificate pinning (`AppModule.kt:86-93`) — User-configured server makes certificate pinning impractical. HTTPS enforcement already present. Known trade-off.
+- [DISCARDED] SECURITY: No date parameter validation (`FoodLogRepository.kt:9`) — All callers generate dates from `LocalDate.format()`. No user input path. Defensive coding suggestion, not a bug.
+- [DISCARDED] CONVENTION: Missing `operator` keyword on invoke (`SyncNutritionUseCase.kt:25`) — Style-only preference. Both `useCase.invoke()` and `useCase()` work identically. Zero correctness impact.
+- [DISCARDED] TEST: Trivial singleton test (`FoodLogResultTest.kt:40-43`) — `data object` singleton is a Kotlin language guarantee. Test is trivially true but harmless.
+- [DISCARDED] TYPE: `assertIs<>` pattern not used in tests (`FoodScannerFoodLogRepositoryTest.kt`, `SyncNutritionUseCaseTest.kt`) — Style preference. `assertTrue + as` is correct and provides adequate coverage.
+- [DISCARDED] SECURITY: Server error message logged verbatim (`FoodScannerApiClient.kt:65`) — Merged into logging finding above. Timber.d suppressed in production.
 
 ### Linear Updates
-- HEA-98 through HEA-109: Review → Merge (original tasks completed)
-- HEA-110: Created in Todo (Fix: silent plaintext fallback — CRITICAL)
-- HEA-111: Created in Todo (Fix: API keys in toString — HIGH)
-- HEA-112: Created in Todo (Fix: save() CancellationException + concurrent guard — HIGH)
-- HEA-113: Created in Todo (Fix: HC write missing timeout — HIGH)
-- HEA-114: Created in Todo (Fix: CameraCaptureScreen resource management — MEDIUM)
-- HEA-115: Created in Todo (Fix: image size validation — MEDIUM)
-- HEA-116: Created in Todo (Fix: snackbar message dropped — MEDIUM)
-- HEA-117: Created in Todo (Fix: use case missing error logging — MEDIUM)
-- HEA-118: Created in Todo (Fix: toInt truncation — LOW)
-- HEA-119: Created in Todo (Fix: API client elapsed time logging — LOW)
-- HEA-120: Created in Todo (Fix: test quality — MEDIUM)
+- HEA-129: Review → Merge
+- HEA-130: Review → Merge
+- HEA-131: Review → Merge
+- HEA-132: Review → Merge
+- HEA-133: Review → Merge
+- HEA-134: Created in Todo (Fix: CancellationException swallowed in apiKeyFlow)
+- HEA-135: Created in Todo (Fix: setLastSyncTimestamp called prematurely)
+- HEA-136: Created in Todo (Fix: Server error logged at DEBUG)
+- HEA-137: Created in Todo (Fix: HTTP 429 logged at ERROR)
 
 <!-- REVIEW COMPLETE -->
 
@@ -684,185 +322,136 @@ Summary: 14 issue(s) found, creating Fix Plan (Team: security, reliability, qual
 ## Fix Plan
 
 **Source:** Review findings from Iteration 1
-**Linear Issues:** [HEA-110](https://linear.app/lw-claude/issue/HEA-110), [HEA-111](https://linear.app/lw-claude/issue/HEA-111), [HEA-112](https://linear.app/lw-claude/issue/HEA-112), [HEA-113](https://linear.app/lw-claude/issue/HEA-113), [HEA-114](https://linear.app/lw-claude/issue/HEA-114), [HEA-115](https://linear.app/lw-claude/issue/HEA-115), [HEA-116](https://linear.app/lw-claude/issue/HEA-116), [HEA-117](https://linear.app/lw-claude/issue/HEA-117), [HEA-118](https://linear.app/lw-claude/issue/HEA-118), [HEA-119](https://linear.app/lw-claude/issue/HEA-119), [HEA-120](https://linear.app/lw-claude/issue/HEA-120)
+**Linear Issues:** [HEA-134](https://linear.app/lw-claude/issue/HEA-134), [HEA-135](https://linear.app/lw-claude/issue/HEA-135), [HEA-136](https://linear.app/lw-claude/issue/HEA-136), [HEA-137](https://linear.app/lw-claude/issue/HEA-137)
 
-### Fix 1: Silent plaintext fallback when Keystore unavailable
-**Linear Issue:** [HEA-110](https://linear.app/lw-claude/issue/HEA-110)
+### Fix 1: CancellationException swallowed in apiKeyFlow callbackFlow
+**Linear Issue:** [HEA-134](https://linear.app/lw-claude/issue/HEA-134)
 
-1. Write test in `app/src/test/kotlin/com/healthhelper/app/di/AppModuleTest.kt` verifying that when `EncryptedSharedPreferences.create()` throws, the provider returns null (or a marked-insecure wrapper) rather than silently falling back to plaintext
-2. Modify `AppModule.kt:64-67` to either return null (making `SharedPreferences?` nullable) or throw, and surface a warning via a `SharedFlow` that the UI can observe
-3. Ensure `DataStoreSettingsRepository` handles null `SharedPreferences` gracefully (refuses to store keys, returns empty flows)
+1. Write test in `app/src/test/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepositoryTest.kt` that collects `apiKeyFlow`, cancels the collecting coroutine during `migrateIfNeeded()`, and verifies `CancellationException` propagates (is not swallowed)
+2. Add `catch (e: CancellationException) { throw e }` before the generic `catch (e: Exception)` in `DataStoreSettingsRepository.kt:93`
+3. Run verifier (expect pass)
 
-### Fix 2: SettingsViewModel API keys exposed via toString()
-**Linear Issue:** [HEA-111](https://linear.app/lw-claude/issue/HEA-111)
+### Fix 2: setLastSyncTimestamp called before HC write result checked
+**Linear Issue:** [HEA-135](https://linear.app/lw-claude/issue/HEA-135)
 
-1. Write test verifying `SettingsUiState.toString()` and `PersistedSettings.toString()` do not contain API key values
-2. Override `toString()` on `SettingsUiState` to redact `apiKey` and `anthropicApiKey` fields (show "***" instead)
-3. Override `toString()` on `PersistedSettings` similarly
+1. Write test in `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt`: all API calls succeed with entries but all `writeNutritionRecords()` return false → verify `setLastSyncTimestamp` is NOT called
+2. Write test: some HC writes succeed (totalRecordsSynced > 0) → verify `setLastSyncTimestamp` IS called
+3. Change condition in `SyncNutritionUseCase.kt:117` from `successfulDays > 0` to `totalRecordsSynced > 0`
+4. Run verifier (expect pass)
 
-### Fix 3: SettingsViewModel.save() CancellationException + concurrent guard
-**Linear Issue:** [HEA-112](https://linear.app/lw-claude/issue/HEA-112)
+### Fix 3: Server error logged at DEBUG level instead of WARN
+**Linear Issue:** [HEA-136](https://linear.app/lw-claude/issue/HEA-136)
 
-1. Write test verifying `save()` while already saving is ignored (returns without launching)
-2. Write test verifying CancellationException propagates from `save()` instead of being logged as error
-3. Add `if (isSaving) return` guard at top of `save()` before `viewModelScope.launch`
-4. Add `if (e is CancellationException) throw e` as first line in each of the 4 catch blocks in `save()`
+1. Change `Timber.d` to `Timber.w` on line 65 of `FoodScannerApiClient.kt`
+2. Run verifier (expect pass — no test changes needed, log level is not asserted in tests)
 
-### Fix 4: HC writeBloodPressureRecord missing timeout
-**Linear Issue:** [HEA-113](https://linear.app/lw-claude/issue/HEA-113)
+### Fix 4: HTTP 429 rate-limited logged at ERROR level instead of WARN
+**Linear Issue:** [HEA-137](https://linear.app/lw-claude/issue/HEA-137)
 
-1. Write test in `HealthConnectBloodPressureRepositoryTest.kt` verifying `writeBloodPressureRecord` times out after 10s (use `delay` in mock to exceed timeout)
-2. Wrap `healthConnectClient.insertRecords()` at line 27 in `withTimeout(10_000L)`
-
-### Fix 5: CameraCaptureScreen resource management
-**Linear Issue:** [HEA-114](https://linear.app/lw-claude/issue/HEA-114)
-
-1. Wrap `onCaptureSuccess` body in `try { ... } finally { image.close() }` at `CameraCaptureScreen.kt:190-195`
-2. Remove unused `cameraExecutor` (`ExecutorService`) and its `DisposableEffect` cleanup at lines 58-61
-3. Remove unused import `java.util.concurrent.ExecutorService` and `java.util.concurrent.Executors`
-
-### Fix 6: Image size validation before Anthropic API call
-**Linear Issue:** [HEA-115](https://linear.app/lw-claude/issue/HEA-115)
-
-1. Write test in `AnthropicApiClientTest.kt` or `CameraCaptureViewModelTest.kt` verifying oversized images are resized before API call
-2. Add image resize utility function: decode JPEG to Bitmap, scale to max 1568px on long edge, re-encode as JPEG
-3. Call resize in `CameraCaptureViewModel.onPhotoCaptured()` before passing bytes to API client (use `withContext(Dispatchers.Default)` for CPU-bound resize)
-
-### Fix 7: Snackbar message wiring in AppNavigation
-**Linear Issue:** [HEA-116](https://linear.app/lw-claude/issue/HEA-116)
-
-1. In `AppNavigation.kt:51-55`, set the snackbar message in the previous back stack entry's `savedStateHandle` before navigating
-2. In `SyncScreen`, observe the `savedStateHandle` for the snackbar message key and show via `SnackbarHostState`
-3. Clear the message after showing to prevent re-display on recomposition
-
-### Fix 8: GetLastBloodPressureReadingUseCase missing error logging
-**Linear Issue:** [HEA-117](https://linear.app/lw-claude/issue/HEA-117)
-
-1. Write test verifying that when an exception occurs, it is logged (use MockK to verify Timber interaction, or test the return value and ensure Timber is planted)
-2. Add `Timber.e(e, "GetLastBloodPressureReadingUseCase: unexpected error")` in the catch block at `GetLastBloodPressureReadingUseCase.kt:15-16`
-
-### Fix 9: BloodPressureRecordMapper toInt() truncation
-**Linear Issue:** [HEA-118](https://linear.app/lw-claude/issue/HEA-118)
-
-1. Write test in `BloodPressureRecordMapperTest.kt` verifying that a `BloodPressureRecord` with systolic `120.9` maps to domain model with systolic `121`
-2. Change `toInt()` to `roundToInt()` at `BloodPressureRecordMapper.kt:61-62`, add `import kotlin.math.roundToInt`
-
-### Fix 10: AnthropicApiClient elapsed time logging
-**Linear Issue:** [HEA-119](https://linear.app/lw-claude/issue/HEA-119)
-
-1. Move the elapsed time log (`Timber.d("parseBloodPressureImage completed in ${elapsed}ms")`) to immediately after computing `elapsed` at line 90-91, before the status check
-2. Or add elapsed to the error log lines at lines 100-103
-
-### Fix 11: CancellationException test quality
-**Linear Issue:** [HEA-120](https://linear.app/lw-claude/issue/HEA-120)
-
-1. In `CameraCaptureViewModelTest.kt:229-250`, replace the assertion with `assertFailsWith<CancellationException>` to actually verify the exception propagates
-2. In `HealthConnectBloodPressureRepositoryTest.kt`, add a new test `getLastReadingPropagatesCancellationException` following the same pattern as the existing `writeBloodPressureRecordPropagatesCancellationException` test
+1. In `FoodScannerApiClient.kt:52-56`, change the else branch to distinguish 429 from other errors:
+   - 401 → `Timber.w` (already correct)
+   - 429 → `Timber.w` (change from `Timber.e`)
+   - other → `Timber.e` (keep as-is)
+2. Run verifier (expect pass)
 
 ---
 
 ## Iteration 2
 
 **Implemented:** 2026-02-28
-**Method:** Agent team (3 workers, worktree-isolated)
+**Method:** Single-agent (3 independent units, 5 effort points — below worker threshold)
 
 ### Tasks Completed This Iteration
-- Fix 1: Silent plaintext fallback when Keystore unavailable (HEA-110, worker-1)
-- Fix 2: SettingsViewModel API keys exposed via toString() (HEA-111, worker-1)
-- Fix 3: SettingsViewModel.save() CancellationException + concurrent guard (HEA-112, worker-1)
-- Fix 4: HC writeBloodPressureRecord missing timeout (HEA-113, worker-2)
-- Fix 5: CameraCaptureScreen resource management (HEA-114, worker-3)
-- Fix 6: Image size validation before Anthropic API call (HEA-115, worker-3)
-- Fix 7: Snackbar message wiring in AppNavigation (HEA-116, worker-3)
-- Fix 8: GetLastBloodPressureReadingUseCase missing error logging (HEA-117, worker-2)
-- Fix 9: BloodPressureRecordMapper toInt() truncation (HEA-118, worker-2)
-- Fix 10: AnthropicApiClient elapsed time logging (HEA-119, worker-2)
-- Fix 11: CancellationException test quality (HEA-120, worker-3)
+- Fix 1: CancellationException swallowed in apiKeyFlow callbackFlow — added rethrow guard before generic catch
+- Fix 2: setLastSyncTimestamp called before HC write result checked — changed guard from `successfulDays > 0` to `totalRecordsSynced > 0`
+- Fix 3: Server error logged at DEBUG level instead of WARN — changed `Timber.d` to `Timber.w`
+- Fix 4: HTTP 429 rate-limited logged at ERROR level instead of WARN — changed `else` branch to `when` with 401/429 at WARN, others at ERROR
 
 ### Files Modified
-- `app/src/main/kotlin/.../di/AppModule.kt` — Nullable encrypted prefs, extracted testable factory, added DefaultDispatcher provider
-- `app/src/main/kotlin/.../di/DispatcherQualifiers.kt` — Created @DefaultDispatcher qualifier
-- `app/src/main/kotlin/.../data/repository/DataStoreSettingsRepository.kt` — Nullable encryptedPrefs support (no-op when null)
-- `app/src/main/kotlin/.../data/repository/HealthConnectBloodPressureRepository.kt` — Added withTimeout(10_000L) to write, elapsed time logging
-- `app/src/main/kotlin/.../data/repository/BloodPressureRecordMapper.kt` — Changed toInt() to roundToInt()
-- `app/src/main/kotlin/.../data/api/AnthropicApiClient.kt` — Moved elapsed time log before status check
-- `app/src/main/kotlin/.../presentation/viewmodel/SettingsViewModel.kt` — toString() redaction, save() concurrent guard, CancellationException rethrow
-- `app/src/main/kotlin/.../presentation/viewmodel/CameraCaptureViewModel.kt` — Added resizeImageIfNeeded() with bitmap leak protection, DI dispatcher
-- `app/src/main/kotlin/.../presentation/ui/CameraCaptureScreen.kt` — try/finally for ImageProxy, removed unused executor
-- `app/src/main/kotlin/.../presentation/ui/AppNavigation.kt` — Snackbar message via getBackStackEntry savedStateHandle
-- `app/src/main/kotlin/.../presentation/ui/SyncScreen.kt` — Added SnackbarHost, snackbarMessage/onSnackbarShown params
-- `app/src/main/kotlin/.../domain/usecase/GetLastBloodPressureReadingUseCase.kt` — No change (domain purity preserved, test coverage confirmed)
-- `app/src/test/.../di/AppModuleTest.kt` — Created (encrypted prefs factory tests)
-- `app/src/test/.../data/repository/DataStoreSettingsRepositoryTest.kt` — Added null encryptedPrefs tests
-- `app/src/test/.../data/repository/HealthConnectBloodPressureRepositoryTest.kt` — Added timeout test, getLastReading CancellationException test
-- `app/src/test/.../data/repository/BloodPressureRecordMapperTest.kt` — Added rounding test
-- `app/src/test/.../presentation/viewmodel/SettingsViewModelTest.kt` — Added toString redaction, concurrent save, CancellationException tests
-- `app/src/test/.../presentation/viewmodel/CameraCaptureViewModelTest.kt` — Improved CancellationException test, added resize verification
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` — Added CancellationException import and rethrow guard in apiKeyFlow callbackFlow
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt` — Changed setLastSyncTimestamp guard from `successfulDays > 0` to `totalRecordsSynced > 0`
+- `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt` — Server error log level d→w, HTTP error logging refactored to `when` block (401/429 at WARN, others at ERROR)
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepositoryTest.kt` — New: 1 test for CancellationException propagation
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt` — New: 2 tests for setLastSyncTimestamp correctness
 
 ### Linear Updates
-- HEA-110 through HEA-120: Todo → In Progress → Review
+- HEA-134: Todo → In Progress → Review
+- HEA-135: Todo → In Progress → Review
+- HEA-136: Todo → In Progress → Review
+- HEA-137: Todo → In Progress → Review
 
 ### Pre-commit Verification
-- bug-hunter: Found 4 bugs (1 high, 1 medium, 2 low), all fixed before committing
-- verifier: All tests pass, build successful, zero warnings
+- bug-hunter: 0 bugs found
+- verifier: All tests pass, lint clean, build clean
 
-### Work Partition
-- Worker 1: Fix 1, 2, 3 (security/settings — AppModule plaintext fallback, toString redaction, save guards)
-- Worker 2: Fix 4, 8, 9, 10 (data layer — HC timeout, use case logging, mapper rounding, API client logging)
-- Worker 3: Fix 5, 6, 7, 11 (presentation/UI — ImageProxy resources, image resize, snackbar wiring, test quality)
-
-### Merge Summary
-- Worker 2: fast-forward (first merge, no conflicts)
-- Worker 1: merged cleanly, no conflicts
-- Worker 3: 1 conflict in AppModule.kt (both worker-1 and worker-3 added code at end of object), resolved keeping both additions
-
-### Bug Fixes Applied
-- Fixed snackbar message lost due to NavController back stack race (currentBackStackEntry → getBackStackEntry)
-- Fixed bitmap leak in resizeImageIfNeeded when compress() throws (added try/finally for recycle)
-- Removed unused `import kotlinx.coroutines.Dispatchers`
-- Fixed import ordering in CameraCaptureViewModel
-
-### Continuation Status
-All tasks completed.
+### Tasks Remaining
+None — all Fix Plan tasks completed.
 
 ### Review Findings
 
-Summary: 8 issue(s) found, fixed inline (Team: security, reliability, quality reviewers)
-- FIXED INLINE: 8 issue(s) — verified via TDD + bug-hunter
+Summary: 4 issue(s) found (Team: security, reliability, quality reviewers)
+- FIX: 4 issue(s) — Linear issues created
+- DISCARDED: 8 finding(s) — false positives / not applicable
 
-**Issues fixed inline:**
-- [HIGH] BUG: getLastReading() propagates TimeoutCancellationException instead of returning null (`HealthConnectBloodPressureRepository.kt:75-82`) — added explicit `catch (e: TimeoutCancellationException)` block + test (HEA-121)
-- [MEDIUM] SECURITY: PHI (blood pressure values) logged in plaintext (`HealthConnectBloodPressureRepository.kt:33-37`) — removed BP values from log message (HEA-122)
-- [MEDIUM] COROUTINE: SettingsViewModel.save() isSaving guard race window (`SettingsViewModel.kt:109-113`) — moved `isSaving = true` before launch, added try/finally for reset (HEA-123)
-- [MEDIUM] TEST: DataStoreSettingsRepositoryTest migration failure test not exercised (`DataStoreSettingsRepositoryTest.kt:365-378`) — restructured mock to throw during flow collection (HEA-124)
-- [LOW] SECURITY: EXIF/GPS metadata not stripped from images (`CameraCaptureViewModel.kt:113-116`) — always re-encode through Bitmap.compress to strip EXIF (HEA-125)
-- [LOW] CONVENTION: Missing `operator` on use case invoke (`GetLastBloodPressureReadingUseCase.kt:11`, `WriteBloodPressureReadingUseCase.kt:10`) — added `operator` keyword (HEA-126)
-- [LOW] TEST: Dead variable in AppModuleTest (`AppModuleTest.kt:36`) — removed (HEA-127)
-- [LOW] TEST: Missing onCaptureError test (`CameraCaptureViewModelTest.kt`) — added test (HEA-128)
+**Issues requiring fix:**
+- [MEDIUM] SECURITY: Partial migration leaves API key in plaintext DataStore (`app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt:66-69`) — early-return path skips DataStore cleanup after crash between EncryptedPrefs write and DataStore remove
+- [HIGH] ERROR: No exception handling around initial settings reads (`app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt:26-32`) — DataStore IO/corruption exceptions propagate instead of returning SyncResult.Error
+- [LOW] TYPE: `when` on FoodLogResult used as statement, not expression (`app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt:61`) — Kotlin won't enforce exhaustiveness; violates plan requirement for compile-time safety
+- [LOW] TEST: Meaningless assertion in malformedLastSyncedDateFallsBack (`app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt:370`) — `assertTrue(result is Success || result is Error)` doesn't verify fallback behavior
 
 **Discarded findings (not bugs):**
-- [DISCARDED] SECURITY: No TLS certificate pinning on HttpClient for Anthropic API — infrastructure hardening, not a bug; HTTPS provides sufficient transport security
-- [DISCARDED] CONVENTION: Timber string interpolation vs format specifiers — style-only, no correctness impact; not enforced by CLAUDE.md
+- [DISCARDED] SECURITY: Meal data in plaintext DataStore (`DataStoreSettingsRepository.kt:199-202`) — DataStore is in app's private sandbox; standard Android practice for non-critical app data
+- [DISCARDED] SECURITY: ETag values stored without format validation (`FoodScannerApiClient.kt:88`) — Ktor/OkHttp validates header values (rejects CR/LF); server is trusted (user's own, authenticated)
+- [DISCARDED] TIMEOUT: No timeout at HTTP call site (`FoodScannerApiClient.kt:33`) — False positive: HttpClient has global `requestTimeoutMillis = 30_000L` in `AppModule.kt:90-92`
+- [DISCARDED] EDGE CASE: LocalDate.now() inside retryable DataStore edit (`DataStoreSettingsRepository.kt:231`) — Microsecond operation crossing midnight is practically impossible; negligible impact
+- [DISCARDED] TEST: Missing getETag/setETag tests in DataStoreSettingsRepositoryTest — False positive: tests exist in separate file `ETagStorageTest.kt` (6 tests)
+- [DISCARDED] CONVENTION: No API call duration logging (`FoodScannerApiClient.kt:33-98`) — Checklist suggestion, not CLAUDE.md requirement; pre-existing pattern
+- [DISCARDED] TEST: Weak `>=` assertions in multiDaySync (`SyncNutritionUseCaseTest.kt:114-115`) — Assertions verify expected minimum behavior; acceptable for multi-day aggregation
+- [DISCARDED] TEST: Unused ETag mock stubs in configureSettings (`SyncNutritionUseCaseTest.kt:73-74`) — Explicitly directed by plan; harmless defensive mocking
 
 ### Linear Updates
-- HEA-110 through HEA-120: Review → Merge (fix tasks completed)
-- HEA-121: Created in Merge (Fix: getLastReading TimeoutCancellationException — fixed inline)
-- HEA-122: Created in Merge (Fix: PHI logged in plaintext — fixed inline)
-- HEA-123: Created in Merge (Fix: save() isSaving race window — fixed inline)
-- HEA-124: Created in Merge (Fix: migration failure test — fixed inline)
-- HEA-125: Created in Merge (Fix: EXIF/GPS metadata — fixed inline)
-- HEA-126: Created in Merge (Fix: missing operator on invoke — fixed inline)
-- HEA-127: Created in Merge (Fix: dead variable — fixed inline)
-- HEA-128: Created in Merge (Fix: missing onCaptureError test — fixed inline)
-
-### Inline Fix Verification
-- Unit tests: all pass (304+ tests)
-- Bug-hunter: 2 additional issues found and fixed (isSaving try/finally, test assertion precision)
+- HEA-134: Review → Merge
+- HEA-135: Review → Merge
+- HEA-136: Review → Merge
+- HEA-137: Review → Merge
+- HEA-138: Created in Todo (Fix: Partial migration leaves API key in plaintext)
+- HEA-139: Created in Todo (Fix: No exception handling around initial settings reads)
+- HEA-140: Created in Todo (Fix: when as statement, not expression)
+- HEA-141: Created in Todo (Fix: Meaningless test assertion)
 
 <!-- REVIEW COMPLETE -->
 
 ---
 
-## Status: COMPLETE
+## Fix Plan
 
-All tasks implemented and reviewed successfully. All Linear issues moved to Merge.
+**Source:** Review findings from Iteration 2
+**Linear Issues:** [HEA-138](https://linear.app/lw-claude/issue/HEA-138), [HEA-139](https://linear.app/lw-claude/issue/HEA-139), [HEA-140](https://linear.app/lw-claude/issue/HEA-140), [HEA-141](https://linear.app/lw-claude/issue/HEA-141)
+
+### Fix 1: Partial migration leaves API key in plaintext DataStore
+**Linear Issue:** [HEA-138](https://linear.app/lw-claude/issue/HEA-138)
+
+1. Write test in `app/src/test/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepositoryTest.kt`: simulate crash scenario — pre-populate both EncryptedPrefs (API key present) and DataStore (legacy API_KEY present), call `apiKeyFlow.first()`, verify DataStore no longer contains the plaintext API_KEY
+2. In `DataStoreSettingsRepository.kt:67-69`, after the `existingKey.isNullOrEmpty()` check succeeds, add `dataStore.edit { it.remove(API_KEY) }` to clean any residual plaintext key before returning
+3. Run verifier (expect pass)
+
+### Fix 2: No exception handling around initial settings reads
+**Linear Issue:** [HEA-139](https://linear.app/lw-claude/issue/HEA-139)
+
+1. Write test in `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt`: mock `settingsRepository.isConfigured()` to throw `IOException`, verify `invoke()` returns `SyncResult.Error(...)` instead of propagating the exception
+2. Write test: mock `apiKeyFlow` to throw on `.first()`, verify `SyncResult.Error(...)` returned
+3. Wrap lines 26-32 of `SyncNutritionUseCase.kt` in try-catch: catch `CancellationException` and rethrow, catch `Exception` and return `SyncResult.Error(e.message ?: "Failed to read settings")`
+4. Run verifier (expect pass)
+
+### Fix 3: when on FoodLogResult as statement, not expression
+**Linear Issue:** [HEA-140](https://linear.app/lw-claude/issue/HEA-140)
+
+1. No new test needed — this is a compile-time safety fix
+2. In `SyncNutritionUseCase.kt:61`, convert the `when` statement to an expression by wrapping in `val _: Unit = when (...) { ... }` or restructuring so the result is used
+3. Run verifier (expect pass)
+
+### Fix 4: Meaningless test assertion in malformedLastSyncedDateFallsBack
+**Linear Issue:** [HEA-141](https://linear.app/lw-claude/issue/HEA-141)
+
+1. In `SyncNutritionUseCaseTest.kt:370`, replace `assertTrue(result is SyncResult.Success || result is SyncResult.Error)` with `assertTrue(result is SyncResult.Success)` and add `assertEquals(366, (result as SyncResult.Success).daysProcessed)` to verify the full-range fallback
+2. Run verifier (expect pass)

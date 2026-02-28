@@ -8,7 +8,9 @@ import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.bearerAuth
 import io.ktor.client.request.get
+import io.ktor.client.request.header
 import io.ktor.client.request.parameter
+import io.ktor.http.HttpHeaders
 import io.ktor.http.isSuccess
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.serialization.SerializationException
@@ -22,7 +24,8 @@ class FoodScannerApiClient @Inject constructor(
         baseUrl: String,
         apiKey: String,
         date: String,
-    ): Result<List<FoodLogEntry>> {
+        etag: String? = null,
+    ): Result<FoodLogApiResponse> {
         if (baseUrl.isBlank() || !baseUrl.lowercase().startsWith("https://")) {
             return Result.failure(Exception("HTTPS required for API connections"))
         }
@@ -30,6 +33,13 @@ class FoodScannerApiClient @Inject constructor(
             val response = httpClient.get("${baseUrl.trimEnd('/')}/api/v1/food-log") {
                 parameter("date", date)
                 bearerAuth(apiKey)
+                if (etag != null) {
+                    header(HttpHeaders.IfNoneMatch, etag)
+                }
+            }
+
+            if (response.status.value == 304) {
+                return Result.success(FoodLogApiResponse(emptyList(), etag = null, notModified = true))
             }
 
             if (!response.status.isSuccess()) {
@@ -39,10 +49,9 @@ class FoodScannerApiClient @Inject constructor(
                     429 -> "Rate limited"
                     else -> "HTTP error $status"
                 }
-                if (status == 401) {
-                    Timber.w("getFoodLog(%s) HTTP error: %d", date, status)
-                } else {
-                    Timber.e("getFoodLog(%s) HTTP error: %d", date, status)
+                when (status) {
+                    401, 429 -> Timber.w("getFoodLog(%s) HTTP error: %d", date, status)
+                    else -> Timber.e("getFoodLog(%s) HTTP error: %d", date, status)
                 }
                 return Result.failure(Exception(message))
             }
@@ -52,7 +61,7 @@ class FoodScannerApiClient @Inject constructor(
             if (!envelope.success) {
                 val serverMsg = envelope.error?.message
                 if (serverMsg != null) {
-                    Timber.d("getFoodLog(%s) server error: %s", date, serverMsg)
+                    Timber.w("getFoodLog(%s) server error: %s", date, serverMsg)
                 }
                 Result.failure(Exception("Server returned an error"))
             } else {
@@ -76,7 +85,8 @@ class FoodScannerApiClient @Inject constructor(
                         )
                     }
                 } ?: emptyList()
-                Result.success(entries)
+                val responseEtag = response.headers[HttpHeaders.ETag]
+                Result.success(FoodLogApiResponse(entries, etag = responseEtag, notModified = false))
             }
         } catch (e: SerializationException) {
             Timber.e(e, "getFoodLog(%s) parse error", date)

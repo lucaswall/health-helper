@@ -1,12 +1,14 @@
 package com.healthhelper.app.domain.usecase
 
 import com.healthhelper.app.domain.model.FoodLogEntry
+import com.healthhelper.app.domain.model.FoodLogResult
 import com.healthhelper.app.domain.model.SyncProgress
 import com.healthhelper.app.domain.model.SyncResult
 import com.healthhelper.app.domain.model.SyncedMealSummary
 import com.healthhelper.app.domain.repository.FoodLogRepository
 import com.healthhelper.app.domain.repository.NutritionRepository
 import com.healthhelper.app.domain.repository.SettingsRepository
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import timber.log.Timber
@@ -22,13 +24,22 @@ class SyncNutritionUseCase @Inject constructor(
     private val settingsRepository: SettingsRepository,
 ) {
     suspend fun invoke(onProgress: (SyncProgress) -> Unit = {}): SyncResult {
-        if (!settingsRepository.isConfigured()) {
-            return SyncResult.NeedsConfiguration
+        val apiKey: String
+        val baseUrl: String
+        val lastSyncedDate: String
+        try {
+            if (!settingsRepository.isConfigured()) {
+                return SyncResult.NeedsConfiguration
+            }
+            apiKey = settingsRepository.apiKeyFlow.first()
+            baseUrl = settingsRepository.baseUrlFlow.first()
+            lastSyncedDate = settingsRepository.lastSyncedDateFlow.first()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to read sync settings")
+            return SyncResult.Error(e.message ?: "Failed to read settings")
         }
-
-        val apiKey = settingsRepository.apiKeyFlow.first()
-        val baseUrl = settingsRepository.baseUrlFlow.first()
-        val lastSyncedDate = settingsRepository.lastSyncedDateFlow.first()
 
         val today = LocalDate.now()
         val maxPastDate = today.minusDays(365)
@@ -57,15 +68,23 @@ class SyncNutritionUseCase @Inject constructor(
             val result = foodLogRepository.getFoodLog(baseUrl, apiKey, dateStr)
 
             if (result.isSuccess) {
-                val entries = result.getOrThrow()
-                if (entries.isNotEmpty()) {
-                    totalEntriesFetched += entries.size
-                    val written = nutritionRepository.writeNutritionRecords(dateStr, entries)
-                    if (written) {
-                        totalRecordsSynced += entries.size
-                        entries.forEach { entry -> syncedEntries.add(Pair(dateStr, entry)) }
+                when (val foodLogResult = result.getOrThrow()) {
+                    is FoodLogResult.Data -> {
+                        val entries = foodLogResult.entries
+                        if (entries.isNotEmpty()) {
+                            totalEntriesFetched += entries.size
+                            val written = nutritionRepository.writeNutritionRecords(dateStr, entries)
+                            if (written) {
+                                totalRecordsSynced += entries.size
+                                entries.forEach { entry -> syncedEntries.add(Pair(dateStr, entry)) }
+                            }
+                        }
+                        Unit
                     }
-                }
+                    is FoodLogResult.NotModified -> {
+                        Timber.d("getFoodLog(%s) not modified, skipping HC write", dateStr)
+                    }
+                }.let {}
                 successfulDays++
                 if (date != today) {
                     pastDateResults[date] = true
@@ -106,7 +125,7 @@ class SyncNutritionUseCase @Inject constructor(
             settingsRepository.setLastSyncedDate(contiguousEnd.format(DateTimeFormatter.ISO_LOCAL_DATE))
         }
 
-        if (successfulDays > 0) {
+        if (totalRecordsSynced > 0) {
             try {
                 settingsRepository.setLastSyncTimestamp(System.currentTimeMillis())
             } catch (e: Exception) {
@@ -115,23 +134,26 @@ class SyncNutritionUseCase @Inject constructor(
         }
 
         // Persist last 3 meals: sort by date desc, then time desc (null time sorts last)
-        try {
-            val summaries = syncedEntries
-                .sortedWith(
-                    compareByDescending<Pair<String, FoodLogEntry>> { it.first }
-                        .thenByDescending { it.second.time ?: "" },
-                )
-                .take(3)
-                .map { (_, entry) ->
-                    SyncedMealSummary(
-                        foodName = entry.foodName,
-                        mealType = entry.mealType,
-                        calories = entry.calories.roundToInt().coerceAtLeast(0),
+        // Only update if we have new entries — don't overwrite with empty list when all dates are NotModified
+        if (syncedEntries.isNotEmpty()) {
+            try {
+                val summaries = syncedEntries
+                    .sortedWith(
+                        compareByDescending<Pair<String, FoodLogEntry>> { it.first }
+                            .thenByDescending { it.second.time ?: "" },
                     )
-                }
-            settingsRepository.setLastSyncedMeals(summaries)
-        } catch (e: Exception) {
-            Timber.w(e, "Failed to persist synced meal summaries")
+                    .take(3)
+                    .map { (_, entry) ->
+                        SyncedMealSummary(
+                            foodName = entry.foodName,
+                            mealType = entry.mealType,
+                            calories = entry.calories.roundToInt().coerceAtLeast(0),
+                        )
+                    }
+                settingsRepository.setLastSyncedMeals(summaries)
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to persist synced meal summaries")
+            }
         }
 
         return when {

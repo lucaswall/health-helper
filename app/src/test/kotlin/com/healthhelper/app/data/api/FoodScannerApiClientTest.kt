@@ -6,6 +6,7 @@ import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.engine.mock.respondError
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
@@ -19,6 +20,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class FoodScannerApiClientTest {
@@ -91,13 +93,14 @@ class FoodScannerApiClientTest {
         val result = client.getFoodLog("https://food.example.com", "fsk_test", "2026-02-27")
 
         assertTrue(result.isSuccess)
-        val entries = result.getOrThrow()
-        assertEquals(2, entries.size)
-        assertEquals("Oatmeal", entries[0].foodName)
-        assertEquals(300.0, entries[0].calories)
-        assertEquals(MealType.BREAKFAST, entries[0].mealType)
-        assertEquals("Salad", entries[1].foodName)
-        assertEquals(MealType.LUNCH, entries[1].mealType)
+        val apiResponse = result.getOrThrow()
+        assertFalse(apiResponse.notModified)
+        assertEquals(2, apiResponse.entries.size)
+        assertEquals("Oatmeal", apiResponse.entries[0].foodName)
+        assertEquals(300.0, apiResponse.entries[0].calories)
+        assertEquals(MealType.BREAKFAST, apiResponse.entries[0].mealType)
+        assertEquals("Salad", apiResponse.entries[1].foodName)
+        assertEquals(MealType.LUNCH, apiResponse.entries[1].mealType)
     }
 
     @Test
@@ -211,7 +214,7 @@ class FoodScannerApiClientTest {
         val result = client.getFoodLog("https://food.example.com", "fsk_test", "2026-02-27")
 
         assertTrue(result.isSuccess)
-        val entry = result.getOrThrow().first()
+        val entry = result.getOrThrow().entries.first()
         assertEquals("Rice", entry.foodName)
         assertEquals(MealType.DINNER, entry.mealType)
         assertEquals(null, entry.saturatedFatG)
@@ -244,7 +247,7 @@ class FoodScannerApiClientTest {
         val client = createClient(engine)
 
         val result = client.getFoodLog("https://food.example.com", "fsk_test", "2026-02-27")
-        val entries = result.getOrThrow()
+        val entries = result.getOrThrow().entries
 
         assertEquals(MealType.BREAKFAST, entries[0].mealType)
         assertEquals(MealType.SNACK, entries[1].mealType)
@@ -315,5 +318,81 @@ class FoodScannerApiClientTest {
         val url = assertNotNull(capturedUrl)
         assertTrue(url.contains("/api/v1/food-log"))
         assertFalse(url.contains("//api"))
+    }
+
+    // --- ETag support tests ---
+
+    @Test
+    @DisplayName("If-None-Match header is sent when etag parameter is provided")
+    fun ifNoneMatchHeaderSentWhenEtagProvided() = runTest {
+        var capturedHeaders: Headers? = null
+        val engine = MockEngine { request ->
+            capturedHeaders = request.headers
+            respond(content = successResponse, headers = jsonHeaders)
+        }
+        val client = createClient(engine)
+
+        client.getFoodLog("https://food.example.com", "fsk_test", "2026-02-27", etag = "\"abc123\"")
+
+        assertEquals("\"abc123\"", capturedHeaders?.get(HttpHeaders.IfNoneMatch))
+    }
+
+    @Test
+    @DisplayName("If-None-Match header is NOT sent when etag is null")
+    fun ifNoneMatchHeaderNotSentWhenEtagNull() = runTest {
+        var capturedHeaders: Headers? = null
+        val engine = MockEngine { request ->
+            capturedHeaders = request.headers
+            respond(content = successResponse, headers = jsonHeaders)
+        }
+        val client = createClient(engine)
+
+        client.getFoodLog("https://food.example.com", "fsk_test", "2026-02-27")
+
+        assertNull(capturedHeaders?.get(HttpHeaders.IfNoneMatch))
+    }
+
+    @Test
+    @DisplayName("304 response returns FoodLogApiResponse with notModified=true and empty entries")
+    fun notModifiedResponse304() = runTest {
+        val engine = MockEngine {
+            respond(content = "", status = HttpStatusCode(304, "Not Modified"))
+        }
+        val client = createClient(engine)
+
+        val result = client.getFoodLog("https://food.example.com", "fsk_test", "2026-02-27", etag = "\"abc123\"")
+
+        assertTrue(result.isSuccess)
+        val apiResponse = result.getOrThrow()
+        assertTrue(apiResponse.notModified)
+        assertTrue(apiResponse.entries.isEmpty())
+    }
+
+    @Test
+    @DisplayName("200 response with ETag header returns it in FoodLogApiResponse.etag")
+    fun etagHeaderExtractedFrom200Response() = runTest {
+        val responseHeaders = headersOf(
+            HttpHeaders.ContentType to listOf("application/json"),
+            HttpHeaders.ETag to listOf("\"def456\""),
+        )
+        val engine = MockEngine { respond(content = successResponse, headers = responseHeaders) }
+        val client = createClient(engine)
+
+        val result = client.getFoodLog("https://food.example.com", "fsk_test", "2026-02-27")
+
+        assertTrue(result.isSuccess)
+        assertEquals("\"def456\"", result.getOrThrow().etag)
+    }
+
+    @Test
+    @DisplayName("200 response without ETag header returns etag=null")
+    fun noEtagHeaderReturnsNull() = runTest {
+        val engine = MockEngine { respond(content = successResponse, headers = jsonHeaders) }
+        val client = createClient(engine)
+
+        val result = client.getFoodLog("https://food.example.com", "fsk_test", "2026-02-27")
+
+        assertTrue(result.isSuccess)
+        assertNull(result.getOrThrow().etag)
     }
 }

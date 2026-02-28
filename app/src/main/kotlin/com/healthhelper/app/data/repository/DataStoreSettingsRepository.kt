@@ -10,6 +10,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import com.healthhelper.app.domain.model.MealType
 import com.healthhelper.app.domain.model.SyncedMealSummary
 import com.healthhelper.app.domain.repository.SettingsRepository
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -24,6 +25,9 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import timber.log.Timber
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
 import javax.inject.Inject
 
 class DataStoreSettingsRepository @Inject constructor(
@@ -45,6 +49,7 @@ class DataStoreSettingsRepository @Inject constructor(
         val LAST_SYNCED_DATE = stringPreferencesKey("last_synced_date")
         val LAST_SYNC_TIMESTAMP = longPreferencesKey("last_sync_timestamp")
         val LAST_SYNCED_MEALS = stringPreferencesKey("last_synced_meals")
+        val FOOD_LOG_ETAGS = stringPreferencesKey("food_log_etags")
         const val DEFAULT_SYNC_INTERVAL = 15
         const val ENCRYPTED_API_KEY = "api_key"
         const val ENCRYPTED_ANTHROPIC_KEY = "anthropic_api_key"
@@ -60,6 +65,8 @@ class DataStoreSettingsRepository @Inject constructor(
             withContext(Dispatchers.IO) {
                 val existingKey = encryptedPrefs.getString(ENCRYPTED_API_KEY, "")
                 if (!existingKey.isNullOrEmpty()) {
+                    // Clean residual plaintext key from DataStore (crash recovery)
+                    dataStore.edit { it.remove(API_KEY) }
                     migrationComplete = true
                     return@withContext
                 }
@@ -86,6 +93,8 @@ class DataStoreSettingsRepository @Inject constructor(
         callbackFlow {
             try {
                 migrateIfNeeded()
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Timber.e(e, "API key migration failed")
             }
@@ -193,6 +202,46 @@ class DataStoreSettingsRepository @Inject constructor(
         val dtos = meals.map { SyncedMealDto(it.foodName, it.mealType.name, it.calories) }
         val json = Json.encodeToString(dtos)
         dataStore.edit { it[LAST_SYNCED_MEALS] = json }
+    }
+
+    override suspend fun getETag(date: String): String? {
+        val prefs = dataStore.data.first()
+        val json = prefs[FOOD_LOG_ETAGS] ?: return null
+        return try {
+            val map = Json.decodeFromString<Map<String, String>>(json)
+            map[date]
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to deserialize ETag map, returning null")
+            null
+        }
+    }
+
+    override suspend fun setETag(date: String, etag: String) {
+        dataStore.edit { prefs ->
+            val existingJson = prefs[FOOD_LOG_ETAGS]
+            val existingMap = if (existingJson != null) {
+                try {
+                    Json.decodeFromString<Map<String, String>>(existingJson)
+                } catch (e: Exception) {
+                    Timber.w(e, "Failed to deserialize ETag map, starting fresh")
+                    emptyMap()
+                }
+            } else {
+                emptyMap()
+            }
+
+            val cutoff = LocalDate.now().minusDays(7)
+            val pruned = existingMap.filter { (key, _) ->
+                try {
+                    !LocalDate.parse(key, DateTimeFormatter.ISO_LOCAL_DATE).isBefore(cutoff)
+                } catch (e: DateTimeParseException) {
+                    false
+                }
+            }.toMutableMap()
+
+            pruned[date] = etag
+            prefs[FOOD_LOG_ETAGS] = Json.encodeToString(pruned)
+        }
     }
 
     override suspend fun isConfigured(): Boolean {
