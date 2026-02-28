@@ -126,6 +126,7 @@ class DataStoreSettingsRepository @Inject constructor(
                     }
                 }
             } catch (e: Exception) {
+                Timber.w(e, "Failed to deserialize last synced meals, returning empty list")
                 emptyList()
             }
         }

@@ -140,6 +140,8 @@ class SyncViewModel @Inject constructor(
             }.distinctUntilChanged().collect { (interval, configured) ->
                 if (configured) {
                     syncScheduler.schedulePeriodic(interval)
+                } else {
+                    syncScheduler.cancelSync()
                 }
             }
         }

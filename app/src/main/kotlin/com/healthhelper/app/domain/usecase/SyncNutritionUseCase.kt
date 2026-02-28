@@ -9,6 +9,7 @@ import com.healthhelper.app.domain.repository.NutritionRepository
 import com.healthhelper.app.domain.repository.SettingsRepository
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import timber.log.Timber
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
@@ -109,7 +110,7 @@ class SyncNutritionUseCase @Inject constructor(
             try {
                 settingsRepository.setLastSyncTimestamp(System.currentTimeMillis())
             } catch (e: Exception) {
-                // Do not break sync flow if timestamp save fails
+                Timber.w(e, "Failed to save last sync timestamp")
             }
         }
 
@@ -130,7 +131,7 @@ class SyncNutritionUseCase @Inject constructor(
                 }
             settingsRepository.setLastSyncedMeals(summaries)
         } catch (e: Exception) {
-            // Non-critical — don't fail sync on meal summary persistence error
+            Timber.w(e, "Failed to persist synced meal summaries")
         }
 
         return when {
