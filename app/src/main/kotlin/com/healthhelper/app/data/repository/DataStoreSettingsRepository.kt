@@ -110,16 +110,20 @@ class DataStoreSettingsRepository @Inject constructor(
             val json = prefs[LAST_SYNCED_MEALS] ?: return@map emptyList()
             try {
                 val dtos = Json.decodeFromString<List<SyncedMealDto>>(json)
-                dtos.map { dto ->
-                    SyncedMealSummary(
-                        foodName = dto.foodName,
-                        mealType = try {
-                            MealType.valueOf(dto.mealType)
-                        } catch (e: IllegalArgumentException) {
-                            MealType.UNKNOWN
-                        },
-                        calories = dto.calories,
-                    )
+                dtos.mapNotNull { dto ->
+                    try {
+                        SyncedMealSummary(
+                            foodName = dto.foodName,
+                            mealType = try {
+                                MealType.valueOf(dto.mealType)
+                            } catch (e: IllegalArgumentException) {
+                                MealType.UNKNOWN
+                            },
+                            calories = dto.calories,
+                        )
+                    } catch (e: IllegalArgumentException) {
+                        null
+                    }
                 }
             } catch (e: Exception) {
                 emptyList()

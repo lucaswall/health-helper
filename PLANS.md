@@ -547,3 +547,73 @@ Six improvements to the sync experience: fix the misleading sync interval slider
 - Sync conflict resolution UI
 - Room database for meal storage (DataStore JSON is sufficient for 3 items)
 - Removing `SyncScheduler.MIN_INTERVAL_MINUTES` clamp (kept as safety net)
+
+---
+
+## Iteration 1
+
+**Implemented:** 2026-02-27
+**Method:** Agent team (3 workers, worktree-isolated)
+
+### Tasks Completed This Iteration
+- Task 1: Fix sync interval slider minimum and defaults (worker-1)
+- Task 2: Check Health Connect permission on app launch (worker-1)
+- Task 3: Enrich sync result with day count (worker-2)
+- Task 4: Store last sync timestamp in repository (worker-2)
+- Task 5: Save sync timestamp and display relative time (worker-2)
+- Task 6: Create SyncedMealSummary model and repository storage (worker-3)
+- Task 7: Collect and persist last 3 meals during sync (worker-3)
+- Task 8: Display synced meals on main screen (worker-3)
+- Task 9: Show next scheduled sync time (worker-1)
+- Task 10: Integration & Verification (lead)
+
+### Files Modified
+- `app/src/main/kotlin/com/healthhelper/app/domain/model/SyncResult.kt` — Added `daysProcessed` to `Success`
+- `app/src/main/kotlin/com/healthhelper/app/domain/model/SyncedMealSummary.kt` — NEW: domain model for meal summaries
+- `app/src/main/kotlin/com/healthhelper/app/domain/repository/SettingsRepository.kt` — Added `lastSyncTimestampFlow`, `lastSyncedMealsFlow`, `setLastSyncTimestamp`, `setLastSyncedMeals`
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` — Implemented new repo methods, changed DEFAULT_SYNC_INTERVAL to 15, added SyncedMealDto
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt` — Save timestamp, collect meals after sync, safe calorie rounding
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` — Permission check on init, timestamp display with periodic refresh, meals collection, next sync time, sanitized error messages
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModel.kt` — Changed default syncInterval to 15
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SyncScreen.kt` — Added lastSyncTime, recent syncs section, next sync time display
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SettingsScreen.kt` — Slider range 15–120, steps=20
+- `app/src/main/kotlin/com/healthhelper/app/data/sync/SyncScheduler.kt` — Added `getNextSyncTimeFlow()`
+- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt` — 28 tests, viewModelTest wrapper for periodic refresh coroutine
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt` — Tests for timestamp, meals, day count
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepositoryTest.kt` — Tests for timestamp and meals storage
+- `app/src/test/kotlin/com/healthhelper/app/data/sync/SyncSchedulerTest.kt` — Tests for getNextSyncTimeFlow
+- `app/src/test/kotlin/com/healthhelper/app/domain/model/SyncedMealSummaryTest.kt` — NEW: model validation tests
+- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SettingsViewModelTest.kt` — Updated default interval assertion
+- `.gitignore` — Added `_workers/`
+
+### Linear Updates
+- HEA-90: Todo → In Progress → Review
+- HEA-91: Todo → In Progress → Review
+- HEA-92: Todo → In Progress → Review
+- HEA-93: Todo → In Progress → Review
+- HEA-94: Todo → In Progress → Review
+- HEA-95: Todo → In Progress → Review
+
+### Pre-commit Verification
+- bug-hunter: Found 5 bugs (1 HIGH, 4 MEDIUM), all fixed before commit:
+  1. Meal summaries included entries whose HC write failed — moved `syncedEntries.add()` inside `if (written)`
+  2. `formatNextSyncTime` displayed negative minutes when sync overdue — added `diffMs <= 0` guard
+  3. `calories.toInt()` overflow risk — changed to `roundToInt().coerceAtLeast(0)`
+  4. Single bad `foodName` in JSON dropped all stored meals — changed to `mapNotNull` with per-item validation
+  5. Raw error message leaked to UI — sanitized to generic message, raw logged via Timber
+- verifier: All tests pass, lint passed, build passed, zero warnings
+- Post-bug-fix: SyncViewModelTest hang fixed (viewModelTest wrapper cancels viewModelScope before runTest cleanup)
+
+### Work Partition
+- Worker 1: Tasks 1, 2, 9 (Settings fix + Permission check + Next sync time) — 7 points
+- Worker 2: Tasks 3, 4, 5 (Sync result enrichment + Timestamp) — 8 points
+- Worker 3: Tasks 6, 7, 8 (Meals model + collection + display) — 8 points
+
+### Merge Summary
+- Worker 2: fast-forward (first merge, no conflicts)
+- Worker 3: merged, 6 conflicts in SettingsRepository.kt, DataStoreSettingsRepository.kt, SyncNutritionUseCase.kt, SyncViewModel.kt, SyncNutritionUseCaseTest.kt, SyncViewModelTest.kt (all additive — both workers adding different features)
+- Worker 1: merged, 3 conflicts in DataStoreSettingsRepository.kt, SyncViewModel.kt, SyncViewModelTest.kt (additive)
+- Build gate passed after each merge
+
+### Continuation Status
+All tasks completed.

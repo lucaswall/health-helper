@@ -460,7 +460,7 @@ class SyncNutritionUseCaseTest {
                     assertEquals(1, meals.size)
                     assertEquals("Pasta", meals[0].foodName)
                     assertEquals(MealType.DINNER, meals[0].mealType)
-                    assertEquals(499, meals[0].calories) // toInt() truncates
+                    assertEquals(500, meals[0].calories) // roundToInt() rounds
                 },
             )
         }

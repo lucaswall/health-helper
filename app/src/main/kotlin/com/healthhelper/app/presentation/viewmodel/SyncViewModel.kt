@@ -165,6 +165,7 @@ class SyncViewModel @Inject constructor(
 
     private fun formatNextSyncTime(nextSyncMs: Long): String {
         val diffMs = nextSyncMs - System.currentTimeMillis()
+        if (diffMs <= 0) return "Sync pending..."
         val diffMinutes = diffMs / 60_000L
         return if (diffMinutes < 60) {
             "Next sync in ~${diffMinutes}m"
@@ -195,7 +196,10 @@ class SyncViewModel @Inject constructor(
                         result.daysProcessed == 1 -> "Synced ${result.recordsSynced} meals across 1 day"
                         else -> "Synced ${result.recordsSynced} meals across ${result.daysProcessed} days"
                     }
-                    is SyncResult.Error -> "Error: ${result.message}"
+                    is SyncResult.Error -> {
+                        Timber.e("Sync error: ${result.message}")
+                        "Sync failed. Please try again."
+                    }
                     is SyncResult.NeedsConfiguration -> "Please configure API settings"
                 }
                 _uiState.update { it.copy(lastSyncResult = resultMessage) }

@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.first
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
+import kotlin.math.roundToInt
 import javax.inject.Inject
 
 class SyncNutritionUseCase @Inject constructor(
@@ -61,8 +62,8 @@ class SyncNutritionUseCase @Inject constructor(
                     val written = nutritionRepository.writeNutritionRecords(dateStr, entries)
                     if (written) {
                         totalRecordsSynced += entries.size
+                        entries.forEach { entry -> syncedEntries.add(Pair(dateStr, entry)) }
                     }
-                    entries.forEach { entry -> syncedEntries.add(Pair(dateStr, entry)) }
                 }
                 successfulDays++
                 if (date != today) {
@@ -124,7 +125,7 @@ class SyncNutritionUseCase @Inject constructor(
                     SyncedMealSummary(
                         foodName = entry.foodName,
                         mealType = entry.mealType,
-                        calories = entry.calories.toInt(),
+                        calories = entry.calories.roundToInt().coerceAtLeast(0),
                     )
                 }
             settingsRepository.setLastSyncedMeals(summaries)
