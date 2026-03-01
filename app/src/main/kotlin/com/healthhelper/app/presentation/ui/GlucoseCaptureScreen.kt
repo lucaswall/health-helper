@@ -50,6 +50,7 @@ fun GlucoseCaptureScreen(
     onNavigateToConfirmation: (Double, String, String) -> Unit,
     onNavigateBack: () -> Unit,
     onNavigateBackWithError: (String) -> Unit = {},
+    sharedImagePath: String? = null,
     viewModel: GlucoseCaptureViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -113,8 +114,32 @@ fun GlucoseCaptureScreen(
         }
     }
 
+    // Handle shared image — go straight to processing
+    LaunchedEffect(sharedImagePath) {
+        if (sharedImagePath != null) {
+            try {
+                val bytes = withContext(Dispatchers.IO) {
+                    val file = File(sharedImagePath)
+                    file.inputStream().use { readBytesLimited(it, MAX_IMAGE_BYTES) }
+                }
+                viewModel.onPhotoCaptured(bytes)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: IllegalArgumentException) {
+                Timber.e(e, "Shared image too large")
+                viewModel.onCaptureError("Image is too large. Please choose a smaller photo.")
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to read shared image")
+                viewModel.onCaptureError("Could not read shared image.")
+            } finally {
+                withContext(Dispatchers.IO) { File(sharedImagePath).delete() }
+            }
+        }
+    }
+
+    // Launch camera immediately if not a share intent
     LaunchedEffect(Unit) {
-        if (!cameraLaunched) {
+        if (sharedImagePath == null && !cameraLaunched) {
             cameraLaunched = true
             try {
                 val imageDir = File(context.cacheDir, "glucose_images")

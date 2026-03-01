@@ -1,6 +1,5 @@
 package com.healthhelper.app.presentation.ui
 
-import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -67,7 +66,7 @@ fun CameraCaptureScreen(
     onNavigateToConfirmation: (Int, Int) -> Unit,
     onNavigateBack: () -> Unit,
     onNavigateBackWithError: (String) -> Unit = {},
-    sharedImageUri: String? = null,
+    sharedImagePath: String? = null,
     viewModel: CameraCaptureViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -131,25 +130,15 @@ fun CameraCaptureScreen(
         }
     }
 
-    // Handle shared image URI — go straight to processing
-    LaunchedEffect(sharedImageUri) {
-        if (sharedImageUri != null) {
+    // Handle shared image — go straight to processing
+    LaunchedEffect(sharedImagePath) {
+        if (sharedImagePath != null) {
             try {
-                val uri = Uri.parse(sharedImageUri)
-                if (uri.scheme != "content") {
-                    viewModel.onCaptureError("Unsupported image source.")
-                    return@LaunchedEffect
-                }
                 val bytes = withContext(Dispatchers.IO) {
-                    context.contentResolver.openInputStream(uri)?.use {
-                        readBytesLimited(it, MAX_IMAGE_BYTES)
-                    }
+                    val file = File(sharedImagePath)
+                    file.inputStream().use { readBytesLimited(it, MAX_IMAGE_BYTES) }
                 }
-                if (bytes != null) {
-                    viewModel.onPhotoCaptured(bytes)
-                } else {
-                    viewModel.onCaptureError("Could not read shared image.")
-                }
+                viewModel.onPhotoCaptured(bytes)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: IllegalArgumentException) {
@@ -158,13 +147,15 @@ fun CameraCaptureScreen(
             } catch (e: Exception) {
                 Timber.e(e, "Failed to read shared image")
                 viewModel.onCaptureError("Could not read shared image.")
+            } finally {
+                withContext(Dispatchers.IO) { File(sharedImagePath).delete() }
             }
         }
     }
 
     // Launch camera immediately if not a share intent
     LaunchedEffect(Unit) {
-        if (sharedImageUri == null && !cameraLaunched) {
+        if (sharedImagePath == null && !cameraLaunched) {
             cameraLaunched = true
             try {
                 val imageDir = File(context.cacheDir, "bp_images")

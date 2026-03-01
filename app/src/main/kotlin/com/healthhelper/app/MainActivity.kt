@@ -10,6 +10,8 @@ import androidx.activity.enableEdgeToEdge
 import com.healthhelper.app.presentation.ui.AppNavigation
 import com.healthhelper.app.presentation.ui.theme.HealthHelperTheme
 import dagger.hilt.android.AndroidEntryPoint
+import timber.log.Timber
+import java.io.File
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -18,18 +20,31 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         // Only process share intent on fresh launch, not on recreation (config change / process restore)
-        val sharedImageUri = if (savedInstanceState == null) extractSharedImageUri(intent) else null
+        val shareInfo = if (savedInstanceState == null) extractShareInfo(intent) else null
 
         setContent {
             HealthHelperTheme {
-                AppNavigation(sharedImageUri = sharedImageUri)
+                AppNavigation(
+                    sharedImagePath = shareInfo?.second,
+                    shareTarget = shareInfo?.first,
+                )
             }
         }
     }
 
-    private fun extractSharedImageUri(intent: Intent): String? {
+    /**
+     * Extract shared image from intent, copy to local temp file (while URI permission is active),
+     * and determine share target based on which activity-alias was triggered.
+     * Returns (shareTarget, filePath) or null if not a share intent.
+     */
+    private fun extractShareInfo(intent: Intent): Pair<String, String>? {
         if (intent.action != Intent.ACTION_SEND) return null
         if (intent.type?.startsWith("image/") != true) return null
+
+        val shareTarget = when (componentName?.shortClassName) {
+            ".ShareGlucoseActivity" -> "glucose"
+            else -> "bp"
+        }
 
         val uri: Uri? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
@@ -37,6 +52,23 @@ class MainActivity : ComponentActivity() {
             @Suppress("DEPRECATION")
             intent.getParcelableExtra(Intent.EXTRA_STREAM)
         }
-        return uri?.toString()
+
+        if (uri == null) return null
+
+        // Copy to local temp file immediately while content URI permission is active
+        return try {
+            val dir = File(cacheDir, "shared_images")
+            dir.mkdirs()
+            val file = File.createTempFile("shared_", ".jpg", dir)
+            contentResolver.openInputStream(uri)?.use { input ->
+                file.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            Pair(shareTarget, file.absolutePath)
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to copy shared image to local file")
+            null
+        }
     }
 }

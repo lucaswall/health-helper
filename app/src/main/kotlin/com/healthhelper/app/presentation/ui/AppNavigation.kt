@@ -11,13 +11,21 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 
 @Composable
-fun AppNavigation(sharedImageUri: String? = null) {
+fun AppNavigation(
+    sharedImagePath: String? = null,
+    shareTarget: String? = null,
+) {
     val navController = rememberNavController()
 
-    // If launched via share intent, navigate directly to camera-bp
-    LaunchedEffect(sharedImageUri) {
-        if (sharedImageUri != null) {
-            navController.navigate("camera-bp?sharedUri=${java.net.URLEncoder.encode(sharedImageUri, "UTF-8")}") {
+    // If launched via share intent, navigate directly to the correct camera screen
+    LaunchedEffect(sharedImagePath, shareTarget) {
+        if (sharedImagePath != null && shareTarget != null) {
+            val encodedPath = java.net.URLEncoder.encode(sharedImagePath, "UTF-8")
+            val route = when (shareTarget) {
+                "glucose" -> "camera-glucose?sharedPath=$encodedPath"
+                else -> "camera-bp?sharedPath=$encodedPath"
+            }
+            navController.navigate(route) {
                 popUpTo("sync") { inclusive = false }
             }
         }
@@ -50,17 +58,17 @@ fun AppNavigation(sharedImageUri: String? = null) {
             )
         }
         composable(
-            route = "camera-bp?sharedUri={sharedUri}",
+            route = "camera-bp?sharedPath={sharedPath}",
             arguments = listOf(
-                navArgument("sharedUri") {
+                navArgument("sharedPath") {
                     type = NavType.StringType
                     nullable = true
                     defaultValue = null
                 },
             ),
         ) { backStackEntry ->
-            val encodedUri = backStackEntry.arguments?.getString("sharedUri")
-            val decodedUri = encodedUri?.let {
+            val encodedPath = backStackEntry.arguments?.getString("sharedPath")
+            val decodedPath = encodedPath?.let {
                 java.net.URLDecoder.decode(it, "UTF-8")
             }
             CameraCaptureScreen(
@@ -72,7 +80,7 @@ fun AppNavigation(sharedImageUri: String? = null) {
                     navController.popBackStack()
                     navController.getBackStackEntry("sync").savedStateHandle["bp_scan_error"] = error
                 },
-                sharedImageUri = decodedUri,
+                sharedImagePath = decodedPath,
             )
         }
         composable(
@@ -96,7 +104,20 @@ fun AppNavigation(sharedImageUri: String? = null) {
                 },
             )
         }
-        composable("camera-glucose") {
+        composable(
+            route = "camera-glucose?sharedPath={sharedPath}",
+            arguments = listOf(
+                navArgument("sharedPath") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                },
+            ),
+        ) { backStackEntry ->
+            val encodedPath = backStackEntry.arguments?.getString("sharedPath")
+            val decodedPath = encodedPath?.let {
+                java.net.URLDecoder.decode(it, "UTF-8")
+            }
             GlucoseCaptureScreen(
                 onNavigateToConfirmation = { value, unit, detectedUnit ->
                     val encodedUnit = java.net.URLEncoder.encode(unit, "UTF-8")
@@ -108,6 +129,7 @@ fun AppNavigation(sharedImageUri: String? = null) {
                     navController.popBackStack()
                     navController.getBackStackEntry("sync").savedStateHandle["glucose_scan_error"] = error
                 },
+                sharedImagePath = decodedPath,
             )
         }
         composable(
