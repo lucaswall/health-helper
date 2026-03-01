@@ -88,6 +88,7 @@ object AppModule {
             json(Json {
                 ignoreUnknownKeys = true
                 encodeDefaults = true
+                explicitNulls = false
             })
         }
         install(HttpTimeout) {
