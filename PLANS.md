@@ -451,5 +451,45 @@ All tasks completed.
 - bug-hunter: Found 3 bugs — all fixed (CancellationException swallowed in 2 catch blocks, intent.removeExtra doesn't survive process death)
 - verifier: All tests pass, zero warnings
 
+### Review Findings
+
+Summary: 1 issue(s) found (single-agent review)
+- FIX: 1 issue(s) — Linear issue created
+- DISCARDED: 0 finding(s)
+- INLINE FIX ATTEMPTED: reverted (bug-hunter found new issues in the fix)
+
+**Issues requiring fix:**
+- [LOW] EDGE CASE: `tempFile` in `remember` doesn't survive process death — if Android kills the activity while system camera is open, `tempFile` resets to null on recreation, photo silently dropped (`app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt:77`). Naive `rememberSaveable` fix introduces stale temp file leak; proper fix requires moving temp file path to ViewModel's `SavedStateHandle`.
+
+### Linear Updates
+- HEA-144: Review → Merge
+- HEA-145: Review → Merge
+- HEA-146: Review → Merge
+- HEA-147: Review → Merge
+- HEA-148: Review → Merge
+- HEA-149: Created in Todo (Fix: tempFile state lost on process death)
+
+<!-- REVIEW COMPLETE -->
+
 ### Continuation Status
 All tasks completed.
+
+---
+
+## Fix Plan (Review Iteration 2)
+
+**Source:** Review findings from Iteration 2
+**Linear Issues:** [HEA-149](https://linear.app/lw-claude/issue/HEA-149)
+
+### Fix 1: Move tempFile path to ViewModel SavedStateHandle for process death survival (HEA-149)
+**Linear Issue:** [HEA-149](https://linear.app/lw-claude/issue/HEA-149)
+
+1. Add `SavedStateHandle` parameter to `CameraCaptureViewModel` constructor (Hilt injects this automatically)
+2. Add `private val _tempFilePath = savedStateHandle.getStateFlow<String?>("temp_file_path", null)` to ViewModel
+3. Add `fun setTempFilePath(path: String)` and `fun clearTempFilePath()` methods
+4. In `CameraCaptureScreen.kt`, replace `var tempFile by remember { mutableStateOf<File?>(null) }` with `val tempFilePath by viewModel.tempFilePath.collectAsStateWithLifecycle()`
+5. In "Take Photo" onClick, after creating temp file, call `viewModel.setTempFilePath(file.absolutePath)`
+6. In `takePictureLauncher` callback, use `tempFilePath?.let { File(it) }` instead of `tempFile`
+7. In `finally` block, call `viewModel.clearTempFilePath()` and delete the file
+8. Write test: verify `setTempFilePath` persists and `clearTempFilePath` clears
+9. Verify all existing tests pass
