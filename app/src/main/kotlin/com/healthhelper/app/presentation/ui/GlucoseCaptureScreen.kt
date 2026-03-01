@@ -36,6 +36,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.healthhelper.app.presentation.viewmodel.GlucoseCaptureViewModel
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import timber.log.Timber
@@ -106,7 +107,7 @@ fun GlucoseCaptureScreen(
                 Timber.e(e, "Failed to read captured photo")
                 viewModel.onCaptureError("Could not read captured photo.")
             } finally {
-                withContext(Dispatchers.IO) { file?.delete() }
+                withContext(NonCancellable + Dispatchers.IO) { file?.delete() }
                 viewModel.clearTempFilePath()
             }
         }
@@ -128,6 +129,7 @@ fun GlucoseCaptureScreen(
                 takePictureLauncher.launch(uri)
             } catch (e: Exception) {
                 Timber.e(e, "Failed to launch camera")
+                withContext(Dispatchers.IO) { viewModel.tempFilePath.value?.let { File(it).delete() } }
                 viewModel.clearTempFilePath()
                 viewModel.onCaptureError("Could not open camera.")
             }

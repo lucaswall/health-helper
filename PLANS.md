@@ -762,5 +762,53 @@ Implement the Blood Glucose Scanner feature end-to-end. Users photograph their g
   - LOW: Dead code in formatMmolL — simplified to single expression
 - verifier: All tests pass, zero lint warnings, build successful
 
+### Review Findings
+
+Summary: 2 issue(s) found, fixed inline (Team: security, reliability, quality reviewers)
+- FIXED INLINE: 2 issue(s) — verified via TDD + bug-hunter
+
+**Issues fixed inline:**
+- [MEDIUM] COROUTINE: `withContext(Dispatchers.IO)` in finally block fails on cancellation — temp file not deleted (`app/src/main/kotlin/com/healthhelper/app/presentation/ui/GlucoseCaptureScreen.kt:109`) — changed to `withContext(NonCancellable + Dispatchers.IO)`
+- [MEDIUM] RESOURCE: Temp file leak when FileProvider.getUriForFile throws during camera launch (`app/src/main/kotlin/com/healthhelper/app/presentation/ui/GlucoseCaptureScreen.kt:119-133`) — added `withContext(Dispatchers.IO) { file.delete() }` in catch block
+
+**Discarded findings (not bugs):**
+- [DISCARDED] Sentry DSN in manifest — Sentry DSNs are public project identifiers per Sentry docs, not secret credentials
+- [DISCARDED] API error body logged — Anthropic API returns standardized error messages, not secrets
+- [DISCARDED] Share intent URI validation — content:// URIs are permission-gated by Android; app validates scheme at CameraCaptureScreen.kt:139
+- [DISCARDED] Temp images in cacheDir — app-private on non-rooted devices; promptly deleted in finally block
+- [DISCARDED] Triple emits same unitStr for unit and detectedUnit — by design; both represent the detected unit from the API
+- [DISCARDED] Double→Float precision in nav arg — Float32 adequate for glucose values (1-40 range, 1 decimal); ViewModel rounds to 1 decimal
+- [DISCARDED] Validation inconsistency across boundaries — confirmation screen validate() catches out-of-range values and disables save
+- [DISCARDED] Opaque Triple type — duplicate of above; by design
+- [DISCARDED] Loose string-to-unit nav arg mapping — internal nav args originate from GlucoseUnit enum; not untrusted data
+- [DISCARDED] Duplicated unit string mapping — style-only, minimal duplication across sites with different responsibilities
+- [DISCARDED] Double error logging in GetLastGlucoseReadingUseCase — repository catches all exceptions and returns null; use case catch is defensive dead code matching established BP pattern
+- [DISCARDED] Top-level mapper functions — intentionally follows existing BloodPressureRecordMapper pattern
+- [DISCARDED] `!!` force-unwrap in SyncViewModelTest — mock initialized inline as non-null; safe
+- [DISCARDED] Tautological enum membership tests — compile-time guarantee; follows existing pattern
+- [DISCARDED] `capturedBody!!` in API test — safe given test setup ensures request execution
+- [DISCARDED] Missing CancellationException propagation test — coverage gap, not a production bug
+
+### Linear Updates
+- HEA-150: Review → Merge
+- HEA-151: Review → Merge
+- HEA-152: Review → Merge
+- HEA-153: Review → Merge
+- HEA-154: Review → Merge
+- HEA-155: Created in Merge (Fix: temp file not deleted on cancellation — fixed inline)
+- HEA-156: Created in Merge (Fix: temp file leak on camera launch failure — fixed inline)
+
+### Inline Fix Verification
+- Unit tests: all pass
+- Bug-hunter: found 1 issue in initial fix (File.delete on main thread), corrected
+
+<!-- REVIEW COMPLETE -->
+
 ### Continuation Status
 All tasks completed.
+
+---
+
+## Status: COMPLETE
+
+All tasks implemented and reviewed successfully. All Linear issues moved to Merge.
