@@ -1,6 +1,7 @@
 # Fix Plan: Reduce Sentry noise from transient server errors and add sync abort on consecutive failures
 
 **Issue:** HEA-157
+**Sentry:** [HEALTH-HELPER-5](https://lucas-wall.sentry.io/issues/HEALTH-HELPER-5)
 **Date:** 2026-03-01
 **Status:** Planning
 **Branch:** fix/HEA-157-sync-backoff-and-log-levels
@@ -79,6 +80,9 @@ Two issues compound to create Sentry noise when the server is temporarily unavai
 - [ ] Kotlin compiles without errors (`./gradlew assembleDebug`)
 - [ ] Lint passes (`./gradlew lint`)
 - [ ] Build succeeds
+
+### Step 4: Close Sentry issue
+After fix is merged and released, resolve Sentry issue [HEALTH-HELPER-5](https://lucas-wall.sentry.io/issues/HEALTH-HELPER-5) using `mcp__sentry__update_issue` with status `resolved`.
 
 ## Notes
 - The Sentry issue is on release `v1.1.0+4` but current is `v1.2.0`. The code path is unchanged — the fix applies to the current codebase.
