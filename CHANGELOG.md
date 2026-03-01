@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-03-01
+
+### Fixed
+
+- Nutrition sync now stops retrying when the server is temporarily unavailable instead of repeating failed requests
+
 ## [1.2.0] - 2026-03-01
 
 ### Added
@@ -50,7 +56,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Settings screen for API configuration and sync interval
 - Adaptive launcher icon with health cross design
 
-[Unreleased]: https://github.com/lucaswall/health-helper/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/lucaswall/health-helper/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/lucaswall/health-helper/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/lucaswall/health-helper/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/lucaswall/health-helper/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/lucaswall/health-helper/releases/tag/v1.0.0
