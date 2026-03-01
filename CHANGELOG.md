@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-02-28
+
+### Added
+
+- Share photos from your gallery to scan blood pressure readings
+
+### Changed
+
+- Blood pressure camera now uses the system camera app for a familiar photo experience with preview and confirmation
+
+### Fixed
+
+- Fixed crash when scanning blood pressure without a network connection
+- Improved error messages when blood pressure scanning fails
+
 ## [1.0.0] - 2026-02-28
 
 ### Added
@@ -22,5 +37,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Settings screen for API configuration and sync interval
 - Adaptive launcher icon with health cross design
 
-[Unreleased]: https://github.com/lucaswall/health-helper/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/lucaswall/health-helper/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/lucaswall/health-helper/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/lucaswall/health-helper/releases/tag/v1.0.0
