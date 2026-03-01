@@ -4,6 +4,7 @@ plugins {
     alias(libs.plugins.ksp)
     alias(libs.plugins.hilt)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.sentry)
 }
 
 android {
@@ -69,7 +70,7 @@ dependencies {
 
     // Ktor HTTP client
     implementation(libs.ktor.client.core)
-    implementation(libs.ktor.client.okhttp)
+    implementation(libs.ktor.client.cio)
     implementation(libs.ktor.client.content.negotiation)
     implementation(libs.ktor.serialization.kotlinx.json)
 
@@ -82,12 +83,10 @@ dependencies {
     // Encrypted SharedPreferences
     implementation(libs.security.crypto)
 
-    // CameraX
-    implementation(libs.camera.core)
-    implementation(libs.camera.camera2)
-    implementation(libs.camera.lifecycle)
-    implementation(libs.camera.compose)
-    implementation(libs.camera.view)
+    // Sentry
+    implementation(libs.sentry.android)
+    implementation(libs.sentry.compose.android)
+    implementation(libs.sentry.android.timber)
 
     // WorkManager
     implementation(libs.work.runtime.ktx)
@@ -104,6 +103,17 @@ dependencies {
     testImplementation(libs.turbine)
     testRuntimeOnly(libs.junit.platform.launcher)
     testImplementation(libs.ktor.client.mock)
+}
+
+sentry {
+    autoInstallation.enabled.set(false)
+    // ProGuard mapping upload — only useful for minified (release) builds
+    autoUploadProguardMapping.set(false)
+    // Source context — disabled to keep builds fast; source is readable in debug stack traces
+    autoUploadSourceContext.set(false)
+    // Bytecode instrumentation — auto-instruments HTTP/DB for perf traces but is CPU-heavy at build time.
+    // Crash reporting, ANRs, breadcrumbs, and session tracking all work without this.
+    tracingInstrumentation.enabled.set(false)
 }
 
 tasks.withType<Test> {

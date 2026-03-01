@@ -1,5 +1,8 @@
 package com.healthhelper.app
 
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -13,10 +16,27 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        // Only process share intent on fresh launch, not on recreation (config change / process restore)
+        val sharedImageUri = if (savedInstanceState == null) extractSharedImageUri(intent) else null
+
         setContent {
             HealthHelperTheme {
-                AppNavigation()
+                AppNavigation(sharedImageUri = sharedImageUri)
             }
         }
+    }
+
+    private fun extractSharedImageUri(intent: Intent): String? {
+        if (intent.action != Intent.ACTION_SEND) return null
+        if (intent.type?.startsWith("image/") != true) return null
+
+        val uri: Uri? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableExtra(Intent.EXTRA_STREAM)
+        }
+        return uri?.toString()
     }
 }

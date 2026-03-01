@@ -37,6 +37,11 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <intent-filter android:label="Scan Blood Pressure">
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
         </activity>
 
         <!-- Health Connect privacy policy intent -->
@@ -50,6 +55,23 @@
                 <category android:name="android.intent.category.HEALTH_PERMISSIONS" />
             </intent-filter>
         </activity-alias>
+
+        <!-- Sentry crash reporting -->
+        <meta-data android:name="io.sentry.dsn" android:value="https://2ce7da0da96c55aa5a06a5be24b837df@o4510966037086208.ingest.us.sentry.io/4510966055108608" />
+        <meta-data android:name="io.sentry.traces-sample-rate" android:value="1.0" />
+        <meta-data android:name="io.sentry.anr.enable" android:value="true" />
+        <meta-data android:name="io.sentry.session-tracking.enable" android:value="true" />
+
+        <!-- FileProvider for system camera temp files -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
         <!-- Remove default WorkManager initializer -->
         <provider

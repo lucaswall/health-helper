@@ -3,6 +3,7 @@ package com.healthhelper.app.presentation.ui
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -10,8 +11,17 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 
 @Composable
-fun AppNavigation() {
+fun AppNavigation(sharedImageUri: String? = null) {
     val navController = rememberNavController()
+
+    // If launched via share intent, navigate directly to camera-bp
+    LaunchedEffect(sharedImageUri) {
+        if (sharedImageUri != null) {
+            navController.navigate("camera-bp?sharedUri=${java.net.URLEncoder.encode(sharedImageUri, "UTF-8")}") {
+                popUpTo("sync") { inclusive = false }
+            }
+        }
+    }
 
     NavHost(
         navController = navController,
@@ -34,12 +44,26 @@ fun AppNavigation() {
                 onNavigateBack = { navController.popBackStack() },
             )
         }
-        composable("camera-bp") {
+        composable(
+            route = "camera-bp?sharedUri={sharedUri}",
+            arguments = listOf(
+                navArgument("sharedUri") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                },
+            ),
+        ) { backStackEntry ->
+            val encodedUri = backStackEntry.arguments?.getString("sharedUri")
+            val decodedUri = encodedUri?.let {
+                java.net.URLDecoder.decode(it, "UTF-8")
+            }
             CameraCaptureScreen(
                 onNavigateToConfirmation = { sys, dia ->
                     navController.navigate("bp-confirm/$sys/$dia")
                 },
                 onNavigateBack = { navController.popBackStack() },
+                sharedImageUri = decodedUri,
             )
         }
         composable(

@@ -1,483 +1,539 @@
-# Implementation Plan
+# Fix Plan: BP Scanner Crash on Network Errors + System Camera UI
 
-**Created:** 2026-02-28
-**Source:** Inline request: Add ETag support to food sync — the Food Scanner API already returns ETag headers and handles If-None-Match / 304 Not Modified. Update the client to cache ETags per date, send If-None-Match on requests, and skip Health Connect writes when data hasn't changed. This eliminates redundant HC upserts every 15 minutes for today's food.
-**Linear Issues:** [HEA-129](https://linear.app/lw-claude/issue/HEA-129), [HEA-130](https://linear.app/lw-claude/issue/HEA-130), [HEA-131](https://linear.app/lw-claude/issue/HEA-131), [HEA-132](https://linear.app/lw-claude/issue/HEA-132), [HEA-133](https://linear.app/lw-claude/issue/HEA-133)
+**Date:** 2026-02-28
+**Status:** COMPLETE
+**Linear Issues:** [HEA-142](https://linear.app/lw-claude/issue/HEA-142), [HEA-143](https://linear.app/lw-claude/issue/HEA-143)
+**Branch:** fix/HEA-142-bp-scanner-crash-and-camera-ui
 
-## Context Gathered
+## Investigation
 
-### Codebase Analysis
-- **Food Scanner server**: ETag fully deployed (v1.16.0). `GET /api/v1/food-log` returns `ETag` header (SHA-256 of response data, first 16 hex chars). Handles `If-None-Match` → responds 304 with empty body when data unchanged.
-- **Health Helper client**: Zero ETag support. `FoodScannerApiClient` sends plain GET with Bearer auth. No `If-None-Match`, no 304 handling, no ETag storage.
-- **API client**: Ktor 3.1.1 + OkHttp engine, `ContentNegotiation` + `HttpTimeout` (30s). Returns `Result<List<FoodLogEntry>>`.
-- **Repository**: `FoodScannerFoodLogRepository` is a pass-through wrapper over the API client.
-- **Use case**: `SyncNutritionUseCase` always re-syncs today, writes to Health Connect via `insertRecords()` (upserts via `clientRecordId`). No harm from duplicate writes, but wasteful.
-- **Settings storage**: `DataStoreSettingsRepository` uses DataStore<Preferences> for non-sensitive data, JSON serialization for complex types (meals list pattern).
-- **DI**: `AppModule` provides `FoodLogRepository` as `FoodScannerFoodLogRepository(apiClient)` — will need `SettingsRepository` added.
-- **Test patterns**: Ktor `MockEngine` for API client tests, MockK for repository/use-case mocks. JUnit 5 + `@DisplayName` + `runTest`.
-- **Callers of `FoodLogRepository.getFoodLog()`**: Only `SyncNutritionUseCase`.
+### Bug Report
+Blood pressure scanner photo feature "fails constantly." Device crash logs (dropbox) show two `SecurityException` crashes on 2026-02-27 when the Anthropic API call attempts DNS resolution. Additionally, the custom CameraX viewfinder lacks the standard camera experience — no photo preview/confirm, no gallery picker.
 
-### MCP Context
-- **Linear team**: Health Helper (ID: `7b911426-efe2-48cb-93a4-4d69cd4592a6`)
+### Classification
+- **Type:** Runtime Crash + UI Improvement
+- **Severity:** High (crash), Medium (UX)
+- **Affected Area:** `AnthropicApiClient`, `CameraCaptureScreen`, `CameraCaptureViewModel`, `AppModule`
 
-## Original Plan
+### Root Cause Analysis
 
-### Task 1: Add FoodLogResult domain model
-**Linear Issue:** [HEA-129](https://linear.app/lw-claude/issue/HEA-129)
+#### Bug 1: OkHttp AsyncCall re-throws non-IOException, crashing the app
 
-A sealed class representing the outcome of a food log fetch — either new data or "not modified". This is the domain-layer concept that abstracts away the HTTP ETag mechanism.
+The app uses Ktor 3.1.1 with OkHttp 4.12.0 engine (`AppModule.kt:86`). Ktor's OkHttp engine dispatches HTTP requests via OkHttp's `enqueue()` (async), running on OkHttp's internal dispatcher thread pool.
 
-**File:** `app/src/main/kotlin/com/healthhelper/app/domain/model/FoodLogResult.kt`
+When DNS resolution fails with `EPERM` (network unavailable, restricted mode, etc.), Java wraps it as `SecurityException` — a `RuntimeException`, **not** an `IOException`. OkHttp 4.12.0's `AsyncCall.run()` catches non-IOExceptions in its generic `catch(t: Throwable)` block, calls `responseCallback.onFailure(...)` to notify Ktor, then **re-throws `t`** on the OkHttp dispatcher thread. This causes an uncaught exception, triggering Android's `KillApplicationHandler` — killing the app instantly.
 
-**Specification:**
-- `FoodLogResult.Data(entries: List<FoodLogEntry>)` — fresh data from API
-- `FoodLogResult.NotModified` — data unchanged since last fetch (object, no fields)
-- Follow existing sealed class pattern from `SyncResult.kt`
+The try-catch in `CameraCaptureViewModel.kt:90` and `AnthropicApiClient.kt:120` are on the coroutine thread and cannot catch exceptions thrown on OkHttp's dispatcher thread.
 
-**TDD Steps:**
-1. Write test in `app/src/test/kotlin/com/healthhelper/app/domain/model/FoodLogResultTest.kt`
-   - Test `FoodLogResult.Data` holds entries correctly
-   - Test `FoodLogResult.NotModified` is a singleton (`assertSame`)
-   - Test pattern matching (when expression) covers both branches
-2. Run verifier (expect fail — class doesn't exist)
-3. Create `FoodLogResult.kt` with the sealed class
-4. Run verifier (expect pass)
+The `INTERNET` permission IS declared (`AndroidManifest.xml:6`) and granted. The "missing INTERNET permission?" message is a misleading Android error string for `EPERM` on `android_getaddrinfo`.
 
----
+#### Evidence
+- **Device crash log (dropbox):** Two crashes at 2026-02-27 20:28:48 and 20:28:54 (UID 10623, v1, 6 seconds apart — second was auto-restart)
+- **Stack trace:** `SecurityException` → `GaiException(EAI_NODATA)` → `ErrnoException(EPERM)` propagating through `RealCall$AsyncCall.run(RealCall.kt:517)` → `ThreadPoolExecutor` → `Thread.run`
+- **Current install:** UID 10625 (v1.0.0), `INTERNET: granted=true` — no crashes from this UID, but the code vulnerability remains
+- **Dependency chain:** `ktor-client-okhttp:3.1.1` → `okhttp:4.12.0`
 
-### Task 2: Add ETag storage to SettingsRepository
-**Linear Issue:** [HEA-130](https://linear.app/lw-claude/issue/HEA-130)
+#### Bug 2: Custom CameraX UI lacks standard photo experience
 
-Store per-date ETags so the client can send `If-None-Match` on subsequent requests. ETags are stored as a JSON-serialized `Map<String, String>` (date → ETag) in DataStore. Old entries are pruned to prevent unbounded growth.
+`CameraCaptureScreen.kt` uses CameraX `PreviewView` with a custom capture button. This has no photo preview/confirm after capture (sends image directly to API), no gallery option, and adds 5 CameraX dependencies.
 
-**Files modified:**
-- `app/src/main/kotlin/com/healthhelper/app/domain/repository/SettingsRepository.kt` — add interface methods
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` — implement
+#### Bug 3: Image format fallback sends raw non-JPEG bytes with JPEG media type
 
-**Specification:**
-- `suspend fun getETag(date: String): String?` — returns stored ETag for given date, or null
-- `suspend fun setETag(date: String, etag: String)` — stores ETag for date; prunes entries older than 7 days from today to prevent unbounded map growth
-- DataStore key: `stringPreferencesKey("food_log_etags")`, stored as JSON object `{"2026-02-28":"\"abc123\"","2026-02-27":"\"def456\""}`
-- Serialization: `kotlinx.serialization.json.Json.encodeToString()` / `decodeFromString()` using `Map<String, String>`
-- Pruning: on each `setETag` call, parse the existing map, remove entries with date keys older than `LocalDate.now().minusDays(7)`, then write back
-- Malformed JSON in DataStore → log warning, return null / start fresh (don't throw)
+`CameraCaptureViewModel.kt:139-141` — if `BitmapFactory` fails to decode an image (corrupt file, unsupported format), the catch block falls back to sending the **original raw bytes** to the API with `mediaType: "image/jpeg"` hardcoded in `AnthropicApiClient.kt:70`. For an HEIC or WEBP file from the gallery (or via share), this sends non-JPEG bytes labeled as JPEG, causing the API to reject the image silently.
 
-**TDD Steps:**
-1. Write tests in `app/src/test/kotlin/com/healthhelper/app/data/repository/ETagStorageTest.kt`
-   - Test `getETag` returns null when no ETag stored
-   - Test `setETag` then `getETag` returns stored value
-   - Test `setETag` overwrites previous ETag for same date
-   - Test `setETag` prunes entries older than 7 days
-   - Test `getETag` with malformed JSON in DataStore returns null (does not throw)
-   - Test ETags for different dates are independent
-2. Run verifier (expect fail)
-3. Add `getETag`/`setETag` to `SettingsRepository` interface
-4. Add `FOOD_LOG_ETAGS` key and implement methods in `DataStoreSettingsRepository`
-5. Run verifier (expect pass)
+The happy path works: `BitmapFactory` decodes HEIC/WEBP/PNG successfully, and `compress(JPEG, 85%)` converts to JPEG. But the error fallback is wrong — it should fail with a user-facing error rather than sending garbage to the API.
 
-**Note:** Existing tests that mock `SettingsRepository` (SyncNutritionUseCaseTest, SettingsViewModelTest) will need stub responses for the new methods. Add `coEvery { settingsRepository.getETag(any()) } returns null` and `coEvery { settingsRepository.setETag(any(), any()) } returns Unit` to the `configureSettings()` helper in `SyncNutritionUseCaseTest.kt`.
+#### Related Code
+- `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt:86` — `HttpClient(OkHttp)` engine configuration
+- `gradle/libs.versions.toml:18,52` — `ktor = "3.1.1"`, `ktor-client-okhttp` dependency
+- `gradle/libs.versions.toml:25,63-67` — `camerax = "1.5.1"`, all 5 camera library entries
+- `app/build.gradle.kts:85-90` — 5 CameraX implementation dependencies
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt` — full 200-line CameraX implementation
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/CameraCaptureViewModel.kt:54-96` — photo capture handling
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/CameraCaptureViewModel.kt:108-143` — `resizeImageIfNeeded` with raw-bytes fallback
+- `app/src/main/kotlin/com/healthhelper/app/data/api/AnthropicApiClient.kt:70,83-88` — hardcoded `image/jpeg` media type, Ktor HTTP POST
+- `app/src/main/kotlin/com/healthhelper/app/MainActivity.kt` — single-activity entry point, no intent handling
 
----
+### Impact
+- App crashes when network is unavailable/transitioning during any HTTP call (BP scan or food sync)
+- Same OkHttp vulnerability affects `FoodScannerApiClient`
+- Poor camera UX: no preview, no retake, no gallery option
+- Undecodable images silently sent as wrong format, causing confusing API errors
+- 5 unnecessary CameraX dependencies add APK size and complexity
 
-### Task 3: Add ETag support to FoodScannerApiClient
-**Linear Issue:** [HEA-131](https://linear.app/lw-claude/issue/HEA-131)
+## Fix Plan (TDD Approach)
 
-Update the HTTP client to accept an optional ETag, send `If-None-Match` header, handle 304 responses, and extract the `ETag` response header from 200 responses.
+### Step 1: Switch Ktor engine from OkHttp to CIO
+**File:** `gradle/libs.versions.toml` (modify)
+**File:** `app/build.gradle.kts` (modify)
+**File:** `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt` (modify)
+**Test:** Existing tests (verify pass — engine swap is transparent)
 
-**File modified:** `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt`
-**New file:** `app/src/main/kotlin/com/healthhelper/app/data/api/FoodLogApiResponse.kt`
+**Behavior:**
+- Replace `ktor-client-okhttp` with `ktor-client-cio` in version catalog and build script
+- In `AppModule.kt:86`, change `HttpClient(OkHttp)` to `HttpClient(CIO)` with matching import (`io.ktor.client.engine.cio.CIO`)
+- CIO engine runs entirely on Kotlin coroutines — no OkHttp dispatcher thread pool, no re-throw vulnerability
+- All network exceptions propagate through the coroutine and are caught by existing try-catch blocks
+- Remove OkHttp-related entries from version catalog (`ktor-client-okhttp`, `okhttp-sse` if present)
 
-**Specification:**
+**Tests:**
+1. All existing `AnthropicApiClientTest` tests pass (uses Ktor mock engine, unaffected by engine swap)
+2. All existing `FoodScannerApiClientTest` tests pass (uses Ktor mock engine)
+3. All existing `CameraCaptureViewModelTest` tests pass (mocks API client)
 
-New data class `FoodLogApiResponse`:
-- `entries: List<FoodLogEntry>` — parsed food entries (empty for 304)
-- `etag: String?` — ETag from response header (null if not present)
-- `notModified: Boolean` — true when server returned 304
+### Step 2: Fix image decode fallback — fail instead of sending raw bytes
+**File:** `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/CameraCaptureViewModel.kt` (modify)
+**Test:** `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/CameraCaptureViewModelTest.kt` (modify)
 
-Method signature change: `getFoodLog(baseUrl, apiKey, date, etag: String? = null): Result<FoodLogApiResponse>`
+**Behavior:**
+- Rename `resizeImageIfNeeded` to `prepareImageForApi` to reflect its broader responsibility
+- Change the catch block: instead of returning the original raw bytes on decode failure, return `null`
+- In `onPhotoCaptured`, check for `null` from `prepareImageForApi`. If null, set error state: "Could not process image. Please try a different photo."
+- This ensures only valid JPEG bytes are ever sent to the API, regardless of input format (HEIC, WEBP, PNG, or corrupt data)
 
-Behavior changes:
-- When `etag` parameter is non-null: add `If-None-Match` request header with the ETag value (via `header(HttpHeaders.IfNoneMatch, etag)`)
-- When response status is 304: return `Result.success(FoodLogApiResponse(emptyList(), etag = null, notModified = true))`. Do NOT attempt to parse the body (it's empty).
-- When response status is 2xx: extract `ETag` header from response (`response.headers[HttpHeaders.ETag]`), parse body as before, return `FoodLogApiResponse(entries, etag = extractedETag, notModified = false)`
-- 304 check must happen BEFORE the existing `!response.status.isSuccess()` check (since 304 is not a success status)
-- All other behavior unchanged (401, 429, error handling, HTTPS validation, CancellationException propagation)
+**Tests:**
+1. New test: `prepareImageForApi` returns null for undecodable bytes → ViewModel sets error message "Could not process image. Please try a different photo." and clears `isProcessing`
+2. Existing tests: all pass (they use `testImageBytes = byteArrayOf(1, 2, 3)` which won't decode, but the mock bypasses `prepareImageForApi` since `anthropicApiClient.parseBloodPressureImage` is mocked). Verify this is still the case — if the test calls the real resize path, the mock needs adjustment.
 
-**TDD Steps:**
-1. Write tests in `app/src/test/kotlin/com/healthhelper/app/data/api/FoodScannerApiClientTest.kt` (add to existing file)
-   - Test: `If-None-Match` header is sent when `etag` parameter is provided — capture request headers, assert `If-None-Match` equals the provided ETag
-   - Test: `If-None-Match` header is NOT sent when `etag` is null — capture request headers, assert header absent
-   - Test: 304 response returns `FoodLogApiResponse` with `notModified = true` and empty entries — mock engine returns `respond("", status = HttpStatusCode(304, "Not Modified"))`, assert result is success, `notModified == true`, `entries.isEmpty()`
-   - Test: 200 response with `ETag` header returns it in `FoodLogApiResponse.etag` — mock engine returns success with `ETag` response header, assert `etag` field matches
-   - Test: 200 response without `ETag` header returns `etag = null`
-   - Update all existing tests to unwrap `FoodLogApiResponse` (change `result.getOrThrow()` to `result.getOrThrow().entries` and add `assertFalse(result.getOrThrow().notModified)` where applicable)
-2. Run verifier (expect fail — new tests fail, existing tests fail due to return type change)
-3. Create `FoodLogApiResponse.kt` data class
-4. Update `getFoodLog()` in `FoodScannerApiClient`: add `etag` parameter, handle 304, extract ETag header, return `FoodLogApiResponse`
-5. Run verifier (expect pass)
+### Step 3: Replace CameraCaptureScreen with system camera only
+**File:** `app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt` (rewrite)
+**Pattern:** Follow `SyncScreen.kt:65-72` for `rememberLauncherForActivityResult` usage
 
----
+**Behavior:**
 
-### Task 4: Wire ETag through FoodScannerFoodLogRepository
-**Linear Issue:** [HEA-132](https://linear.app/lw-claude/issue/HEA-132)
+Rewrite the screen to use the system camera intent instead of CameraX viewfinder:
 
-Update the repository to: (1) change its return type to `FoodLogResult`, (2) inject `SettingsRepository` for ETag storage, (3) read the stored ETag before calling the API, (4) store the new ETag on 200, and (5) map the API response to the domain `FoodLogResult`.
+- **Initial state:** Screen with title "Scan Blood Pressure" and a single "Take Photo" button centered on screen. No camera viewfinder.
+- **"Take Photo"** uses `ActivityResultContracts.TakePicture()` — launches the system camera app with a `FileProvider` temp URI. The system camera handles preview, retake, and confirm natively. On success, reads image bytes from the URI via `context.contentResolver.openInputStream()` and calls `viewModel.onPhotoCaptured(bytes)`.
+- **Processing state:** Shows `CircularProgressIndicator` and "Analyzing..." text while `isProcessing == true`.
+- **Error state:** Shows error message and "Try Again" button (same behavior as current).
+- **Navigation:** On success, navigates to `BpConfirmationScreen` via existing `navigateToConfirmation` SharedFlow.
+- **Uri-to-bytes conversion** happens in the Composable layer (using `LocalContext.current`), keeping the ViewModel clean with no `Context` dependency. The existing `onPhotoCaptured(imageBytes: ByteArray)` signature is unchanged.
+- Remove the `capturePhoto()` private helper function and all CameraX imports.
 
-**Files modified:**
-- `app/src/main/kotlin/com/healthhelper/app/domain/repository/FoodLogRepository.kt` — change return type
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/FoodScannerFoodLogRepository.kt` — add SettingsRepository, wire ETag
-- `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt` — add SettingsRepository to FoodLogRepository provider
+**Tests:**
+1. All existing `CameraCaptureViewModelTest` tests pass unchanged (they call `onPhotoCaptured(bytes)` directly)
 
-**Specification:**
+### Step 4: Add share receiver for image sharing into BP flow
+**File:** `app/src/main/AndroidManifest.xml` (modify)
+**File:** `app/src/main/kotlin/com/healthhelper/app/MainActivity.kt` (modify)
+**File:** `app/src/main/kotlin/com/healthhelper/app/presentation/ui/AppNavigation.kt` (modify)
 
-Interface change:
+**Behavior:**
+
+Add an `ACTION_SEND` intent filter so users can share photos from any app (Gallery, Google Photos, WhatsApp, file managers) to HealthHelper for BP scanning.
+
+**Manifest changes:**
+- Add a second `<intent-filter>` on `MainActivity` for `android.intent.action.SEND` with `<data android:mimeType="image/*" />`
+- Add `android:label="Scan Blood Pressure"` on the intent filter — this is what appears in the share sheet. Designed for future extensibility (can add "Scan Glucose" later as a separate filter).
+
+**MainActivity changes:**
+- In `onCreate`, after `enableEdgeToEdge()`, check if `intent.action == Intent.ACTION_SEND` and `intent.type?.startsWith("image/") == true`
+- If it's a share intent, extract the image URI from `intent.getParcelableExtra(Intent.EXTRA_STREAM)` (use the compat version for API 33+)
+- Pass the URI as a string to `AppNavigation` so it can route directly to the processing flow
+
+**AppNavigation changes:**
+- Accept an optional `sharedImageUri: String?` parameter
+- If `sharedImageUri` is non-null, set it as the start destination argument or use a `LaunchedEffect` to navigate to the camera-bp route with the pre-loaded image URI
+- The `CameraCaptureScreen` accepts an optional `sharedImageUri` parameter. When present, it skips the "Take Photo" button and immediately reads bytes from the URI and calls `viewModel.onPhotoCaptured(bytes)` — going straight to processing → confirmation.
+
+**Tests:**
+1. No unit tests for intent handling — verified by manual test
+2. Existing navigation tests (if any) pass
+
+### Step 5: Add FileProvider for camera temp files
+**File:** `app/src/main/AndroidManifest.xml` (modify)
+**File:** `app/src/main/res/xml/file_paths.xml` (create)
+
+**Behavior:**
+- `TakePicture()` requires a `Uri` for the system camera to write the photo to
+- Register a `FileProvider` in the manifest under `<application>` with authority `${applicationId}.fileprovider`
+- Create `file_paths.xml` with a `<cache-path name="bp_images" path="bp_images/" />` entry
+- The screen creates a temp file in `cacheDir/bp_images/`, gets a FileProvider URI, passes it to `TakePicture()`
+- Temp files are cleaned up after processing
+
+**Tests:**
+1. No unit tests needed — manifest/XML configuration verified by build + manual test
+
+### Step 6: Integrate Sentry for crash reporting, performance monitoring, and Compose instrumentation
+**File:** `gradle/libs.versions.toml` (modify)
+**File:** `app/build.gradle.kts` (modify)
+**File:** `app/src/main/AndroidManifest.xml` (modify)
+**File:** `app/src/main/kotlin/com/healthhelper/app/HealthHelperApp.kt` (modify)
+**File:** `sentry.properties` (create)
+**File:** `.gitignore` (modify)
+
+**Manual setup required (before implementation):**
+1. Create a Sentry account at https://sentry.io (free tier: 5,000 errors/month) — DONE
+2. Create a new project: Platform = Android, name = `health-helper` — DONE
+3. DSN obtained: `https://2ce7da0da96c55aa5a06a5be24b837df@o4510966037086208.ingest.us.sentry.io/4510966055108608`
+4. Org Auth Token generated and stored in `sentry.properties` (gitignored) — DONE
+5. Org slug: `lucas-wall`, Project slug: `health-helper` — DONE
+
+**Secrets handling:**
+- **DSN** is NOT a secret — it only allows sending events, not reading them. Safe to commit in `AndroidManifest.xml`. Sentry's official stance: [DSNs are safe to keep public](https://sentry.zendesk.com/hc/en-us/articles/26741783759899).
+- **Auth Token** IS a secret — it has write access to releases/mappings. Store it in `sentry.properties` (gitignored) or as env var `SENTRY_AUTH_TOKEN`. The Sentry Gradle plugin reads from `sentry.properties` automatically.
+- **`sentry.properties`** must be added to `.gitignore` (alongside `local.properties`)
+
+**Behavior:**
+
+*Version catalog additions (`libs.versions.toml`):*
+- Add version: `sentry = "8.27.1"`, `sentryGradlePlugin = "5.12.2"`
+- Add libraries: `sentry-android` (core SDK + all auto-integrations), `sentry-compose-android` (Compose instrumentation)
+- Add plugin: `sentry` with id `io.sentry.android.gradle`
+
+*Build script (`app/build.gradle.kts`):*
+- Apply `alias(libs.plugins.sentry)` in plugins block
+- Add `implementation(libs.sentry.android)` and `implementation(libs.sentry.compose.android)`
+- Configure the Sentry Gradle plugin:
+  - `autoUploadProguardMapping.set(true)` — uploads R8 mapping files on release builds for deobfuscated stack traces
+  - `autoInstallation.enabled.set(false)` — we manage dependencies explicitly via version catalog
+  - `tracingInstrumentation.enabled.set(true)` — auto-instruments HTTP calls and DB queries
+  - `autoUploadSourceContext.set(true)` — uploads source context for richer error display
+
+*Manifest (`AndroidManifest.xml`):*
+- Add `<meta-data android:name="io.sentry.dsn" android:value="https://2ce7da0da96c55aa5a06a5be24b837df@o4510966037086208.ingest.us.sentry.io/4510966055108608" />`
+- Add `<meta-data android:name="io.sentry.traces-sample-rate" android:value="1.0" />` — capture all transactions (fine for personal app volume)
+- Add `<meta-data android:name="io.sentry.anr.enable" android:value="true" />` — ANR detection
+- Add `<meta-data android:name="io.sentry.session-tracking.enable" android:value="true" />` — release health / crash-free rate
+
+*Application class (`HealthHelperApp.kt`):*
+- Add a `SentryTimberTree` (from `sentry-android`) to Timber — this forwards all `Timber.w()` and `Timber.e()` calls as Sentry breadcrumbs, and `Timber.e()` with exceptions as Sentry events
+- Plant it unconditionally (both debug and release) alongside the existing `DebugTree` (which stays debug-only)
+- Set the `environment` tag: `Sentry.configureScope { it.setTag("environment", if (BuildConfig.DEBUG) "debug" else "release") }` — allows filtering debug vs release crashes in the dashboard
+
+*`sentry.properties` (create, gitignored):*
 ```
-getFoodLog(baseUrl, apiKey, date): Result<FoodLogResult>
+defaults.org=your-org-slug
+defaults.project=health-helper
+auth.token=sntrys_YOUR_AUTH_TOKEN_HERE
 ```
 
-Repository logic:
-1. Call `settingsRepository.getETag(date)` to get cached ETag
-2. Call `apiClient.getFoodLog(baseUrl, apiKey, date, etag)` with the cached ETag
-3. On success with `notModified = true` → return `Result.success(FoodLogResult.NotModified)`
-4. On success with `notModified = false`:
-   - If `apiResponse.etag` is non-null → call `settingsRepository.setETag(date, apiResponse.etag)`
-   - Return `Result.success(FoodLogResult.Data(apiResponse.entries))`
-5. On failure → propagate `Result.failure()` unchanged
+*`.gitignore` additions:*
+- Add `sentry.properties` entry
 
-DI change in `AppModule.provideFoodLogRepository()`: add `settingsRepository: SettingsRepository` parameter, pass to `FoodScannerFoodLogRepository(apiClient, settingsRepository)`.
+**What Sentry captures with this setup:**
+- Unhandled exceptions (crashes) with full deobfuscated stack traces
+- ANRs (Application Not Responding)
+- Timber warnings/errors as breadcrumbs (trail of events before a crash)
+- Timber errors with exceptions as Sentry error events
+- HTTP transaction performance (Ktor calls)
+- Compose render performance (via `sentry-compose-android`)
+- Session/release health (crash-free sessions percentage)
+- Device info, OS version, app version automatically attached
+- Works in both debug and release builds, filterable by `environment` tag
 
-**TDD Steps:**
-1. Write tests in `app/src/test/kotlin/com/healthhelper/app/data/repository/FoodScannerFoodLogRepositoryTest.kt`
-   - Test: successful API response maps to `FoodLogResult.Data` with correct entries
-   - Test: 304 API response maps to `FoodLogResult.NotModified`
-   - Test: ETag from settings is passed to API client
-   - Test: new ETag from API response is stored via `settingsRepository.setETag()`
-   - Test: null ETag from API response does NOT call `setETag()`
-   - Test: API failure propagates as `Result.failure()`
-   - Test: `getETag` failure (exception) does not prevent API call (graceful degradation — call API without ETag)
-2. Run verifier (expect fail)
-3. Update `FoodLogRepository` interface return type
-4. Add `SettingsRepository` to `FoodScannerFoodLogRepository` constructor, implement ETag wiring
-5. Update `AppModule.provideFoodLogRepository()` to inject `SettingsRepository`
-6. Run verifier (expect pass)
+**Tests:**
+1. `./gradlew assembleDebug` succeeds — Sentry SDK initializes without a valid DSN (sends no events, no crash)
+2. All existing tests pass — Sentry auto-initializes via manifest, no test setup needed (it no-ops without a real DSN)
 
----
+**Sentry MCP setup (in this step, not optional):**
 
-### Task 5: Handle FoodLogResult.NotModified in SyncNutritionUseCase
-**Linear Issue:** [HEA-133](https://linear.app/lw-claude/issue/HEA-133)
+The [Sentry remote MCP server](https://github.com/getsentry/sentry-mcp) uses OAuth — no auth token needed. You authenticate via browser when first connecting.
 
-Update the sync algorithm to skip Health Connect writes when the API returns NotModified. Also fix a subtle bug: when all dates return NotModified (no new entries collected), don't overwrite `lastSyncedMeals` with an empty list.
+Add to `.claude/settings.json` in the top-level object:
+```json
+"mcpServers": {
+  "sentry": {
+    "type": "http",
+    "url": "https://mcp.sentry.dev/mcp"
+  }
+}
+```
 
-**File modified:** `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt`
+Or run: `claude mcp add --transport http sentry https://mcp.sentry.dev/mcp`
 
-**Specification:**
+On first use, Claude Code will prompt OAuth login via browser to authorize the Sentry connection. If the token expires, run `/mcp` → select Sentry → "Clear authentication" → "Authenticate" to re-trigger.
 
-When `FoodLogResult.NotModified`:
-- Count as a successful day (`successfulDays++`)
-- Mark in `pastDateResults` as `true` (for contiguous watermark)
-- Do NOT call `nutritionRepository.writeNutritionRecords()`
-- Do NOT add to `syncedEntries`
-- Do NOT increment `totalEntriesFetched` or `totalRecordsSynced`
-- Log at debug level: `"getFoodLog(%s) not modified, skipping HC write"`
+Add permissions for Sentry MCP tools to the `permissions.allow` array in `.claude/settings.json`:
+```
+"mcp__sentry__list_projects",
+"mcp__sentry__list_project_issues",
+"mcp__sentry__list_issue_events",
+"mcp__sentry__get_sentry_issue",
+"mcp__sentry__get_sentry_event",
+"mcp__sentry__resolve_short_id",
+"mcp__sentry__list_error_events_in_project",
+"mcp__sentry__create_project",
+"mcp__sentry__list_organization_replays"
+```
 
-When `FoodLogResult.Data`:
-- Existing behavior: check entries, write to HC, track counts
+### Step 7: Remove CameraX dependencies
+**File:** `gradle/libs.versions.toml` (modify)
+**File:** `app/build.gradle.kts` (modify)
 
-Meal persistence fix:
-- Only call `settingsRepository.setLastSyncedMeals(summaries)` if `syncedEntries.isNotEmpty()`
-- If `syncedEntries` is empty (all dates were NotModified or had no food), skip meal persistence to preserve the previously stored meals
+**Behavior:**
+- Remove `camerax` version entry from version catalog
+- Remove all 5 camera library entries: `camera-core`, `camera-camera2`, `camera-lifecycle`, `camera-compose`, `camera-view`
+- Remove corresponding 5 `implementation` lines from `app/build.gradle.kts:85-90`
+- Verify no remaining imports reference `androidx.camera.*`
 
-**Defensive Requirements:**
-- `CancellationException`: must still re-throw (verify in tests)
-- `FoodLogResult` exhaustive `when`: compiler-enforced by sealed class
-- If new `FoodLogResult` variants are added in the future, the `when` block should fail at compile time (no `else` branch)
+**Tests:**
+1. `./gradlew assembleDebug` succeeds with no CameraX references
+2. No import errors in remaining source files
 
-**TDD Steps:**
-1. Update existing tests in `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt`
-   - Update `configureSettings()` helper: add `coEvery { settingsRepository.getETag(any()) } returns null` and `coEvery { settingsRepository.setETag(any(), any()) } returns Unit`
-   - Update all existing `coEvery { foodLogRepository.getFoodLog(...) } returns Result.success(listOf(...))` to `returns Result.success(FoodLogResult.Data(listOf(...)))`
-   - Update all `Result.success(emptyList())` to `Result.success(FoodLogResult.Data(emptyList()))`
-   - Run verifier to ensure existing tests still pass after migration
-2. Write new tests:
-   - Test: `NotModified` for today skips HC write, returns Success with 0 records synced and 1 day processed
-   - Test: `NotModified` for a past date counts as successful in contiguous watermark — setup 3 past dates where middle date returns NotModified, verify `lastSyncedDate` advances through it (unlike a failure which breaks the chain)
-   - Test: mix of `Data` and `NotModified` — today returns NotModified, yesterday returns Data with entries → HC write called only for yesterday, records count = yesterday's entries
-   - Test: all dates return `NotModified` → `setLastSyncedMeals` is NOT called (preserves existing meals)
-   - Test: some dates return `Data` with entries, others `NotModified` → `setLastSyncedMeals` IS called with entries from `Data` dates only
-3. Run verifier (expect fail for new tests)
-4. Update `SyncNutritionUseCase.invoke()`:
-   - Change `foodLogRepository.getFoodLog()` result handling to `when` on `FoodLogResult`
-   - Add `FoodLogResult.NotModified` branch
-   - Guard `setLastSyncedMeals` with `syncedEntries.isNotEmpty()`
-5. Run verifier (expect pass)
+### Step 8: Verify
+- [ ] All new tests pass
+- [ ] All existing tests pass (`./gradlew test`)
+- [ ] Kotlin compiles without errors (`./gradlew assembleDebug`)
+- [ ] Lint passes
+- [ ] Build succeeds
+- [ ] Manual test: Take photo via system camera → processes → shows confirmation
+- [ ] Manual test: Share photo from gallery → app opens → processes → shows confirmation
+- [ ] Manual test: Share HEIC from gallery → decoded and processed correctly
+- [ ] Manual test: Airplane mode → take photo → shows error message (NOT crash)
+- [ ] Manual test: Share sheet shows "Scan Blood Pressure" label for HealthHelper
+- [ ] Manual test: After adding DSN, verify Sentry receives a test event (force a crash or call `Sentry.captureMessage("test")`)
+- [ ] Manual test: Check Sentry dashboard shows debug/release environment tag
+- [ ] Verify `sentry.properties` is NOT committed to git
 
-## Post-Implementation Checklist
-1. Run `bug-hunter` agent — Review changes for bugs
-2. Run `verifier` agent — Verify all tests pass and zero warnings
-
----
-
-## Plan Summary
-
-**Objective:** Add ETag support to food sync to eliminate redundant Health Connect writes every 15 minutes
-
-**Request:** The Food Scanner API already supports ETags. Adapt the Health Helper client to send If-None-Match headers, handle 304 Not Modified responses, and skip Health Connect writes when food data hasn't changed.
-
-**Linear Issues:** HEA-129, HEA-130, HEA-131, HEA-132, HEA-133
-
-**Approach:** Add a `FoodLogResult` sealed class to the domain layer to represent "data" vs "not modified" outcomes. Store per-date ETags in DataStore (pruned after 7 days). Update the API client to send `If-None-Match` and handle 304 responses. Wire ETag storage through the repository layer. Update the use case to skip HC writes on NotModified and fix a subtle bug where empty sync cycles would overwrite persisted meal summaries.
-
-**Scope:**
-- Tasks: 5
-- Files affected: 8 modified, 3 new (model, DTO, tests)
-- New tests: yes (ETag storage tests, API client ETag tests, repository ETag wiring tests, use case NotModified tests)
-
-**Key Decisions:**
-- ETag is an HTTP detail handled in data layer; domain layer only sees `FoodLogResult.NotModified`
-- ETags stored per-date in DataStore as JSON map, pruned after 7 days
-- 304 NotModified counts as "successful day" for the contiguous watermark — data was already synced, no gap
-- Meal summary persistence guarded by `syncedEntries.isNotEmpty()` to avoid overwriting with empty list
-
-**Risks/Considerations:**
-- Existing tests (14 API client tests, 18 use case tests) need mechanical updates for new return types — high line count but low risk
-- If Food Scanner server removes ETag support, behavior gracefully degrades: no `If-None-Match` sent (etag is null), server returns 200 with full data, everything works as before
+## Notes
+- The CIO engine uses Java's SSLEngine instead of OkHttp's TLS stack. For standard HTTPS to `api.anthropic.com`, this is transparent. `network_security_config.xml` already has `cleartextTrafficPermitted="false"`.
+- The CAMERA permission remains needed — system camera apps on some devices check caller permissions.
+- Existing `FoodScannerApiClient` also benefits from the CIO engine switch — same crash vulnerability existed there.
+- The `onCaptureError` callback and `capturePhoto()` helper function are removed since the system camera handles capture errors internally.
+- The share intent filter label "Scan Blood Pressure" is designed for future extensibility — a glucose scanner could add a second filter labeled "Scan Glucose" on the same activity.
+- `IntentCompat.getParcelableExtra()` should be used for API 33+ compatibility when extracting the shared image URI.
 
 ---
 
 ## Iteration 1
 
 **Implemented:** 2026-02-28
-**Method:** Single-agent (2 independent units, 9 effort points — below worker threshold)
+**Method:** Single-agent (user requested solo mode)
 
 ### Tasks Completed This Iteration
-- Task 1: Add FoodLogResult domain model — sealed class with Data/NotModified variants
-- Task 2: Add ETag storage to SettingsRepository — per-date JSON map in DataStore with 7-day pruning
-- Task 3: Add ETag support to FoodScannerApiClient — If-None-Match header, 304 handling, ETag extraction
-- Task 4: Wire ETag through FoodScannerFoodLogRepository — inject SettingsRepository, map to FoodLogResult, store ETags
-- Task 5: Handle FoodLogResult.NotModified in SyncNutritionUseCase — skip HC writes, fix meal persistence guard
+- Step 1: Switch Ktor engine from OkHttp to CIO (HEA-142)
+- Step 2: Fix image decode fallback — fail instead of sending raw bytes (HEA-143)
+- Step 3: Replace CameraCaptureScreen with system camera (HEA-143)
+- Step 4: Add share receiver for image sharing into BP flow (HEA-143)
+- Step 5: Add FileProvider for camera temp files (HEA-143)
+- Step 6: Integrate Sentry for crash reporting (HEA-142/HEA-143)
+- Step 7: Remove CameraX dependencies (HEA-143)
 
 ### Files Modified
-- `app/src/main/kotlin/com/healthhelper/app/domain/model/FoodLogResult.kt` — New sealed class (Data/NotModified)
-- `app/src/main/kotlin/com/healthhelper/app/data/api/FoodLogApiResponse.kt` — New API response DTO with entries, etag, notModified
-- `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt` — Added etag parameter, 304 handling, ETag header extraction
-- `app/src/main/kotlin/com/healthhelper/app/domain/repository/SettingsRepository.kt` — Added getETag/setETag interface methods
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` — Implemented ETag storage with JSON map and 7-day pruning
-- `app/src/main/kotlin/com/healthhelper/app/domain/repository/FoodLogRepository.kt` — Changed return type to Result<FoodLogResult>
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/FoodScannerFoodLogRepository.kt` — Added SettingsRepository injection, ETag wiring, FoodLogResult mapping
-- `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt` — Added SettingsRepository to FoodLogRepository provider
-- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt` — Handle NotModified branch, guard meal persistence with syncedEntries.isNotEmpty()
-- `app/src/test/kotlin/com/healthhelper/app/domain/model/FoodLogResultTest.kt` — New: 3 tests for sealed class
-- `app/src/test/kotlin/com/healthhelper/app/data/repository/ETagStorageTest.kt` — New: 6 tests for ETag storage
-- `app/src/test/kotlin/com/healthhelper/app/data/api/FoodScannerApiClientTest.kt` — Updated existing tests + 5 new ETag tests
-- `app/src/test/kotlin/com/healthhelper/app/data/repository/FoodScannerFoodLogRepositoryTest.kt` — New: 8 tests for repository ETag wiring
-- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt` — Migrated 22 existing tests + 5 new NotModified tests
+- `gradle/libs.versions.toml` — Replaced ktor-client-okhttp with ktor-client-cio, removed CameraX entries, added Sentry SDK + plugin
+- `app/build.gradle.kts` — Swapped ktor-client-cio, removed 5 CameraX deps, added Sentry deps + plugin config
+- `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt` — HttpClient(OkHttp) → HttpClient(CIO)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/CameraCaptureViewModel.kt` — Renamed resizeImageIfNeeded to prepareImageForApi, returns null on decode failure
+- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/CameraCaptureViewModelTest.kt` — Added BitmapFactory mockkStatic, new test for undecodable bytes error
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt` — Full rewrite: system camera via TakePicture + share image support
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/AppNavigation.kt` — Added sharedImageUri parameter, URL-encoded routing to camera-bp
+- `app/src/main/kotlin/com/healthhelper/app/MainActivity.kt` — Extract shared image URI from ACTION_SEND intent
+- `app/src/main/AndroidManifest.xml` — Share intent filter, FileProvider, Sentry meta-data
+- `app/src/main/res/xml/file_paths.xml` — Created FileProvider config for bp_images cache dir
+- `app/src/main/kotlin/com/healthhelper/app/HealthHelperApp.kt` — SentryTimberTree + environment tag
+- `.mcp.json` — Added Sentry MCP server
+- `.claude/settings.json` — Added Sentry MCP tool permissions
 
 ### Linear Updates
-- HEA-129: Todo → In Progress → Review
-- HEA-130: Todo → In Progress → Review
-- HEA-131: Todo → In Progress → Review
-- HEA-132: Todo → In Progress → Review
-- HEA-133: Todo → In Progress → Review
+- HEA-142: Todo → In Progress → Review
+- HEA-143: Todo → In Progress → Review
 
 ### Pre-commit Verification
-- bug-hunter: Found 2 bugs (1 HIGH: setETag exception propagation, 1 MEDIUM: hardcoded test dates), both fixed
+- bug-hunter: Found 4 issues — 2 real bugs fixed (temp file leak on camera cancel, unfaithful BitmapFactory mock), 2 false positives skipped (DSN is public per Sentry docs, trace rate intentional for personal app)
 - verifier: All tests pass, zero warnings
 
 ### Review Findings
 
-Summary: 4 issue(s) found (Team: security, reliability, quality reviewers)
-- FIX: 4 issue(s) — Linear issues created
-- DISCARDED: 7 finding(s) — false positives / not applicable
+Summary: 5 issue(s) found (Team: security, reliability, quality reviewers)
+- FIX: 5 issue(s) — Linear issues created
+- DISCARDED: 14 finding(s) — false positives / not applicable
 
 **Issues requiring fix:**
-- [MEDIUM] COROUTINE: CancellationException swallowed in apiKeyFlow callbackFlow (`app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt:93`) — `catch (e: Exception)` catches CancellationException without rethrowing, breaking cooperative cancellation
-- [MEDIUM] BUG: setLastSyncTimestamp called before HC write result checked (`app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt:117-123`) — timestamp updated when `successfulDays > 0` but before checking if HC writes succeeded; misleads UI on failed syncs
-- [MEDIUM] LOGGING: Server error logged at DEBUG level instead of WARN (`app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt:65`) — `Timber.d` makes server-reported errors invisible in production
-- [LOW] LOGGING: HTTP 429 rate-limited logged at ERROR level instead of WARN (`app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt:55`) — rate limiting is a transient condition, not an app error
+- [MEDIUM] RESOURCE: Temp file leak — `uri?.path` on content:// URI doesn't resolve to filesystem path, temp files never deleted (`app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt:78`)
+- [MEDIUM] SECURITY: No URI scheme validation for shared images — `file://` URIs accepted without validation (`app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt:86`)
+- [MEDIUM] RESOURCE: IO reads on Main dispatcher — `readBytes()` on Main thread in camera callback and shared URI handler, ANR risk (`app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt:66,87`)
+- [MEDIUM] EDGE CASE: No size limit on image `readBytes()` — unbounded stream could cause OOM (`app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt:66,87`)
+- [LOW] EDGE CASE: Share intent re-navigation on activity recreation — `LaunchedEffect(sharedImageUri)` fires again after config change/process death (`app/src/main/kotlin/com/healthhelper/app/presentation/ui/AppNavigation.kt:18-24`)
 
 **Discarded findings (not bugs):**
-- [DISCARDED] SECURITY: ETag CRLF injection risk (`FoodScannerApiClient.kt:89`) — OkHttp validates header values and throws on CR/LF characters; server is already trusted (auth token sent). Defense exists at HTTP client layer.
-- [DISCARDED] SECURITY: No certificate pinning (`AppModule.kt:86-93`) — User-configured server makes certificate pinning impractical. HTTPS enforcement already present. Known trade-off.
-- [DISCARDED] SECURITY: No date parameter validation (`FoodLogRepository.kt:9`) — All callers generate dates from `LocalDate.format()`. No user input path. Defensive coding suggestion, not a bug.
-- [DISCARDED] CONVENTION: Missing `operator` keyword on invoke (`SyncNutritionUseCase.kt:25`) — Style-only preference. Both `useCase.invoke()` and `useCase()` work identically. Zero correctness impact.
-- [DISCARDED] TEST: Trivial singleton test (`FoodLogResultTest.kt:40-43`) — `data object` singleton is a Kotlin language guarantee. Test is trivially true but harmless.
-- [DISCARDED] TYPE: `assertIs<>` pattern not used in tests (`FoodScannerFoodLogRepositoryTest.kt`, `SyncNutritionUseCaseTest.kt`) — Style preference. `assertTrue + as` is correct and provides adequate coverage.
-- [DISCARDED] SECURITY: Server error message logged verbatim (`FoodScannerApiClient.kt:65`) — Merged into logging finding above. Timber.d suppressed in production.
+- [DISCARDED] Sentry DSN hardcoded in manifest — Intentional per plan. Sentry DSNs are public ingest endpoints per Sentry's official documentation. Not a secret; only allows event submission, not reading.
+- [DISCARDED] Timber.w logs API error message — Data minimization concern only. The `result.message` field contains parse-level descriptions, not user data or tokens.
+- [DISCARDED] ACTION_SEND no permission guard — Standard Android share receiver behavior. Expected design.
+- [DISCARDED] SharedFlow collection pattern — Reviewer confirmed no actual bug. replay=0 prevents stale events.
+- [DISCARDED] processingJob?.cancel() unreachable code — Guard on line 55 makes cancel on line 57 unreachable when processing. Harmless dead code.
+- [DISCARDED] Force unwrap `uiState.error!!` — Safe in Compose snapshot system. Delegated property value stable within a composition pass. Standard Compose pattern.
+- [DISCARDED] URLEncoder/URLDecoder inline style — Style only, zero correctness impact.
+- [DISCARDED] Timber string interpolation format — Style preference not enforced by CLAUDE.md.
+- [DISCARDED] Timber missing image context in logs — Nice-to-have diagnostic info, not a bug.
+- [DISCARDED] AppModule internal overload layering — Reviewer confirmed no bug.
+- [DISCARDED] No test for processingJob race — Edge case unreachable in practice due to guard + finally block ordering.
+- [DISCARDED] No test for onRetake() idempotency — Null-safe `?.cancel()` on null is safe by design.
+- [DISCARDED] Weak test assertion on captured bytes — Test is functional and asserts non-null. Stronger assertion is nice-to-have.
+- [DISCARDED] setUp mocks unused SettingsRepository flows — Copy-paste noise from another test class. Not a bug.
 
 ### Linear Updates
-- HEA-129: Review → Merge
-- HEA-130: Review → Merge
-- HEA-131: Review → Merge
-- HEA-132: Review → Merge
-- HEA-133: Review → Merge
-- HEA-134: Created in Todo (Fix: CancellationException swallowed in apiKeyFlow)
-- HEA-135: Created in Todo (Fix: setLastSyncTimestamp called prematurely)
-- HEA-136: Created in Todo (Fix: Server error logged at DEBUG)
-- HEA-137: Created in Todo (Fix: HTTP 429 logged at ERROR)
+- HEA-142: Review → Merge (original task completed)
+- HEA-143: Review → Merge (original task completed)
+- HEA-144: Created in Todo (Fix: temp file leak)
+- HEA-145: Created in Todo (Fix: URI scheme validation)
+- HEA-146: Created in Todo (Fix: IO on Main dispatcher)
+- HEA-147: Created in Todo (Fix: image size limit)
+- HEA-148: Created in Todo (Fix: share intent re-navigation)
 
 <!-- REVIEW COMPLETE -->
 
+### Continuation Status
+All tasks completed.
+
 ---
 
-## Fix Plan
+## Fix Plan (Review Iteration 1)
 
 **Source:** Review findings from Iteration 1
-**Linear Issues:** [HEA-134](https://linear.app/lw-claude/issue/HEA-134), [HEA-135](https://linear.app/lw-claude/issue/HEA-135), [HEA-136](https://linear.app/lw-claude/issue/HEA-136), [HEA-137](https://linear.app/lw-claude/issue/HEA-137)
+**Linear Issues:** [HEA-144](https://linear.app/lw-claude/issue/HEA-144), [HEA-145](https://linear.app/lw-claude/issue/HEA-145), [HEA-146](https://linear.app/lw-claude/issue/HEA-146), [HEA-147](https://linear.app/lw-claude/issue/HEA-147), [HEA-148](https://linear.app/lw-claude/issue/HEA-148)
 
-### Fix 1: CancellationException swallowed in apiKeyFlow callbackFlow
-**Linear Issue:** [HEA-134](https://linear.app/lw-claude/issue/HEA-134)
+### Fix 1: Temp file leak — store File reference for cleanup (HEA-144)
+**Linear Issue:** [HEA-144](https://linear.app/lw-claude/issue/HEA-144)
 
-1. Write test in `app/src/test/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepositoryTest.kt` that collects `apiKeyFlow`, cancels the collecting coroutine during `migrateIfNeeded()`, and verifies `CancellationException` propagates (is not swallowed)
-2. Add `catch (e: CancellationException) { throw e }` before the generic `catch (e: Exception)` in `DataStoreSettingsRepository.kt:93`
-3. Run verifier (expect pass)
+1. Add `var tempFile by remember { mutableStateOf<File?>(null) }` to hold the temp file reference
+2. In the "Take Photo" onClick, assign `tempFile = File.createTempFile(...)` before creating the URI
+3. In `takePictureLauncher` callback `finally` block, replace `uri?.path?.let { File(it).delete() }` with `tempFile?.delete(); tempFile = null`
+4. Verify existing tests pass
 
-### Fix 2: setLastSyncTimestamp called before HC write result checked
-**Linear Issue:** [HEA-135](https://linear.app/lw-claude/issue/HEA-135)
+### Fix 2: URI scheme validation for shared images (HEA-145)
+**Linear Issue:** [HEA-145](https://linear.app/lw-claude/issue/HEA-145)
 
-1. Write test in `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt`: all API calls succeed with entries but all `writeNutritionRecords()` return false → verify `setLastSyncTimestamp` is NOT called
-2. Write test: some HC writes succeed (totalRecordsSynced > 0) → verify `setLastSyncTimestamp` IS called
-3. Change condition in `SyncNutritionUseCase.kt:117` from `successfulDays > 0` to `totalRecordsSynced > 0`
-4. Run verifier (expect pass)
+1. In the `LaunchedEffect(sharedImageUri)` block, after `Uri.parse(sharedImageUri)`, add: `if (uri.scheme != "content") { viewModel.onCaptureError("Unsupported image source."); return@LaunchedEffect }`
+2. Verify existing tests pass
 
-### Fix 3: Server error logged at DEBUG level instead of WARN
-**Linear Issue:** [HEA-136](https://linear.app/lw-claude/issue/HEA-136)
+### Fix 3: Move IO reads off Main dispatcher (HEA-146)
+**Linear Issue:** [HEA-146](https://linear.app/lw-claude/issue/HEA-146)
 
-1. Change `Timber.d` to `Timber.w` on line 65 of `FoodScannerApiClient.kt`
-2. Run verifier (expect pass — no test changes needed, log level is not asserted in tests)
+1. In the `LaunchedEffect(sharedImageUri)` block, wrap `contentResolver.openInputStream(uri)?.use { it.readBytes() }` in `withContext(Dispatchers.IO) { ... }`
+2. In the `takePictureLauncher` callback, extract the byte-reading into a `rememberCoroutineScope()` launch with `Dispatchers.IO`, then call `viewModel.onPhotoCaptured(bytes)` from within
+3. Add `import kotlinx.coroutines.Dispatchers` and `import kotlinx.coroutines.withContext`
+4. Verify existing tests pass
 
-### Fix 4: HTTP 429 rate-limited logged at ERROR level instead of WARN
-**Linear Issue:** [HEA-137](https://linear.app/lw-claude/issue/HEA-137)
+### Fix 4: Add size limit on image reads (HEA-147)
+**Linear Issue:** [HEA-147](https://linear.app/lw-claude/issue/HEA-147)
 
-1. In `FoodScannerApiClient.kt:52-56`, change the else branch to distinguish 429 from other errors:
-   - 401 → `Timber.w` (already correct)
-   - 429 → `Timber.w` (change from `Timber.e`)
-   - other → `Timber.e` (keep as-is)
-2. Run verifier (expect pass)
+1. Add a `private const val MAX_IMAGE_BYTES = 20 * 1024 * 1024` (20MB) constant at file level
+2. Create a `readBytesLimited(inputStream: InputStream, maxSize: Int): ByteArray` helper that reads in chunks and throws `IllegalArgumentException` if size exceeded
+3. Replace both `readBytes()` calls with `readBytesLimited(it, MAX_IMAGE_BYTES)`
+4. In catch blocks, handle the size exceeded case with user-friendly error: "Image is too large. Please choose a smaller photo."
+5. Verify existing tests pass
+
+### Fix 5: Consume share intent to prevent re-navigation (HEA-148)
+**Linear Issue:** [HEA-148](https://linear.app/lw-claude/issue/HEA-148)
+
+1. In `MainActivity.kt`, after extracting `sharedImageUri` from the intent, call `intent.removeExtra(Intent.EXTRA_STREAM)` to consume the share data
+2. This prevents the same URI from being re-extracted on activity recreation (config change / process death + restore)
+3. Verify existing tests pass
 
 ---
 
 ## Iteration 2
 
 **Implemented:** 2026-02-28
-**Method:** Single-agent (3 independent units, 5 effort points — below worker threshold)
+**Method:** Single-agent (user requested fly solo)
 
 ### Tasks Completed This Iteration
-- Fix 1: CancellationException swallowed in apiKeyFlow callbackFlow — added rethrow guard before generic catch
-- Fix 2: setLastSyncTimestamp called before HC write result checked — changed guard from `successfulDays > 0` to `totalRecordsSynced > 0`
-- Fix 3: Server error logged at DEBUG level instead of WARN — changed `Timber.d` to `Timber.w`
-- Fix 4: HTTP 429 rate-limited logged at ERROR level instead of WARN — changed `else` branch to `when` with 401/429 at WARN, others at ERROR
+- Fix 1: Temp file leak — store File reference for cleanup (HEA-144)
+- Fix 2: URI scheme validation for shared images (HEA-145)
+- Fix 3: Move IO reads off Main dispatcher (HEA-146)
+- Fix 4: Add size limit on image reads (HEA-147)
+- Fix 5: Consume share intent to prevent re-navigation (HEA-148)
 
 ### Files Modified
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` — Added CancellationException import and rethrow guard in apiKeyFlow callbackFlow
-- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt` — Changed setLastSyncTimestamp guard from `successfulDays > 0` to `totalRecordsSynced > 0`
-- `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt` — Server error log level d→w, HTTP error logging refactored to `when` block (401/429 at WARN, others at ERROR)
-- `app/src/test/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepositoryTest.kt` — New: 1 test for CancellationException propagation
-- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt` — New: 2 tests for setLastSyncTimestamp correctness
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt` — Rewrote with: `tempFile` state for proper cleanup, `content://` scheme validation, `withContext(Dispatchers.IO)` for all reads, `readBytesLimited()` with 20MB cap, `CancellationException` rethrown in all catch blocks
+- `app/src/main/kotlin/com/healthhelper/app/MainActivity.kt` — Gate share intent on `savedInstanceState == null` instead of `removeExtra`
 
 ### Linear Updates
-- HEA-134: Todo → In Progress → Review
-- HEA-135: Todo → In Progress → Review
-- HEA-136: Todo → In Progress → Review
-- HEA-137: Todo → In Progress → Review
+- HEA-144: Todo → In Progress → Review
+- HEA-145: Todo → In Progress → Review
+- HEA-146: Todo → In Progress → Review
+- HEA-147: Todo → In Progress → Review
+- HEA-148: Todo → In Progress → Review
 
 ### Pre-commit Verification
-- bug-hunter: 0 bugs found
-- verifier: All tests pass, lint clean, build clean
-
-### Tasks Remaining
-None — all Fix Plan tasks completed.
+- bug-hunter: Found 3 bugs — all fixed (CancellationException swallowed in 2 catch blocks, intent.removeExtra doesn't survive process death)
+- verifier: All tests pass, zero warnings
 
 ### Review Findings
 
-Summary: 4 issue(s) found (Team: security, reliability, quality reviewers)
-- FIX: 4 issue(s) — Linear issues created
-- DISCARDED: 8 finding(s) — false positives / not applicable
+Summary: 1 issue(s) found (single-agent review)
+- FIX: 1 issue(s) — Linear issue created
+- DISCARDED: 0 finding(s)
+- INLINE FIX ATTEMPTED: reverted (bug-hunter found new issues in the fix)
 
 **Issues requiring fix:**
-- [MEDIUM] SECURITY: Partial migration leaves API key in plaintext DataStore (`app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt:66-69`) — early-return path skips DataStore cleanup after crash between EncryptedPrefs write and DataStore remove
-- [HIGH] ERROR: No exception handling around initial settings reads (`app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt:26-32`) — DataStore IO/corruption exceptions propagate instead of returning SyncResult.Error
-- [LOW] TYPE: `when` on FoodLogResult used as statement, not expression (`app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt:61`) — Kotlin won't enforce exhaustiveness; violates plan requirement for compile-time safety
-- [LOW] TEST: Meaningless assertion in malformedLastSyncedDateFallsBack (`app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt:370`) — `assertTrue(result is Success || result is Error)` doesn't verify fallback behavior
-
-**Discarded findings (not bugs):**
-- [DISCARDED] SECURITY: Meal data in plaintext DataStore (`DataStoreSettingsRepository.kt:199-202`) — DataStore is in app's private sandbox; standard Android practice for non-critical app data
-- [DISCARDED] SECURITY: ETag values stored without format validation (`FoodScannerApiClient.kt:88`) — Ktor/OkHttp validates header values (rejects CR/LF); server is trusted (user's own, authenticated)
-- [DISCARDED] TIMEOUT: No timeout at HTTP call site (`FoodScannerApiClient.kt:33`) — False positive: HttpClient has global `requestTimeoutMillis = 30_000L` in `AppModule.kt:90-92`
-- [DISCARDED] EDGE CASE: LocalDate.now() inside retryable DataStore edit (`DataStoreSettingsRepository.kt:231`) — Microsecond operation crossing midnight is practically impossible; negligible impact
-- [DISCARDED] TEST: Missing getETag/setETag tests in DataStoreSettingsRepositoryTest — False positive: tests exist in separate file `ETagStorageTest.kt` (6 tests)
-- [DISCARDED] CONVENTION: No API call duration logging (`FoodScannerApiClient.kt:33-98`) — Checklist suggestion, not CLAUDE.md requirement; pre-existing pattern
-- [DISCARDED] TEST: Weak `>=` assertions in multiDaySync (`SyncNutritionUseCaseTest.kt:114-115`) — Assertions verify expected minimum behavior; acceptable for multi-day aggregation
-- [DISCARDED] TEST: Unused ETag mock stubs in configureSettings (`SyncNutritionUseCaseTest.kt:73-74`) — Explicitly directed by plan; harmless defensive mocking
+- [LOW] EDGE CASE: `tempFile` in `remember` doesn't survive process death — if Android kills the activity while system camera is open, `tempFile` resets to null on recreation, photo silently dropped (`app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt:77`). Naive `rememberSaveable` fix introduces stale temp file leak; proper fix requires moving temp file path to ViewModel's `SavedStateHandle`.
 
 ### Linear Updates
-- HEA-134: Review → Merge
-- HEA-135: Review → Merge
-- HEA-136: Review → Merge
-- HEA-137: Review → Merge
-- HEA-138: Created in Todo (Fix: Partial migration leaves API key in plaintext)
-- HEA-139: Created in Todo (Fix: No exception handling around initial settings reads)
-- HEA-140: Created in Todo (Fix: when as statement, not expression)
-- HEA-141: Created in Todo (Fix: Meaningless test assertion)
+- HEA-144: Review → Merge
+- HEA-145: Review → Merge
+- HEA-146: Review → Merge
+- HEA-147: Review → Merge
+- HEA-148: Review → Merge
+- HEA-149: Created in Todo (Fix: tempFile state lost on process death)
 
 <!-- REVIEW COMPLETE -->
 
+### Continuation Status
+All tasks completed.
+
 ---
 
-## Fix Plan
+## Fix Plan (Review Iteration 2)
 
 **Source:** Review findings from Iteration 2
-**Linear Issues:** [HEA-138](https://linear.app/lw-claude/issue/HEA-138), [HEA-139](https://linear.app/lw-claude/issue/HEA-139), [HEA-140](https://linear.app/lw-claude/issue/HEA-140), [HEA-141](https://linear.app/lw-claude/issue/HEA-141)
+**Linear Issues:** [HEA-149](https://linear.app/lw-claude/issue/HEA-149)
 
-### Fix 1: Partial migration leaves API key in plaintext DataStore
-**Linear Issue:** [HEA-138](https://linear.app/lw-claude/issue/HEA-138)
+### Fix 1: Move tempFile path to ViewModel SavedStateHandle for process death survival (HEA-149)
+**Linear Issue:** [HEA-149](https://linear.app/lw-claude/issue/HEA-149)
 
-1. Write test in `app/src/test/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepositoryTest.kt`: simulate crash scenario — pre-populate both EncryptedPrefs (API key present) and DataStore (legacy API_KEY present), call `apiKeyFlow.first()`, verify DataStore no longer contains the plaintext API_KEY
-2. In `DataStoreSettingsRepository.kt:67-69`, after the `existingKey.isNullOrEmpty()` check succeeds, add `dataStore.edit { it.remove(API_KEY) }` to clean any residual plaintext key before returning
-3. Run verifier (expect pass)
-
-### Fix 2: No exception handling around initial settings reads
-**Linear Issue:** [HEA-139](https://linear.app/lw-claude/issue/HEA-139)
-
-1. Write test in `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt`: mock `settingsRepository.isConfigured()` to throw `IOException`, verify `invoke()` returns `SyncResult.Error(...)` instead of propagating the exception
-2. Write test: mock `apiKeyFlow` to throw on `.first()`, verify `SyncResult.Error(...)` returned
-3. Wrap lines 26-32 of `SyncNutritionUseCase.kt` in try-catch: catch `CancellationException` and rethrow, catch `Exception` and return `SyncResult.Error(e.message ?: "Failed to read settings")`
-4. Run verifier (expect pass)
-
-### Fix 3: when on FoodLogResult as statement, not expression
-**Linear Issue:** [HEA-140](https://linear.app/lw-claude/issue/HEA-140)
-
-1. No new test needed — this is a compile-time safety fix
-2. In `SyncNutritionUseCase.kt:61`, convert the `when` statement to an expression by wrapping in `val _: Unit = when (...) { ... }` or restructuring so the result is used
-3. Run verifier (expect pass)
-
-### Fix 4: Meaningless test assertion in malformedLastSyncedDateFallsBack
-**Linear Issue:** [HEA-141](https://linear.app/lw-claude/issue/HEA-141)
-
-1. In `SyncNutritionUseCaseTest.kt:370`, replace `assertTrue(result is SyncResult.Success || result is SyncResult.Error)` with `assertTrue(result is SyncResult.Success)` and add `assertEquals(366, (result as SyncResult.Success).daysProcessed)` to verify the full-range fallback
-2. Run verifier (expect pass)
+1. Add `SavedStateHandle` parameter to `CameraCaptureViewModel` constructor (Hilt injects this automatically)
+2. Add `private val _tempFilePath = savedStateHandle.getStateFlow<String?>("temp_file_path", null)` to ViewModel
+3. Add `fun setTempFilePath(path: String)` and `fun clearTempFilePath()` methods
+4. In `CameraCaptureScreen.kt`, replace `var tempFile by remember { mutableStateOf<File?>(null) }` with `val tempFilePath by viewModel.tempFilePath.collectAsStateWithLifecycle()`
+5. In "Take Photo" onClick, after creating temp file, call `viewModel.setTempFilePath(file.absolutePath)`
+6. In `takePictureLauncher` callback, use `tempFilePath?.let { File(it) }` instead of `tempFile`
+7. In `finally` block, call `viewModel.clearTempFilePath()` and delete the file
+8. Write test: verify `setTempFilePath` persists and `clearTempFilePath` clears
+9. Verify all existing tests pass
 
 ---
 
 ## Iteration 3
 
 **Implemented:** 2026-02-28
-**Method:** Single-agent (4 independent units, 4 effort points — below worker threshold)
+**Method:** Single-agent (user requested fly solo)
 
 ### Tasks Completed This Iteration
-- Fix 1: Partial migration leaves API key in plaintext DataStore — added DataStore cleanup in early-return path
-- Fix 2: No exception handling around initial settings reads — wrapped in try-catch returning SyncResult.Error
-- Fix 3: when on FoodLogResult as statement, not expression — converted to expression for compile-time exhaustiveness
-- Fix 4: Meaningless test assertion in malformedLastSyncedDateFallsBack — strengthened assertion to verify full-range fallback
+- Fix 1: Move tempFile path to ViewModel SavedStateHandle for process death survival (HEA-149)
+
+### Files Modified
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/CameraCaptureViewModel.kt` — Added SavedStateHandle, tempFilePath StateFlow, set/clear methods, companion KEY constant
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt` — Replaced `remember` tempFile with ViewModel tempFilePath, added explicit error on success+null file, added cleanup in onClick catch block
+- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/CameraCaptureViewModelTest.kt` — Added SavedStateHandle to createViewModel, 2 new tests for set/clear/restore
 
 ### Linear Updates
-- HEA-138: Todo → Done
-- HEA-139: Todo → Done
-- HEA-140: Todo → Done
-- HEA-141: Todo → Done
+- HEA-149: Todo → In Progress → Review
 
-### Tasks Remaining
-None — all Fix Plan tasks completed.
+### Pre-commit Verification
+- bug-hunter: Found 2 real issues (both fixed: explicit error guard on null file, cleanup on launch failure), 2 discarded (hardcoded test key is fine — assertion catches renames; double-tap race is practically impossible)
+- verifier: All tests pass, zero warnings
+
+### Review Findings
+
+Summary: 0 issue(s) found (single-agent review)
+Files reviewed: 3 (CameraCaptureViewModel.kt, CameraCaptureScreen.kt, CameraCaptureViewModelTest.kt)
+Checks applied: Security, Logic, Async, Resources, Type Safety, Conventions
+
+No issues found — SavedStateHandle integration is correct, temp file cleanup covers all paths (success, cancel, error, launch failure), tests verify persistence and restoration.
+
+### Linear Updates
+- HEA-149: Review → Merge
+
+<!-- REVIEW COMPLETE -->
+
+### Continuation Status
+All tasks completed.
 
 ---
 
-**Status: COMPLETE**
+## Status: COMPLETE
+
+All tasks implemented and reviewed successfully. All Linear issues moved to Merge.

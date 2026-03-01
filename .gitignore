@@ -42,6 +42,7 @@ google-services.json
 
 # Secrets
 *.env
+sentry.properties
 
 # Claude Code local settings (user-specific)
 .claude/settings.local.json
