@@ -190,6 +190,7 @@ Write findings to the conversation (NOT to a file):
 ## Investigation Report
 
 **Subject:** [What was investigated]
+**Sentry Issues:** [Sentry issue IDs/URLs examined, if any — e.g., HEALTH-HELPER-5]
 **Environment:** [production | staging | codebase-only]
 **Conclusion:** [Root Cause Identified | Suspected | Multiple Possibilities | Nothing Wrong | Cannot Determine]
 

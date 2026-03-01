@@ -147,6 +147,7 @@ Example arguments:
 
 **Created:** YYYY-MM-DD
 **Source:** Inline request: [Summary of $ARGUMENTS]
+**Sentry Issues:** [Sentry issue URLs] (if originating from Sentry, otherwise omit this line)
 **Linear Issues:** [PROJ-123](https://linear.app/...), [PROJ-124](https://linear.app/...)
 
 ## Context Gathered

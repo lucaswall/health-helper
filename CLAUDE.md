@@ -81,7 +81,7 @@ Invoke with `/<skill-name>`. All skills in `.claude/skills/<name>/SKILL.md`.
 | `pull-from-roadmap` | Pull issues from Roadmap into the current sprint |
 | `plan-implement` | Implement the current plan (TDD workflow) |
 | `plan-review-implementation` | QA review of completed implementation (3 specialized reviewers) |
-| `code-audit` | Full codebase security and quality audit |
+| `code-audit` | Full codebase security and quality audit + Sentry issue triage |
 | `deep-review` | Deep analysis of a single screen or feature |
 | `frontend-review` | Compose UI review (accessibility, design, performance) |
 | `investigate` | Research and investigate a topic or bug |

@@ -2,7 +2,7 @@
 name: plan-fix
 description: Investigates bugs AND creates actionable TDD fix plans. Creates Linear issues in Todo state. Use when you know you want to fix something - user reports errors, build failures, wrong data, or UI issues. Can be chained from investigate skill. Discovers MCPs from CLAUDE.md for debugging (logs, etc.).
 argument-hint: <bug description>
-allowed-tools: Read, Edit, Write, Glob, Grep, Task, Bash, mcp__linear__list_teams, mcp__linear__list_issues, mcp__linear__get_issue, mcp__linear__create_issue, mcp__linear__update_issue, mcp__linear__list_issue_labels, mcp__linear__list_issue_statuses
+allowed-tools: Read, Edit, Write, Glob, Grep, Task, Bash, mcp__linear__list_teams, mcp__linear__list_issues, mcp__linear__get_issue, mcp__linear__create_issue, mcp__linear__update_issue, mcp__linear__list_issue_labels, mcp__linear__list_issue_statuses, mcp__sentry__find_organizations, mcp__sentry__find_projects, mcp__sentry__search_issues, mcp__sentry__get_issue_details, mcp__sentry__analyze_issue_with_seer, mcp__sentry__search_events, mcp__sentry__search_issue_events, mcp__sentry__get_issue_tag_values
 disable-model-invocation: true
 ---
 
@@ -84,7 +84,22 @@ Search Linear for related issues:
 - Check if there are related issues that provide context
 - Look for previously attempted fixes
 
-### 6.3 Reproduce the Issue
+### 6.3 Sentry Context
+
+If the bug involves production crashes, errors, or runtime issues, search Sentry for related issues. Use ToolSearch to load Sentry tools before calling them.
+
+1. **Find the org/project** — Use `mcp__sentry__find_organizations` then `mcp__sentry__find_projects` to get slugs
+2. **Search for issues** — Use `mcp__sentry__search_issues` with natural language (e.g., "unresolved crashes from last week")
+3. **Get issue details** — Use `mcp__sentry__get_issue_details` for full stack traces and metadata
+4. **Analyze root cause** — Use `mcp__sentry__analyze_issue_with_seer` for AI-powered analysis
+5. **Check distributions** — Use `mcp__sentry__get_issue_tag_values` for device/OS/release breakdown
+
+If Sentry issues are found:
+- Document the Sentry issue ID and URL in the PLANS.md `**Sentry:**` field
+- Note frequency, affected users, and releases in Evidence section
+- Include the Sentry issue reference in the Linear issue description (see Section 8)
+
+### 6.4 Reproduce the Issue
 
 When possible, try to reproduce via Bash (Gradle commands are appropriate for Bash):
 
@@ -102,6 +117,7 @@ Write or append to `PLANS.md` at the project root with this structure:
 # Fix Plan: [Brief Bug Title]
 
 **Issue:** PROJ-xxx (if Linear issue exists, otherwise "To be created")
+**Sentry:** [Sentry issue URL] (if originating from Sentry, otherwise omit this line)
 **Date:** YYYY-MM-DD
 **Status:** Planning
 **Branch:** fix/PROJ-xxx-brief-description (proposed)
@@ -188,6 +204,10 @@ Create a Linear issue in the discovered team with status "Todo":
      ## Bug Report
      [Summary of the issue]
 
+     ## Sentry Issue (if applicable)
+     [Sentry issue URL] — [event count] events, [user count] users, release [version]
+     **Action:** Resolve this Sentry issue after fix is merged and released.
+
      ## Root Cause
      [What was found during investigation]
 
@@ -203,9 +223,12 @@ Create a Linear issue in the discovered team with status "Todo":
      - [ ] All existing tests pass
      - [ ] No compilation errors
      - [ ] Build succeeds
+     - [ ] Sentry issue resolved (if applicable)
    - status: "Todo"
    - Apply relevant labels (bug, etc.)
    ```
+
+   Omit the "Sentry Issue" section if the bug did not originate from Sentry.
 
 4. Update PLANS.md with the created issue key (PROJ-xxx).
 

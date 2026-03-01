@@ -150,6 +150,10 @@ Based on what you learned from CLAUDE.md, identify which MCP servers are availab
 Query relevant MCPs to gather context that will inform the plan. For example:
 - Check Linear for related issues or dependencies
 
+#### 2.5 Preserve Sentry References
+
+When planning issues that contain Sentry references in their Linear description (look for `**Sentry Issue:**` sections), carry those Sentry issue URLs into the PLANS.md `**Sentry Issues:**` header field. This ensures the downstream `plan-review-implementation` skill can resolve them when the plan is complete.
+
 ---
 
 ### Phase 3: Triage Issues

@@ -8,6 +8,7 @@ Use this template when writing PLANS.md:
 **Status:** IN_PROGRESS
 **Branch:** feat/PROJ-123-short-description
 **Issues:** PROJ-123, PROJ-456
+**Sentry Issues:** [Sentry issue URLs] (if originating from Sentry, otherwise omit this line)
 **Created:** YYYY-MM-DD
 **Last Updated:** YYYY-MM-DD
 
