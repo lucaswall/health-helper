@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-03-01
+
+### Added
+
+- Blood glucose scanner — photograph your glucometer and AI extracts the reading with dual-unit display (mmol/L and mg/dL)
+- Glucose confirmation screen with meal context, specimen source, and editable value
+- Last glucose reading displayed on home screen
+- Share glucose meter photos from your gallery to scan readings
+
+### Fixed
+
+- Fixed crash when sharing photos to HealthHelper from other apps
+
 ## [1.1.0] - 2026-02-28
 
 ### Added
@@ -37,6 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Settings screen for API configuration and sync interval
 - Adaptive launcher icon with health cross design
 
-[Unreleased]: https://github.com/lucaswall/health-helper/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/lucaswall/health-helper/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/lucaswall/health-helper/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/lucaswall/health-helper/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/lucaswall/health-helper/releases/tag/v1.0.0
