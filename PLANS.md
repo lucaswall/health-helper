@@ -1,539 +1,700 @@
-# Fix Plan: BP Scanner Crash on Network Errors + System Camera UI
+# Implementation Plan: Glucose Scanner
 
-**Date:** 2026-02-28
-**Status:** COMPLETE
-**Linear Issues:** [HEA-142](https://linear.app/lw-claude/issue/HEA-142), [HEA-143](https://linear.app/lw-claude/issue/HEA-143)
-**Branch:** fix/HEA-142-bp-scanner-crash-and-camera-ui
+**Status:** IN_PROGRESS
+**Branch:** feat/HEA-150-glucose-scanner
+**Issues:** HEA-150, HEA-151, HEA-152, HEA-153, HEA-154
+**Created:** 2026-02-28
+**Last Updated:** 2026-02-28
 
-## Investigation
+## Summary
 
-### Bug Report
-Blood pressure scanner photo feature "fails constantly." Device crash logs (dropbox) show two `SecurityException` crashes on 2026-02-27 when the Anthropic API call attempts DNS resolution. Additionally, the custom CameraX viewfinder lacks the standard camera experience — no photo preview/confirm, no gallery picker.
+Implement the Blood Glucose Scanner feature end-to-end. Users photograph their glucometer screen, the AI extracts the reading (value + unit), and the result is saved to Health Connect as a `BloodGlucoseRecord` with optional meal context metadata. The feature mirrors the existing Blood Pressure Scanner flow: camera capture -> AI parsing -> confirmation screen -> Health Connect write.
 
-### Classification
-- **Type:** Runtime Crash + UI Improvement
-- **Severity:** High (crash), Medium (UX)
-- **Affected Area:** `AnthropicApiClient`, `CameraCaptureScreen`, `CameraCaptureViewModel`, `AppModule`
+## Issues
 
-### Root Cause Analysis
+### HEA-150: GlucoseReading domain model with dual-unit support and conversion
 
-#### Bug 1: OkHttp AsyncCall re-throws non-IOException, crashing the app
+**Priority:** Medium
+**Labels:** Feature
+**Description:** Create the domain model for blood glucose readings with dual-unit support (mmol/L and mg/dL), deterministic conversion logic, validation, and supporting enums.
 
-The app uses Ktor 3.1.1 with OkHttp 4.12.0 engine (`AppModule.kt:86`). Ktor's OkHttp engine dispatches HTTP requests via OkHttp's `enqueue()` (async), running on OkHttp's internal dispatcher thread pool.
+**Acceptance Criteria:**
+- [ ] `GlucoseReading` data class with value in mmol/L and optional metadata
+- [ ] `GlucoseUnit` enum (MMOL_L, MG_DL)
+- [ ] `GlucoseParseResult` sealed class (Success with value + detectedUnit, Error with message)
+- [ ] Deterministic conversion: mg/dL / 18.018 = mmol/L
+- [ ] Validation range: 1.0-40.0 mmol/L
+- [ ] Enums: RelationToMeal, MealType (glucose-specific), SpecimenSource
+- [ ] `displayInMgDl()` helper for dual-unit display
 
-When DNS resolution fails with `EPERM` (network unavailable, restricted mode, etc.), Java wraps it as `SecurityException` — a `RuntimeException`, **not** an `IOException`. OkHttp 4.12.0's `AsyncCall.run()` catches non-IOExceptions in its generic `catch(t: Throwable)` block, calls `responseCallback.onFailure(...)` to notify Ktor, then **re-throws `t`** on the OkHttp dispatcher thread. This causes an uncaught exception, triggering Android's `KillApplicationHandler` — killing the app instantly.
+### HEA-151: Haiku glucose image parsing with value + unit detection
 
-The try-catch in `CameraCaptureViewModel.kt:90` and `AnthropicApiClient.kt:120` are on the coroutine thread and cannot catch exceptions thrown on OkHttp's dispatcher thread.
+**Priority:** Medium
+**Labels:** Feature
+**Description:** Extend `AnthropicApiClient` with a `parseGlucoseImage()` method that uses Haiku tool_use to extract the glucose value and detected unit from a glucometer display photo. The app handles conversion — Haiku returns raw value + unit.
 
-The `INTERNET` permission IS declared (`AndroidManifest.xml:6`) and granted. The "missing INTERNET permission?" message is a misleading Android error string for `EPERM` on `android_getaddrinfo`.
+**Acceptance Criteria:**
+- [ ] `parseGlucoseImage(apiKey, imageBytes): GlucoseParseResult` method
+- [ ] Tool_use schema returns `value` (numeric) and `unit` ("mmol/L" or "mg/dL")
+- [ ] System prompt instructs Haiku to identify the unit from the display
+- [ ] Reuses existing `prepareImageForApi()` pattern
+- [ ] Error handling: blurry photo, no number, not a glucometer
 
-#### Evidence
-- **Device crash log (dropbox):** Two crashes at 2026-02-27 20:28:48 and 20:28:54 (UID 10623, v1, 6 seconds apart — second was auto-restart)
-- **Stack trace:** `SecurityException` → `GaiException(EAI_NODATA)` → `ErrnoException(EPERM)` propagating through `RealCall$AsyncCall.run(RealCall.kt:517)` → `ThreadPoolExecutor` → `Thread.run`
-- **Current install:** UID 10625 (v1.0.0), `INTERNET: granted=true` — no crashes from this UID, but the code vulnerability remains
-- **Dependency chain:** `ktor-client-okhttp:3.1.1` → `okhttp:4.12.0`
+### HEA-152: Health Connect BloodGlucoseRecord repository and mapper
 
-#### Bug 2: Custom CameraX UI lacks standard photo experience
+**Priority:** Medium
+**Labels:** Feature
+**Description:** Create repository interface, Health Connect implementation, mapper, use cases, and manifest permissions for blood glucose records.
 
-`CameraCaptureScreen.kt` uses CameraX `PreviewView` with a custom capture button. This has no photo preview/confirm after capture (sends image directly to API), no gallery option, and adds 5 CameraX dependencies.
+**Acceptance Criteria:**
+- [ ] `BloodGlucoseRepository` interface in domain layer
+- [ ] `HealthConnectBloodGlucoseRepository` implementation with 10s timeout
+- [ ] `BloodGlucoseRecordMapper` with bidirectional mapping
+- [ ] `WriteGlucoseReadingUseCase` and `GetLastGlucoseReadingUseCase`
+- [ ] `WRITE_BLOOD_GLUCOSE` and `READ_BLOOD_GLUCOSE` permissions in manifest
+- [ ] Hilt bindings in `AppModule`
 
-#### Bug 3: Image format fallback sends raw non-JPEG bytes with JPEG media type
+### HEA-153: Glucose confirmation screen with dual-unit display
 
-`CameraCaptureViewModel.kt:139-141` — if `BitmapFactory` fails to decode an image (corrupt file, unsupported format), the catch block falls back to sending the **original raw bytes** to the API with `mediaType: "image/jpeg"` hardcoded in `AnthropicApiClient.kt:70`. For an HEIC or WEBP file from the gallery (or via share), this sends non-JPEG bytes labeled as JPEG, causing the API to reject the image silently.
+**Priority:** Medium
+**Labels:** Feature
+**Description:** Confirmation screen for glucose readings with dual-unit display, editable value, meal context dropdowns, and Health Connect save.
 
-The happy path works: `BitmapFactory` decodes HEIC/WEBP/PNG successfully, and `compress(JPEG, 85%)` converts to JPEG. But the error fallback is wrong — it should fail with a user-facing error rather than sending garbage to the API.
+**Acceptance Criteria:**
+- [ ] Glucose value displayed in both mmol/L and mg/dL
+- [ ] Editable value with real-time dual-unit conversion
+- [ ] Relation to Meal dropdown
+- [ ] Meal Type dropdown (conditional on Before/After Meal)
+- [ ] Specimen Source dropdown
+- [ ] Timestamp display
+- [ ] Save button (disabled when validation fails)
+- [ ] Retake button (navigates back to camera)
+- [ ] On save success: navigate home with snackbar
 
-#### Related Code
-- `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt:86` — `HttpClient(OkHttp)` engine configuration
-- `gradle/libs.versions.toml:18,52` — `ktor = "3.1.1"`, `ktor-client-okhttp` dependency
-- `gradle/libs.versions.toml:25,63-67` — `camerax = "1.5.1"`, all 5 camera library entries
-- `app/build.gradle.kts:85-90` — 5 CameraX implementation dependencies
-- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt` — full 200-line CameraX implementation
-- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/CameraCaptureViewModel.kt:54-96` — photo capture handling
-- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/CameraCaptureViewModel.kt:108-143` — `resizeImageIfNeeded` with raw-bytes fallback
-- `app/src/main/kotlin/com/healthhelper/app/data/api/AnthropicApiClient.kt:70,83-88` — hardcoded `image/jpeg` media type, Ktor HTTP POST
-- `app/src/main/kotlin/com/healthhelper/app/MainActivity.kt` — single-activity entry point, no intent handling
+### HEA-154: Glucose capture flow, navigation, and home screen integration
 
-### Impact
-- App crashes when network is unavailable/transitioning during any HTTP call (BP scan or food sync)
-- Same OkHttp vulnerability affects `FoodScannerApiClient`
-- Poor camera UX: no preview, no retake, no gallery option
-- Undecodable images silently sent as wrong format, causing confusing API errors
-- 5 unnecessary CameraX dependencies add APK size and complexity
+**Priority:** Medium
+**Labels:** Feature
+**Description:** Add glucose capture screen, navigation routes, and home screen entry point ("Log Glucose" button + last glucose reading display).
 
-## Fix Plan (TDD Approach)
+**Acceptance Criteria:**
+- [ ] Glucose camera capture screen (reuse or clone BP camera pattern)
+- [ ] Navigation routes: `camera-glucose` -> `glucose-confirm/{value}/{unit}/{detectedUnit}`
+- [ ] "Log Glucose" button on home screen
+- [ ] Last glucose reading display on home screen
+- [ ] Health Connect permission request for glucose permissions
+- [ ] Processing overlay during Haiku API call
+- [ ] Error handling with retake option
 
-### Step 1: Switch Ktor engine from OkHttp to CIO
-**File:** `gradle/libs.versions.toml` (modify)
-**File:** `app/build.gradle.kts` (modify)
-**File:** `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt` (modify)
-**Test:** Existing tests (verify pass — engine swap is transparent)
+## Prerequisites
 
-**Behavior:**
-- Replace `ktor-client-okhttp` with `ktor-client-cio` in version catalog and build script
-- In `AppModule.kt:86`, change `HttpClient(OkHttp)` to `HttpClient(CIO)` with matching import (`io.ktor.client.engine.cio.CIO`)
-- CIO engine runs entirely on Kotlin coroutines — no OkHttp dispatcher thread pool, no re-throw vulnerability
-- All network exceptions propagate through the coroutine and are caught by existing try-catch blocks
-- Remove OkHttp-related entries from version catalog (`ktor-client-okhttp`, `okhttp-sse` if present)
+- [ ] All current tests pass (`./gradlew test`)
+- [ ] Build compiles (`./gradlew assembleDebug`)
+- [ ] `gradle/libs.versions.toml` — no new dependencies needed; Health Connect 1.1.0 already includes `BloodGlucoseRecord`
 
-**Tests:**
-1. All existing `AnthropicApiClientTest` tests pass (uses Ktor mock engine, unaffected by engine swap)
-2. All existing `FoodScannerApiClientTest` tests pass (uses Ktor mock engine)
-3. All existing `CameraCaptureViewModelTest` tests pass (mocks API client)
+## Implementation Tasks
 
-### Step 2: Fix image decode fallback — fail instead of sending raw bytes
-**File:** `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/CameraCaptureViewModel.kt` (modify)
-**Test:** `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/CameraCaptureViewModelTest.kt` (modify)
+### Task 1: GlucoseUnit enum
 
-**Behavior:**
-- Rename `resizeImageIfNeeded` to `prepareImageForApi` to reflect its broader responsibility
-- Change the catch block: instead of returning the original raw bytes on decode failure, return `null`
-- In `onPhotoCaptured`, check for `null` from `prepareImageForApi`. If null, set error state: "Could not process image. Please try a different photo."
-- This ensures only valid JPEG bytes are ever sent to the API, regardless of input format (HEIC, WEBP, PNG, or corrupt data)
+**Issue:** HEA-150
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/domain/model/GlucoseUnit.kt` (create)
+- `app/src/test/kotlin/com/healthhelper/app/domain/model/GlucoseUnitTest.kt` (create)
 
-**Tests:**
-1. New test: `prepareImageForApi` returns null for undecodable bytes → ViewModel sets error message "Could not process image. Please try a different photo." and clears `isProcessing`
-2. Existing tests: all pass (they use `testImageBytes = byteArrayOf(1, 2, 3)` which won't decode, but the mock bypasses `prepareImageForApi` since `anthropicApiClient.parseBloodPressureImage` is mocked). Verify this is still the case — if the test calls the real resize path, the mock needs adjustment.
+**TDD Steps:**
 
-### Step 3: Replace CameraCaptureScreen with system camera only
-**File:** `app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt` (rewrite)
-**Pattern:** Follow `SyncScreen.kt:65-72` for `rememberLauncherForActivityResult` usage
+1. **RED** — Write tests for `GlucoseUnit`:
+   - Test that `GlucoseUnit.MMOL_L` and `GlucoseUnit.MG_DL` exist as enum values
+   - Test `entries` returns exactly 2 values
+   - Run: `./gradlew test --tests "com.healthhelper.app.domain.model.GlucoseUnitTest"`
 
-**Behavior:**
+2. **GREEN** — Create `GlucoseUnit` enum with `MMOL_L` and `MG_DL` values.
 
-Rewrite the screen to use the system camera intent instead of CameraX viewfinder:
+3. **REFACTOR** — Verify naming follows project convention (see `BodyPosition.kt`, `MeasurementLocation.kt`).
 
-- **Initial state:** Screen with title "Scan Blood Pressure" and a single "Take Photo" button centered on screen. No camera viewfinder.
-- **"Take Photo"** uses `ActivityResultContracts.TakePicture()` — launches the system camera app with a `FileProvider` temp URI. The system camera handles preview, retake, and confirm natively. On success, reads image bytes from the URI via `context.contentResolver.openInputStream()` and calls `viewModel.onPhotoCaptured(bytes)`.
-- **Processing state:** Shows `CircularProgressIndicator` and "Analyzing..." text while `isProcessing == true`.
-- **Error state:** Shows error message and "Try Again" button (same behavior as current).
-- **Navigation:** On success, navigates to `BpConfirmationScreen` via existing `navigateToConfirmation` SharedFlow.
-- **Uri-to-bytes conversion** happens in the Composable layer (using `LocalContext.current`), keeping the ViewModel clean with no `Context` dependency. The existing `onPhotoCaptured(imageBytes: ByteArray)` signature is unchanged.
-- Remove the `capturePhoto()` private helper function and all CameraX imports.
-
-**Tests:**
-1. All existing `CameraCaptureViewModelTest` tests pass unchanged (they call `onPhotoCaptured(bytes)` directly)
-
-### Step 4: Add share receiver for image sharing into BP flow
-**File:** `app/src/main/AndroidManifest.xml` (modify)
-**File:** `app/src/main/kotlin/com/healthhelper/app/MainActivity.kt` (modify)
-**File:** `app/src/main/kotlin/com/healthhelper/app/presentation/ui/AppNavigation.kt` (modify)
-
-**Behavior:**
-
-Add an `ACTION_SEND` intent filter so users can share photos from any app (Gallery, Google Photos, WhatsApp, file managers) to HealthHelper for BP scanning.
-
-**Manifest changes:**
-- Add a second `<intent-filter>` on `MainActivity` for `android.intent.action.SEND` with `<data android:mimeType="image/*" />`
-- Add `android:label="Scan Blood Pressure"` on the intent filter — this is what appears in the share sheet. Designed for future extensibility (can add "Scan Glucose" later as a separate filter).
-
-**MainActivity changes:**
-- In `onCreate`, after `enableEdgeToEdge()`, check if `intent.action == Intent.ACTION_SEND` and `intent.type?.startsWith("image/") == true`
-- If it's a share intent, extract the image URI from `intent.getParcelableExtra(Intent.EXTRA_STREAM)` (use the compat version for API 33+)
-- Pass the URI as a string to `AppNavigation` so it can route directly to the processing flow
-
-**AppNavigation changes:**
-- Accept an optional `sharedImageUri: String?` parameter
-- If `sharedImageUri` is non-null, set it as the start destination argument or use a `LaunchedEffect` to navigate to the camera-bp route with the pre-loaded image URI
-- The `CameraCaptureScreen` accepts an optional `sharedImageUri` parameter. When present, it skips the "Take Photo" button and immediately reads bytes from the URI and calls `viewModel.onPhotoCaptured(bytes)` — going straight to processing → confirmation.
-
-**Tests:**
-1. No unit tests for intent handling — verified by manual test
-2. Existing navigation tests (if any) pass
-
-### Step 5: Add FileProvider for camera temp files
-**File:** `app/src/main/AndroidManifest.xml` (modify)
-**File:** `app/src/main/res/xml/file_paths.xml` (create)
-
-**Behavior:**
-- `TakePicture()` requires a `Uri` for the system camera to write the photo to
-- Register a `FileProvider` in the manifest under `<application>` with authority `${applicationId}.fileprovider`
-- Create `file_paths.xml` with a `<cache-path name="bp_images" path="bp_images/" />` entry
-- The screen creates a temp file in `cacheDir/bp_images/`, gets a FileProvider URI, passes it to `TakePicture()`
-- Temp files are cleaned up after processing
-
-**Tests:**
-1. No unit tests needed — manifest/XML configuration verified by build + manual test
-
-### Step 6: Integrate Sentry for crash reporting, performance monitoring, and Compose instrumentation
-**File:** `gradle/libs.versions.toml` (modify)
-**File:** `app/build.gradle.kts` (modify)
-**File:** `app/src/main/AndroidManifest.xml` (modify)
-**File:** `app/src/main/kotlin/com/healthhelper/app/HealthHelperApp.kt` (modify)
-**File:** `sentry.properties` (create)
-**File:** `.gitignore` (modify)
-
-**Manual setup required (before implementation):**
-1. Create a Sentry account at https://sentry.io (free tier: 5,000 errors/month) — DONE
-2. Create a new project: Platform = Android, name = `health-helper` — DONE
-3. DSN obtained: `https://2ce7da0da96c55aa5a06a5be24b837df@o4510966037086208.ingest.us.sentry.io/4510966055108608`
-4. Org Auth Token generated and stored in `sentry.properties` (gitignored) — DONE
-5. Org slug: `lucas-wall`, Project slug: `health-helper` — DONE
-
-**Secrets handling:**
-- **DSN** is NOT a secret — it only allows sending events, not reading them. Safe to commit in `AndroidManifest.xml`. Sentry's official stance: [DSNs are safe to keep public](https://sentry.zendesk.com/hc/en-us/articles/26741783759899).
-- **Auth Token** IS a secret — it has write access to releases/mappings. Store it in `sentry.properties` (gitignored) or as env var `SENTRY_AUTH_TOKEN`. The Sentry Gradle plugin reads from `sentry.properties` automatically.
-- **`sentry.properties`** must be added to `.gitignore` (alongside `local.properties`)
-
-**Behavior:**
-
-*Version catalog additions (`libs.versions.toml`):*
-- Add version: `sentry = "8.27.1"`, `sentryGradlePlugin = "5.12.2"`
-- Add libraries: `sentry-android` (core SDK + all auto-integrations), `sentry-compose-android` (Compose instrumentation)
-- Add plugin: `sentry` with id `io.sentry.android.gradle`
-
-*Build script (`app/build.gradle.kts`):*
-- Apply `alias(libs.plugins.sentry)` in plugins block
-- Add `implementation(libs.sentry.android)` and `implementation(libs.sentry.compose.android)`
-- Configure the Sentry Gradle plugin:
-  - `autoUploadProguardMapping.set(true)` — uploads R8 mapping files on release builds for deobfuscated stack traces
-  - `autoInstallation.enabled.set(false)` — we manage dependencies explicitly via version catalog
-  - `tracingInstrumentation.enabled.set(true)` — auto-instruments HTTP calls and DB queries
-  - `autoUploadSourceContext.set(true)` — uploads source context for richer error display
-
-*Manifest (`AndroidManifest.xml`):*
-- Add `<meta-data android:name="io.sentry.dsn" android:value="https://2ce7da0da96c55aa5a06a5be24b837df@o4510966037086208.ingest.us.sentry.io/4510966055108608" />`
-- Add `<meta-data android:name="io.sentry.traces-sample-rate" android:value="1.0" />` — capture all transactions (fine for personal app volume)
-- Add `<meta-data android:name="io.sentry.anr.enable" android:value="true" />` — ANR detection
-- Add `<meta-data android:name="io.sentry.session-tracking.enable" android:value="true" />` — release health / crash-free rate
-
-*Application class (`HealthHelperApp.kt`):*
-- Add a `SentryTimberTree` (from `sentry-android`) to Timber — this forwards all `Timber.w()` and `Timber.e()` calls as Sentry breadcrumbs, and `Timber.e()` with exceptions as Sentry events
-- Plant it unconditionally (both debug and release) alongside the existing `DebugTree` (which stays debug-only)
-- Set the `environment` tag: `Sentry.configureScope { it.setTag("environment", if (BuildConfig.DEBUG) "debug" else "release") }` — allows filtering debug vs release crashes in the dashboard
-
-*`sentry.properties` (create, gitignored):*
-```
-defaults.org=your-org-slug
-defaults.project=health-helper
-auth.token=sntrys_YOUR_AUTH_TOKEN_HERE
-```
-
-*`.gitignore` additions:*
-- Add `sentry.properties` entry
-
-**What Sentry captures with this setup:**
-- Unhandled exceptions (crashes) with full deobfuscated stack traces
-- ANRs (Application Not Responding)
-- Timber warnings/errors as breadcrumbs (trail of events before a crash)
-- Timber errors with exceptions as Sentry error events
-- HTTP transaction performance (Ktor calls)
-- Compose render performance (via `sentry-compose-android`)
-- Session/release health (crash-free sessions percentage)
-- Device info, OS version, app version automatically attached
-- Works in both debug and release builds, filterable by `environment` tag
-
-**Tests:**
-1. `./gradlew assembleDebug` succeeds — Sentry SDK initializes without a valid DSN (sends no events, no crash)
-2. All existing tests pass — Sentry auto-initializes via manifest, no test setup needed (it no-ops without a real DSN)
-
-**Sentry MCP setup (in this step, not optional):**
-
-The [Sentry remote MCP server](https://github.com/getsentry/sentry-mcp) uses OAuth — no auth token needed. You authenticate via browser when first connecting.
-
-Add to `.claude/settings.json` in the top-level object:
-```json
-"mcpServers": {
-  "sentry": {
-    "type": "http",
-    "url": "https://mcp.sentry.dev/mcp"
-  }
-}
-```
-
-Or run: `claude mcp add --transport http sentry https://mcp.sentry.dev/mcp`
-
-On first use, Claude Code will prompt OAuth login via browser to authorize the Sentry connection. If the token expires, run `/mcp` → select Sentry → "Clear authentication" → "Authenticate" to re-trigger.
-
-Add permissions for Sentry MCP tools to the `permissions.allow` array in `.claude/settings.json`:
-```
-"mcp__sentry__list_projects",
-"mcp__sentry__list_project_issues",
-"mcp__sentry__list_issue_events",
-"mcp__sentry__get_sentry_issue",
-"mcp__sentry__get_sentry_event",
-"mcp__sentry__resolve_short_id",
-"mcp__sentry__list_error_events_in_project",
-"mcp__sentry__create_project",
-"mcp__sentry__list_organization_replays"
-```
-
-### Step 7: Remove CameraX dependencies
-**File:** `gradle/libs.versions.toml` (modify)
-**File:** `app/build.gradle.kts` (modify)
-
-**Behavior:**
-- Remove `camerax` version entry from version catalog
-- Remove all 5 camera library entries: `camera-core`, `camera-camera2`, `camera-lifecycle`, `camera-compose`, `camera-view`
-- Remove corresponding 5 `implementation` lines from `app/build.gradle.kts:85-90`
-- Verify no remaining imports reference `androidx.camera.*`
-
-**Tests:**
-1. `./gradlew assembleDebug` succeeds with no CameraX references
-2. No import errors in remaining source files
-
-### Step 8: Verify
-- [ ] All new tests pass
-- [ ] All existing tests pass (`./gradlew test`)
-- [ ] Kotlin compiles without errors (`./gradlew assembleDebug`)
-- [ ] Lint passes
-- [ ] Build succeeds
-- [ ] Manual test: Take photo via system camera → processes → shows confirmation
-- [ ] Manual test: Share photo from gallery → app opens → processes → shows confirmation
-- [ ] Manual test: Share HEIC from gallery → decoded and processed correctly
-- [ ] Manual test: Airplane mode → take photo → shows error message (NOT crash)
-- [ ] Manual test: Share sheet shows "Scan Blood Pressure" label for HealthHelper
-- [ ] Manual test: After adding DSN, verify Sentry receives a test event (force a crash or call `Sentry.captureMessage("test")`)
-- [ ] Manual test: Check Sentry dashboard shows debug/release environment tag
-- [ ] Verify `sentry.properties` is NOT committed to git
-
-## Notes
-- The CIO engine uses Java's SSLEngine instead of OkHttp's TLS stack. For standard HTTPS to `api.anthropic.com`, this is transparent. `network_security_config.xml` already has `cleartextTrafficPermitted="false"`.
-- The CAMERA permission remains needed — system camera apps on some devices check caller permissions.
-- Existing `FoodScannerApiClient` also benefits from the CIO engine switch — same crash vulnerability existed there.
-- The `onCaptureError` callback and `capturePhoto()` helper function are removed since the system camera handles capture errors internally.
-- The share intent filter label "Scan Blood Pressure" is designed for future extensibility — a glucose scanner could add a second filter labeled "Scan Glucose" on the same activity.
-- `IntentCompat.getParcelableExtra()` should be used for API 33+ compatibility when extracting the shared image URI.
+**Notes:**
+- Reference: `app/src/main/kotlin/com/healthhelper/app/domain/model/BodyPosition.kt`
 
 ---
 
-## Iteration 1
+### Task 2: Glucose metadata enums (RelationToMeal, GlucoseMealType, SpecimenSource)
 
-**Implemented:** 2026-02-28
-**Method:** Single-agent (user requested solo mode)
+**Issue:** HEA-150
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/domain/model/RelationToMeal.kt` (create)
+- `app/src/main/kotlin/com/healthhelper/app/domain/model/GlucoseMealType.kt` (create)
+- `app/src/main/kotlin/com/healthhelper/app/domain/model/SpecimenSource.kt` (create)
+- `app/src/test/kotlin/com/healthhelper/app/domain/model/RelationToMealTest.kt` (create)
+- `app/src/test/kotlin/com/healthhelper/app/domain/model/GlucoseMealTypeTest.kt` (create)
+- `app/src/test/kotlin/com/healthhelper/app/domain/model/SpecimenSourceTest.kt` (create)
 
-### Tasks Completed This Iteration
-- Step 1: Switch Ktor engine from OkHttp to CIO (HEA-142)
-- Step 2: Fix image decode fallback — fail instead of sending raw bytes (HEA-143)
-- Step 3: Replace CameraCaptureScreen with system camera (HEA-143)
-- Step 4: Add share receiver for image sharing into BP flow (HEA-143)
-- Step 5: Add FileProvider for camera temp files (HEA-143)
-- Step 6: Integrate Sentry for crash reporting (HEA-142/HEA-143)
-- Step 7: Remove CameraX dependencies (HEA-143)
+**TDD Steps:**
 
-### Files Modified
-- `gradle/libs.versions.toml` — Replaced ktor-client-okhttp with ktor-client-cio, removed CameraX entries, added Sentry SDK + plugin
-- `app/build.gradle.kts` — Swapped ktor-client-cio, removed 5 CameraX deps, added Sentry deps + plugin config
-- `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt` — HttpClient(OkHttp) → HttpClient(CIO)
-- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/CameraCaptureViewModel.kt` — Renamed resizeImageIfNeeded to prepareImageForApi, returns null on decode failure
-- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/CameraCaptureViewModelTest.kt` — Added BitmapFactory mockkStatic, new test for undecodable bytes error
-- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt` — Full rewrite: system camera via TakePicture + share image support
-- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/AppNavigation.kt` — Added sharedImageUri parameter, URL-encoded routing to camera-bp
-- `app/src/main/kotlin/com/healthhelper/app/MainActivity.kt` — Extract shared image URI from ACTION_SEND intent
-- `app/src/main/AndroidManifest.xml` — Share intent filter, FileProvider, Sentry meta-data
-- `app/src/main/res/xml/file_paths.xml` — Created FileProvider config for bp_images cache dir
-- `app/src/main/kotlin/com/healthhelper/app/HealthHelperApp.kt` — SentryTimberTree + environment tag
-- `.mcp.json` — Added Sentry MCP server
-- `.claude/settings.json` — Added Sentry MCP tool permissions
+1. **RED** — Write tests for each enum:
+   - `RelationToMeal`: GENERAL, FASTING, BEFORE_MEAL, AFTER_MEAL, UNKNOWN (5 values)
+   - `GlucoseMealType`: BREAKFAST, LUNCH, DINNER, SNACK, UNKNOWN (5 values)
+   - `SpecimenSource`: CAPILLARY_BLOOD, INTERSTITIAL_FLUID, PLASMA, SERUM, TEARS, WHOLE_BLOOD, UNKNOWN (7 values)
+   - Run: `./gradlew test --tests "com.healthhelper.app.domain.model.RelationToMealTest" --tests "com.healthhelper.app.domain.model.GlucoseMealTypeTest" --tests "com.healthhelper.app.domain.model.SpecimenSourceTest"`
 
-### Linear Updates
-- HEA-142: Todo → In Progress → Review
-- HEA-143: Todo → In Progress → Review
+2. **GREEN** — Create the three enum classes.
 
-### Pre-commit Verification
-- bug-hunter: Found 4 issues — 2 real bugs fixed (temp file leak on camera cancel, unfaithful BitmapFactory mock), 2 false positives skipped (DSN is public per Sentry docs, trace rate intentional for personal app)
-- verifier: All tests pass, zero warnings
+3. **REFACTOR** — Ensure naming consistency.
 
-### Review Findings
-
-Summary: 5 issue(s) found (Team: security, reliability, quality reviewers)
-- FIX: 5 issue(s) — Linear issues created
-- DISCARDED: 14 finding(s) — false positives / not applicable
-
-**Issues requiring fix:**
-- [MEDIUM] RESOURCE: Temp file leak — `uri?.path` on content:// URI doesn't resolve to filesystem path, temp files never deleted (`app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt:78`)
-- [MEDIUM] SECURITY: No URI scheme validation for shared images — `file://` URIs accepted without validation (`app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt:86`)
-- [MEDIUM] RESOURCE: IO reads on Main dispatcher — `readBytes()` on Main thread in camera callback and shared URI handler, ANR risk (`app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt:66,87`)
-- [MEDIUM] EDGE CASE: No size limit on image `readBytes()` — unbounded stream could cause OOM (`app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt:66,87`)
-- [LOW] EDGE CASE: Share intent re-navigation on activity recreation — `LaunchedEffect(sharedImageUri)` fires again after config change/process death (`app/src/main/kotlin/com/healthhelper/app/presentation/ui/AppNavigation.kt:18-24`)
-
-**Discarded findings (not bugs):**
-- [DISCARDED] Sentry DSN hardcoded in manifest — Intentional per plan. Sentry DSNs are public ingest endpoints per Sentry's official documentation. Not a secret; only allows event submission, not reading.
-- [DISCARDED] Timber.w logs API error message — Data minimization concern only. The `result.message` field contains parse-level descriptions, not user data or tokens.
-- [DISCARDED] ACTION_SEND no permission guard — Standard Android share receiver behavior. Expected design.
-- [DISCARDED] SharedFlow collection pattern — Reviewer confirmed no actual bug. replay=0 prevents stale events.
-- [DISCARDED] processingJob?.cancel() unreachable code — Guard on line 55 makes cancel on line 57 unreachable when processing. Harmless dead code.
-- [DISCARDED] Force unwrap `uiState.error!!` — Safe in Compose snapshot system. Delegated property value stable within a composition pass. Standard Compose pattern.
-- [DISCARDED] URLEncoder/URLDecoder inline style — Style only, zero correctness impact.
-- [DISCARDED] Timber string interpolation format — Style preference not enforced by CLAUDE.md.
-- [DISCARDED] Timber missing image context in logs — Nice-to-have diagnostic info, not a bug.
-- [DISCARDED] AppModule internal overload layering — Reviewer confirmed no bug.
-- [DISCARDED] No test for processingJob race — Edge case unreachable in practice due to guard + finally block ordering.
-- [DISCARDED] No test for onRetake() idempotency — Null-safe `?.cancel()` on null is safe by design.
-- [DISCARDED] Weak test assertion on captured bytes — Test is functional and asserts non-null. Stronger assertion is nice-to-have.
-- [DISCARDED] setUp mocks unused SettingsRepository flows — Copy-paste noise from another test class. Not a bug.
-
-### Linear Updates
-- HEA-142: Review → Merge (original task completed)
-- HEA-143: Review → Merge (original task completed)
-- HEA-144: Created in Todo (Fix: temp file leak)
-- HEA-145: Created in Todo (Fix: URI scheme validation)
-- HEA-146: Created in Todo (Fix: IO on Main dispatcher)
-- HEA-147: Created in Todo (Fix: image size limit)
-- HEA-148: Created in Todo (Fix: share intent re-navigation)
-
-<!-- REVIEW COMPLETE -->
-
-### Continuation Status
-All tasks completed.
+**Notes:**
+- Named `GlucoseMealType` to avoid clash with existing `MealType` enum (used for nutrition sync)
+- Reference: `app/src/main/kotlin/com/healthhelper/app/domain/model/BodyPosition.kt` for enum pattern
 
 ---
 
-## Fix Plan (Review Iteration 1)
+### Task 3: GlucoseReading data class with validation and dual-unit conversion
 
-**Source:** Review findings from Iteration 1
-**Linear Issues:** [HEA-144](https://linear.app/lw-claude/issue/HEA-144), [HEA-145](https://linear.app/lw-claude/issue/HEA-145), [HEA-146](https://linear.app/lw-claude/issue/HEA-146), [HEA-147](https://linear.app/lw-claude/issue/HEA-147), [HEA-148](https://linear.app/lw-claude/issue/HEA-148)
+**Issue:** HEA-150
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/domain/model/GlucoseReading.kt` (create)
+- `app/src/test/kotlin/com/healthhelper/app/domain/model/GlucoseReadingTest.kt` (create)
 
-### Fix 1: Temp file leak — store File reference for cleanup (HEA-144)
-**Linear Issue:** [HEA-144](https://linear.app/lw-claude/issue/HEA-144)
+**TDD Steps:**
 
-1. Add `var tempFile by remember { mutableStateOf<File?>(null) }` to hold the temp file reference
-2. In the "Take Photo" onClick, assign `tempFile = File.createTempFile(...)` before creating the URI
-3. In `takePictureLauncher` callback `finally` block, replace `uri?.path?.let { File(it).delete() }` with `tempFile?.delete(); tempFile = null`
-4. Verify existing tests pass
+1. **RED** — Write tests:
+   - Valid reading with default metadata creates successfully
+   - `require` throws for value below 1.0 mmol/L
+   - `require` throws for value above 40.0 mmol/L
+   - `displayInMgDl()` returns correct conversion (5.6 mmol/L -> 101 mg/dL, using `value * 18.018` rounded to Int)
+   - Boundary values: 1.0 and 40.0 pass validation
+   - Default values: `relationToMeal = UNKNOWN`, `glucoseMealType = UNKNOWN`, `specimenSource = UNKNOWN`
+   - Run: `./gradlew test --tests "com.healthhelper.app.domain.model.GlucoseReadingTest"`
 
-### Fix 2: URI scheme validation for shared images (HEA-145)
-**Linear Issue:** [HEA-145](https://linear.app/lw-claude/issue/HEA-145)
+2. **GREEN** — Create `GlucoseReading`:
+   - `valueMmolL: Double` — glucose value in mmol/L (primary unit, matches Health Connect)
+   - `relationToMeal: RelationToMeal = RelationToMeal.UNKNOWN`
+   - `glucoseMealType: GlucoseMealType = GlucoseMealType.UNKNOWN`
+   - `specimenSource: SpecimenSource = SpecimenSource.UNKNOWN`
+   - `timestamp: Instant = Instant.now()`
+   - `init { require(valueMmolL in 1.0..40.0) }`
+   - `fun displayInMgDl(): Int = (valueMmolL * 18.018).roundToInt()`
 
-1. In the `LaunchedEffect(sharedImageUri)` block, after `Uri.parse(sharedImageUri)`, add: `if (uri.scheme != "content") { viewModel.onCaptureError("Unsupported image source."); return@LaunchedEffect }`
-2. Verify existing tests pass
+3. **REFACTOR** — Ensure pattern matches `BloodPressureReading` structure.
 
-### Fix 3: Move IO reads off Main dispatcher (HEA-146)
-**Linear Issue:** [HEA-146](https://linear.app/lw-claude/issue/HEA-146)
+**Defensive Requirements:**
+- Validation in `init` block mirrors `BloodPressureReading` pattern
+- Conversion uses deterministic math (multiply by 18.018), NOT LLM output
 
-1. In the `LaunchedEffect(sharedImageUri)` block, wrap `contentResolver.openInputStream(uri)?.use { it.readBytes() }` in `withContext(Dispatchers.IO) { ... }`
-2. In the `takePictureLauncher` callback, extract the byte-reading into a `rememberCoroutineScope()` launch with `Dispatchers.IO`, then call `viewModel.onPhotoCaptured(bytes)` from within
-3. Add `import kotlinx.coroutines.Dispatchers` and `import kotlinx.coroutines.withContext`
-4. Verify existing tests pass
-
-### Fix 4: Add size limit on image reads (HEA-147)
-**Linear Issue:** [HEA-147](https://linear.app/lw-claude/issue/HEA-147)
-
-1. Add a `private const val MAX_IMAGE_BYTES = 20 * 1024 * 1024` (20MB) constant at file level
-2. Create a `readBytesLimited(inputStream: InputStream, maxSize: Int): ByteArray` helper that reads in chunks and throws `IllegalArgumentException` if size exceeded
-3. Replace both `readBytes()` calls with `readBytesLimited(it, MAX_IMAGE_BYTES)`
-4. In catch blocks, handle the size exceeded case with user-friendly error: "Image is too large. Please choose a smaller photo."
-5. Verify existing tests pass
-
-### Fix 5: Consume share intent to prevent re-navigation (HEA-148)
-**Linear Issue:** [HEA-148](https://linear.app/lw-claude/issue/HEA-148)
-
-1. In `MainActivity.kt`, after extracting `sharedImageUri` from the intent, call `intent.removeExtra(Intent.EXTRA_STREAM)` to consume the share data
-2. This prevents the same URI from being re-extracted on activity recreation (config change / process death + restore)
-3. Verify existing tests pass
+**Notes:**
+- Reference: `app/src/main/kotlin/com/healthhelper/app/domain/model/BloodPressureReading.kt`
 
 ---
 
-## Iteration 2
+### Task 4: GlucoseParseResult sealed class
 
-**Implemented:** 2026-02-28
-**Method:** Single-agent (user requested fly solo)
+**Issue:** HEA-150
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/domain/model/GlucoseParseResult.kt` (create)
+- `app/src/test/kotlin/com/healthhelper/app/domain/model/GlucoseParseResultTest.kt` (create)
 
-### Tasks Completed This Iteration
-- Fix 1: Temp file leak — store File reference for cleanup (HEA-144)
-- Fix 2: URI scheme validation for shared images (HEA-145)
-- Fix 3: Move IO reads off Main dispatcher (HEA-146)
-- Fix 4: Add size limit on image reads (HEA-147)
-- Fix 5: Consume share intent to prevent re-navigation (HEA-148)
+**TDD Steps:**
 
-### Files Modified
-- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt` — Rewrote with: `tempFile` state for proper cleanup, `content://` scheme validation, `withContext(Dispatchers.IO)` for all reads, `readBytesLimited()` with 20MB cap, `CancellationException` rethrown in all catch blocks
-- `app/src/main/kotlin/com/healthhelper/app/MainActivity.kt` — Gate share intent on `savedInstanceState == null` instead of `removeExtra`
+1. **RED** — Write tests:
+   - `GlucoseParseResult.Success` holds `value: Double` and `detectedUnit: GlucoseUnit`
+   - `GlucoseParseResult.Error` holds `message: String`
+   - Verify `is` checks work for sealed class hierarchy
+   - Run: `./gradlew test --tests "com.healthhelper.app.domain.model.GlucoseParseResultTest"`
 
-### Linear Updates
-- HEA-144: Todo → In Progress → Review
-- HEA-145: Todo → In Progress → Review
-- HEA-146: Todo → In Progress → Review
-- HEA-147: Todo → In Progress → Review
-- HEA-148: Todo → In Progress → Review
+2. **GREEN** — Create sealed class:
+   - `Success(val value: Double, val detectedUnit: GlucoseUnit)`
+   - `Error(val message: String)`
 
-### Pre-commit Verification
-- bug-hunter: Found 3 bugs — all fixed (CancellationException swallowed in 2 catch blocks, intent.removeExtra doesn't survive process death)
-- verifier: All tests pass, zero warnings
+3. **REFACTOR** — Verify consistency with `BloodPressureParseResult`.
 
-### Review Findings
-
-Summary: 1 issue(s) found (single-agent review)
-- FIX: 1 issue(s) — Linear issue created
-- DISCARDED: 0 finding(s)
-- INLINE FIX ATTEMPTED: reverted (bug-hunter found new issues in the fix)
-
-**Issues requiring fix:**
-- [LOW] EDGE CASE: `tempFile` in `remember` doesn't survive process death — if Android kills the activity while system camera is open, `tempFile` resets to null on recreation, photo silently dropped (`app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt:77`). Naive `rememberSaveable` fix introduces stale temp file leak; proper fix requires moving temp file path to ViewModel's `SavedStateHandle`.
-
-### Linear Updates
-- HEA-144: Review → Merge
-- HEA-145: Review → Merge
-- HEA-146: Review → Merge
-- HEA-147: Review → Merge
-- HEA-148: Review → Merge
-- HEA-149: Created in Todo (Fix: tempFile state lost on process death)
-
-<!-- REVIEW COMPLETE -->
-
-### Continuation Status
-All tasks completed.
+**Notes:**
+- Reference: `app/src/main/kotlin/com/healthhelper/app/domain/model/BloodPressureParseResult.kt`
+- `value` is the raw value in the detected unit (not yet converted to mmol/L)
 
 ---
 
-## Fix Plan (Review Iteration 2)
+### Task 5: Haiku glucose image parsing in AnthropicApiClient
 
-**Source:** Review findings from Iteration 2
-**Linear Issues:** [HEA-149](https://linear.app/lw-claude/issue/HEA-149)
+**Issue:** HEA-151
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/data/api/AnthropicApiClient.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/data/api/AnthropicApiClientTest.kt` (modify)
 
-### Fix 1: Move tempFile path to ViewModel SavedStateHandle for process death survival (HEA-149)
-**Linear Issue:** [HEA-149](https://linear.app/lw-claude/issue/HEA-149)
+**TDD Steps:**
 
-1. Add `SavedStateHandle` parameter to `CameraCaptureViewModel` constructor (Hilt injects this automatically)
-2. Add `private val _tempFilePath = savedStateHandle.getStateFlow<String?>("temp_file_path", null)` to ViewModel
-3. Add `fun setTempFilePath(path: String)` and `fun clearTempFilePath()` methods
-4. In `CameraCaptureScreen.kt`, replace `var tempFile by remember { mutableStateOf<File?>(null) }` with `val tempFilePath by viewModel.tempFilePath.collectAsStateWithLifecycle()`
-5. In "Take Photo" onClick, after creating temp file, call `viewModel.setTempFilePath(file.absolutePath)`
-6. In `takePictureLauncher` callback, use `tempFilePath?.let { File(it) }` instead of `tempFile`
-7. In `finally` block, call `viewModel.clearTempFilePath()` and delete the file
-8. Write test: verify `setTempFilePath` persists and `clearTempFilePath` clears
-9. Verify all existing tests pass
+1. **RED** — Add tests to `AnthropicApiClientTest`:
+   - Successful glucose parse returns `GlucoseParseResult.Success` with value and detected unit
+   - Tool_use response with `error` field returns `GlucoseParseResult.Error`
+   - Missing `value` or `unit` in tool response returns Error
+   - HTTP 401 returns `Error("Authentication failed")`
+   - HTTP 429 returns `Error("Rate limited")`
+   - Network exception returns `Error("Failed to analyze image")`
+   - Value of 0 or negative returns error (implausible reading)
+   - Invalid unit string returns error
+   - Run: `./gradlew test --tests "com.healthhelper.app.data.api.AnthropicApiClientTest"`
 
----
+2. **GREEN** — Add `parseGlucoseImage()` method:
+   - Define `GLUCOSE_TOOL_NAME = "glucose_reading"` constant
+   - Define `GLUCOSE_TOOL` with `inputSchema` having `value` (number), `unit` (string enum: "mmol/L", "mg/dL"), and `error` (string) fields
+   - Define `GLUCOSE_TOOL_CHOICE` forcing tool use
+   - System prompt: "Extract the glucose reading from this glucometer display. Return the numeric value shown and the unit displayed (mmol/L or mg/dL). If the unit is not visible, infer from the numeric range: values above 30 are likely mg/dL, below 30 are likely mmol/L."
+   - Parse tool_use response extracting `value` (Double) and `unit` (String)
+   - Map unit string to `GlucoseUnit` enum
+   - Return `GlucoseParseResult.Success(value, detectedUnit)` or `GlucoseParseResult.Error(message)`
+   - Follow exact same error handling pattern as `parseBloodPressureImage()` (CancellationException rethrow, SecurityException, SerializationException, generic Exception)
 
-## Iteration 3
+3. **REFACTOR** — Extract shared HTTP/error handling logic between BP and glucose parsing if duplication is excessive. Otherwise, keep separate methods for clarity.
 
-**Implemented:** 2026-02-28
-**Method:** Single-agent (user requested fly solo)
+**Defensive Requirements:**
+- CancellationException must be rethrown (coroutine contract)
+- SecurityException caught separately with specific message
+- HTTP error codes produce sanitized user messages (not raw error bodies)
+- Ktor HttpTimeout (30s configured in AppModule) covers API call timeout
+- Validate that parsed `value` is positive before returning Success
 
-### Tasks Completed This Iteration
-- Fix 1: Move tempFile path to ViewModel SavedStateHandle for process death survival (HEA-149)
-
-### Files Modified
-- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/CameraCaptureViewModel.kt` — Added SavedStateHandle, tempFilePath StateFlow, set/clear methods, companion KEY constant
-- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt` — Replaced `remember` tempFile with ViewModel tempFilePath, added explicit error on success+null file, added cleanup in onClick catch block
-- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/CameraCaptureViewModelTest.kt` — Added SavedStateHandle to createViewModel, 2 new tests for set/clear/restore
-
-### Linear Updates
-- HEA-149: Todo → In Progress → Review
-
-### Pre-commit Verification
-- bug-hunter: Found 2 real issues (both fixed: explicit error guard on null file, cleanup on launch failure), 2 discarded (hardcoded test key is fine — assertion catches renames; double-tap race is practically impossible)
-- verifier: All tests pass, zero warnings
-
-### Review Findings
-
-Summary: 0 issue(s) found (single-agent review)
-Files reviewed: 3 (CameraCaptureViewModel.kt, CameraCaptureScreen.kt, CameraCaptureViewModelTest.kt)
-Checks applied: Security, Logic, Async, Resources, Type Safety, Conventions
-
-No issues found — SavedStateHandle integration is correct, temp file cleanup covers all paths (success, cancel, error, launch failure), tests verify persistence and restoration.
-
-### Linear Updates
-- HEA-149: Review → Merge
-
-<!-- REVIEW COMPLETE -->
-
-### Continuation Status
-All tasks completed.
+**Notes:**
+- Reference: `AnthropicApiClient.kt:79-165` for `parseBloodPressureImage()` pattern
+- Reference: `AnthropicApiClientTest.kt` for Ktor mock engine test pattern
+- The `value` in `GlucoseParseResult.Success` is the raw value in whatever unit was detected; conversion to mmol/L happens in the ViewModel/UseCase layer
 
 ---
 
-## Status: COMPLETE
+### Task 6: BloodGlucoseRepository interface
 
-All tasks implemented and reviewed successfully. All Linear issues moved to Merge.
+**Issue:** HEA-152
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/domain/repository/BloodGlucoseRepository.kt` (create)
+
+**TDD Steps:**
+
+1. **RED** — No test needed for an interface; compilation is the test.
+
+2. **GREEN** — Create interface:
+   - `suspend fun writeBloodGlucoseRecord(reading: GlucoseReading): Boolean`
+   - `suspend fun getLastReading(): GlucoseReading?`
+
+3. **REFACTOR** — Verify naming matches `BloodPressureRepository` pattern.
+
+**Notes:**
+- Reference: `app/src/main/kotlin/com/healthhelper/app/domain/repository/BloodPressureRepository.kt`
+
+---
+
+### Task 7: BloodGlucoseRecordMapper
+
+**Issue:** HEA-152
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/BloodGlucoseRecordMapper.kt` (create)
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/BloodGlucoseRecordMapperTest.kt` (create)
+
+**TDD Steps:**
+
+1. **RED** — Write tests:
+   - `mapToBloodGlucoseRecord()`: GlucoseReading -> BloodGlucoseRecord
+     - Value mapped via `BloodGlucose.millimolesPerLiter()`
+     - `relationToMeal` enum maps to `RELATION_TO_MEAL_*` constants
+     - `glucoseMealType` enum maps to `MEAL_TYPE_*` constants
+     - `specimenSource` enum maps to `SPECIMEN_SOURCE_*` constants
+     - `metadata` uses `Metadata.manualEntry()` with clientRecordId = "bloodglucose-{epochMilli}"
+     - Zone offset derived from system default
+   - `mapToGlucoseReading()`: BloodGlucoseRecord -> GlucoseReading
+     - Value extracted from `level.inMillimolesPerLiter`
+     - All enum fields reverse-mapped correctly
+     - Unknown/unrecognized HC values map to UNKNOWN
+   - All RelationToMeal values round-trip correctly
+   - All GlucoseMealType values round-trip correctly
+   - All SpecimenSource values round-trip correctly
+   - Run: `./gradlew test --tests "com.healthhelper.app.data.repository.BloodGlucoseRecordMapperTest"`
+
+2. **GREEN** — Create mapper with top-level functions (same pattern as `BloodPressureRecordMapper.kt`):
+   - `fun mapToBloodGlucoseRecord(reading: GlucoseReading): BloodGlucoseRecord`
+   - `fun mapToGlucoseReading(record: BloodGlucoseRecord): GlucoseReading`
+   - Map each enum with `when` statements
+
+3. **REFACTOR** — Ensure exhaustive `when` (no `else` branches for domain enums to catch missing cases at compile time).
+
+**Defensive Requirements:**
+- HC record `level` uses `BloodGlucose.millimolesPerLiter()` — value must already be in mmol/L
+- Reverse mapping from HC uses `else -> UNKNOWN` for HC int constants (forward-compatible)
+- `Metadata.manualEntry()` factory — NOT the constructor (CLAUDE.md gotcha)
+
+**Notes:**
+- Reference: `app/src/main/kotlin/com/healthhelper/app/data/repository/BloodPressureRecordMapper.kt`
+
+---
+
+### Task 8: HealthConnectBloodGlucoseRepository
+
+**Issue:** HEA-152
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodGlucoseRepository.kt` (create)
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodGlucoseRepositoryTest.kt` (create)
+
+**TDD Steps:**
+
+1. **RED** — Write tests:
+   - `writeBloodGlucoseRecord()`:
+     - Success: calls `insertRecords`, returns `true`
+     - HC client null: returns `false`, logs warning
+     - TimeoutCancellationException: returns `false`, logs error
+     - SecurityException (permission denied): returns `false`, logs error
+     - Generic exception: returns `false`, logs error
+     - CancellationException: rethrown (not caught)
+   - `getLastReading()`:
+     - Returns most recent record from last 30 days
+     - Returns `null` when no records found
+     - HC client null: returns `null`
+     - TimeoutCancellationException: returns `null`
+     - SecurityException: returns `null`
+     - Generic exception: returns `null`
+     - CancellationException: rethrown
+   - Run: `./gradlew test --tests "com.healthhelper.app.data.repository.HealthConnectBloodGlucoseRepositoryTest"`
+
+2. **GREEN** — Create implementation following `HealthConnectBloodPressureRepository` exactly:
+   - Constructor: `@Inject constructor(private val healthConnectClient: HealthConnectClient?)`
+   - 10-second timeout via `withTimeout(10_000L)` on all HC calls
+   - Use `BloodGlucoseRecord::class` for `ReadRecordsRequest`
+   - Use mapper functions for domain/HC conversion
+   - Timber logging at same granularity as BP repository
+
+3. **REFACTOR** — Ensure consistent logging messages.
+
+**Defensive Requirements:**
+- 10-second timeout on all Health Connect operations
+- Null check on `healthConnectClient` before any operation
+- CancellationException rethrown (coroutine contract)
+- SecurityException caught separately (permission denial)
+- TimeoutCancellationException caught separately (timeout)
+
+**Notes:**
+- Reference: `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodPressureRepository.kt`
+- Reference: `app/src/test/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodPressureRepositoryTest.kt`
+
+---
+
+### Task 9: WriteGlucoseReadingUseCase and GetLastGlucoseReadingUseCase
+
+**Issue:** HEA-152
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/WriteGlucoseReadingUseCase.kt` (create)
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/GetLastGlucoseReadingUseCase.kt` (create)
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/WriteGlucoseReadingUseCaseTest.kt` (create)
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/GetLastGlucoseReadingUseCaseTest.kt` (create)
+
+**TDD Steps:**
+
+1. **RED** — Write tests:
+   - `WriteGlucoseReadingUseCase`:
+     - Delegates to `BloodGlucoseRepository.writeBloodGlucoseRecord()`
+     - Returns `true` on success
+     - Returns `false` on failure
+   - `GetLastGlucoseReadingUseCase`:
+     - Delegates to `BloodGlucoseRepository.getLastReading()`
+     - Returns reading on success
+     - Returns `null` on exception (catches and logs)
+     - CancellationException rethrown
+   - Run: `./gradlew test --tests "com.healthhelper.app.domain.usecase.WriteGlucoseReadingUseCaseTest" --tests "com.healthhelper.app.domain.usecase.GetLastGlucoseReadingUseCaseTest"`
+
+2. **GREEN** — Create use cases:
+   - `WriteGlucoseReadingUseCase`: simple delegation, `@Inject constructor`
+   - `GetLastGlucoseReadingUseCase`: try-catch with Timber logging, `@Inject constructor`
+
+3. **REFACTOR** — Verify pattern matches BP use cases.
+
+**Notes:**
+- Reference: `app/src/main/kotlin/com/healthhelper/app/domain/usecase/WriteBloodPressureReadingUseCase.kt`
+- Reference: `app/src/main/kotlin/com/healthhelper/app/domain/usecase/GetLastBloodPressureReadingUseCase.kt`
+- Domain layer use cases are pure Kotlin — no Android imports except Timber (which is already used in `GetLastBloodPressureReadingUseCase`)
+
+---
+
+### Task 10: AndroidManifest.xml permissions and Hilt bindings
+
+**Issue:** HEA-152
+**Files:**
+- `app/src/main/AndroidManifest.xml` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt` (modify)
+
+**TDD Steps:**
+
+1. **RED** — No unit test for manifest; verified by build. For Hilt, add test:
+   - Verify `provideBloodGlucoseRepository()` returns `HealthConnectBloodGlucoseRepository` instance
+   - Run: `./gradlew test --tests "com.healthhelper.app.di.AppModuleTest"`
+
+2. **GREEN** —
+   - Add to `AndroidManifest.xml`:
+     - `<uses-permission android:name="android.permission.health.WRITE_BLOOD_GLUCOSE" />`
+     - `<uses-permission android:name="android.permission.health.READ_BLOOD_GLUCOSE" />`
+   - Add to `AppModule.kt`:
+     - `provideBloodGlucoseRepository(healthConnectClient: HealthConnectClient?): BloodGlucoseRepository` returning `HealthConnectBloodGlucoseRepository(healthConnectClient)`
+
+3. **REFACTOR** — Keep permissions grouped with existing Health Connect permissions in manifest.
+
+**Notes:**
+- Reference: `app/src/main/AndroidManifest.xml` — existing WRITE_BLOOD_PRESSURE and READ_BLOOD_PRESSURE permissions
+- Reference: `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt:80-82` for `provideBloodPressureRepository` pattern
+
+---
+
+### Task 11: GlucoseConfirmationViewModel
+
+**Issue:** HEA-153
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/GlucoseConfirmationViewModel.kt` (create)
+- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/GlucoseConfirmationViewModelTest.kt` (create)
+
+**TDD Steps:**
+
+1. **RED** — Write tests:
+   - **Initial state**: ViewModel initializes with `valueMmolL` and `detectedUnit` from SavedStateHandle; if detectedUnit is MG_DL, converts value to mmol/L for display; shows both units
+   - **Dual-unit display**: When value is 5.6 mmol/L, `displayMgDl` shows "101"
+   - **Value editing**: `updateValue("6.0")` updates both mmol/L and mg/dL displays; invalid input (empty, non-numeric) disables save
+   - **Validation**: Value outside 1.0-40.0 mmol/L disables save with validation error message
+   - **Dropdown updates**: `updateRelationToMeal()`, `updateGlucoseMealType()`, `updateSpecimenSource()` update state
+   - **Conditional meal type**: `mealTypeVisible` is `true` only when relationToMeal is BEFORE_MEAL or AFTER_MEAL
+   - **Save success**: Calls `WriteGlucoseReadingUseCase`, on success emits navigation event with snackbar message "5.6 mmol/L saved"
+   - **Save failure**: On use case returning `false`, shows error in UI state
+   - **Save guard**: Second `save()` call while first is in-flight is ignored (isSaving check)
+   - **Cancellation**: Previous save job cancelled before new one starts
+   - **Error path**: Exception during save caught, shows generic error, logs via Timber
+   - Run: `./gradlew test --tests "com.healthhelper.app.presentation.viewmodel.GlucoseConfirmationViewModelTest"`
+
+2. **GREEN** — Create ViewModel:
+   - `GlucoseConfirmationUiState` data class: `valueMmolL: String`, `displayMgDl: String`, `detectedUnit: GlucoseUnit`, `originalValue: String` (for "Converted from X mg/dL" note), `relationToMeal`, `glucoseMealType`, `specimenSource`, `mealTypeVisible: Boolean`, `isSaveEnabled: Boolean`, `isSaving: Boolean`, `error: String?`, `validationError: String?`
+   - SavedStateHandle args: `value` (Float), `unit` (String), `detectedUnit` (String)
+   - Init: parse value from SavedStateHandle; if unit is "mg/dL", convert to mmol/L using `/ 18.018`; compute displayMgDl
+   - Methods: `updateValue()`, `updateRelationToMeal()`, `updateGlucoseMealType()`, `updateSpecimenSource()`, `save()`
+   - `navigateHome: SharedFlow<String>` for navigation event (same pattern as BpConfirmationViewModel)
+   - Private `validate()` companion function
+
+3. **REFACTOR** — Extract validation constants.
+
+**Defensive Requirements:**
+- `savingJob?.cancel()` before launching new save (cancellation of in-flight work)
+- CancellationException rethrown in save coroutine
+- Save button disabled during save (isSaving guard + isSaveEnabled)
+- Generic error message shown to user; raw exception logged via Timber only
+
+**Notes:**
+- Reference: `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/BpConfirmationViewModel.kt`
+- Reference: `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/BpConfirmationViewModelTest.kt`
+
+---
+
+### Task 12: GlucoseConfirmationScreen composable
+
+**Issue:** HEA-153
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/GlucoseConfirmationScreen.kt` (create)
+
+**TDD Steps:**
+
+1. **RED** — No compose test (UI tests are instrumented); verify by build and manual testing.
+
+2. **GREEN** — Create composable following `BpConfirmationScreen` pattern:
+   - `@Composable fun GlucoseConfirmationScreen(onNavigateHome: (String) -> Unit, onCancel: () -> Unit)`
+   - `hiltViewModel<GlucoseConfirmationViewModel>()`
+   - Display glucose value prominently in both units (e.g., "5.6 mmol/L (101 mg/dL)")
+   - If detected unit was mg/dL, show conversion note "Converted from 101 mg/dL"
+   - Editable text field for mmol/L value (mg/dL updates reactively)
+   - `ExposedDropdownMenuBox` for Relation to Meal
+   - `ExposedDropdownMenuBox` for Meal Type (conditionally visible)
+   - `ExposedDropdownMenuBox` for Specimen Source
+   - Timestamp display (non-editable, shows current time)
+   - Save button (enabled when `isSaveEnabled`, shows loading when `isSaving`)
+   - Retake button (calls `onCancel`)
+   - Error text when `error` or `validationError` is non-null
+   - `LaunchedEffect` collecting `navigateHome` SharedFlow to trigger navigation
+
+3. **REFACTOR** — Extract dropdown composable if code is repetitive.
+
+**Notes:**
+- Reference: `app/src/main/kotlin/com/healthhelper/app/presentation/ui/BpConfirmationScreen.kt`
+- Use Material 3 components consistent with existing screens
+
+---
+
+### Task 13: GlucoseCaptureViewModel
+
+**Issue:** HEA-154
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/GlucoseCaptureViewModel.kt` (create)
+- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/GlucoseCaptureViewModelTest.kt` (create)
+
+**TDD Steps:**
+
+1. **RED** — Write tests:
+   - **Happy path**: `onPhotoCaptured()` calls `parseGlucoseImage()`, on Success emits `navigateToConfirmation` with value, unit, and detectedUnit
+   - **Parse error**: On `GlucoseParseResult.Error`, emits `navigateBackWithError` with "Could not read glucose from image. Please retake."
+   - **Missing API key**: Empty anthropic key emits error "Configure Anthropic API key in Settings"
+   - **Image preparation failure**: `prepareImageForApi` returns null -> error
+   - **Processing guard**: Second call while processing is ignored
+   - **Cancellation**: Previous processing job cancelled before new one starts
+   - **Exception handling**: Generic exception caught, logged, emits error
+   - **CancellationException**: Rethrown, not caught
+   - Run: `./gradlew test --tests "com.healthhelper.app.presentation.viewmodel.GlucoseCaptureViewModelTest"`
+
+2. **GREEN** — Create ViewModel cloning `CameraCaptureViewModel` pattern:
+   - Same `CameraCaptureUiState` (or a `GlucoseCaptureUiState` if cleaner)
+   - Inject: `AnthropicApiClient`, `SettingsRepository`, `SavedStateHandle`, `@DefaultDispatcher`
+   - `onPhotoCaptured(imageBytes)`: check not processing, cancel previous job, get API key, prepare image, call `parseGlucoseImage()`, navigate on result
+   - `onCaptureError(message)`: emit error
+   - `navigateToConfirmation: SharedFlow<Triple<Double, String, String>>` (value, unit, detectedUnit)
+   - `navigateBackWithError: SharedFlow<String>`
+   - Reuse `prepareImageForApi()` — either call via shared utility or duplicate the private method
+
+3. **REFACTOR** — Consider extracting `prepareImageForApi()` to a shared utility class if the duplication is too high. Otherwise, keep it in each ViewModel for simplicity.
+
+**Defensive Requirements:**
+- `processingJob?.cancel()` before launching new processing
+- CancellationException rethrown
+- API key check before making the API call
+- Image preparation failure handled gracefully
+- Generic error messages to user; raw exceptions logged via Timber
+
+**Notes:**
+- Reference: `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/CameraCaptureViewModel.kt`
+- Reference: `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/CameraCaptureViewModelTest.kt`
+
+---
+
+### Task 14: GlucoseCaptureScreen composable
+
+**Issue:** HEA-154
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/GlucoseCaptureScreen.kt` (create)
+
+**TDD Steps:**
+
+1. **RED** — No compose test; verify by build and manual testing.
+
+2. **GREEN** — Create composable cloning `CameraCaptureScreen` pattern:
+   - `@Composable fun GlucoseCaptureScreen(onNavigateToConfirmation: (Double, String, String) -> Unit, onNavigateBack: () -> Unit, onNavigateBackWithError: (String) -> Unit)`
+   - `hiltViewModel<GlucoseCaptureViewModel>()`
+   - System camera via `ActivityResultContracts.TakePicture()` with FileProvider temp file
+   - Processing overlay (loading indicator) during API call
+   - Collect `navigateToConfirmation` and `navigateBackWithError` SharedFlows
+   - Auto-launch camera on screen entry (same as BP camera flow)
+
+3. **REFACTOR** — Ensure consistent with `CameraCaptureScreen` UX.
+
+**Notes:**
+- Reference: `app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt`
+
+---
+
+### Task 15: Navigation routes and SyncScreen integration
+
+**Issue:** HEA-154
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/AppNavigation.kt` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SyncScreen.kt` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt` (modify)
+
+**TDD Steps:**
+
+1. **RED** — Write/modify tests:
+   - `SyncViewModelTest`: Test that `lastGlucoseReading`, `lastGlucoseReadingDisplay`, and `lastGlucoseReadingTime` are populated from `GetLastGlucoseReadingUseCase`
+   - `SyncViewModelTest`: Test `refreshLastGlucoseReading()` updates state
+   - `SyncViewModelTest`: Test that `REQUIRED_HC_PERMISSIONS` now includes `WRITE_BLOOD_GLUCOSE` and `READ_BLOOD_GLUCOSE`
+   - Run: `./gradlew test --tests "com.healthhelper.app.presentation.viewmodel.SyncViewModelTest"`
+
+2. **GREEN** —
+   - **SyncViewModel**:
+     - Add `GetLastGlucoseReadingUseCase` injection
+     - Add to `SyncUiState`: `lastGlucoseReading: GlucoseReading?`, `lastGlucoseReadingDisplay: String`, `lastGlucoseReadingTime: String`
+     - Add `loadLastGlucoseReading()` private method (same pattern as `loadLastBpReading()`)
+     - Call in `init` block
+     - Add `refreshLastGlucoseReading()` public method
+     - Add `BloodGlucoseRecord` permissions to `REQUIRED_HC_PERMISSIONS`
+     - Refresh glucose reading time in the periodic time refresh coroutine
+   - **AppNavigation**:
+     - Add `camera-glucose` route -> `GlucoseCaptureScreen`
+     - Add `glucose-confirm/{value}/{unit}/{detectedUnit}` route -> `GlucoseConfirmationScreen`
+     - Add `onNavigateToGlucoseCamera` callback from SyncScreen
+     - Add `glucose_scan_error` savedStateHandle pattern (same as `bp_scan_error`)
+   - **SyncScreen**:
+     - Add `onNavigateToGlucoseCamera` parameter
+     - Add "Log Glucose" button (same pattern as "Log Blood Pressure")
+     - Add last glucose reading display section (value in mmol/L + relative time)
+     - Add `glucoseScanError` parameter + handling (same pattern as `bpScanError`)
+
+3. **REFACTOR** — Keep SyncScreen layout clean. Group BP and glucose reading displays logically.
+
+**Defensive Requirements:**
+- Navigation argument encoding: value is Float, unit and detectedUnit are Strings — URL-encode if needed
+- `refreshLastGlucoseReading()` called when returning from glucose confirmation (same as BP flow)
+- Health Connect permission set expanded to include glucose — must update the permission request flow
+
+**Notes:**
+- Reference: `app/src/main/kotlin/com/healthhelper/app/presentation/ui/AppNavigation.kt` for route pattern
+- Reference: `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SyncScreen.kt` for home screen layout
+- Reference: `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt:196-216` for `loadLastBpReading()` pattern
+
+---
+
+### Task 16: Integration and verification
+
+**Issue:** HEA-150, HEA-151, HEA-152, HEA-153, HEA-154
+**Files:**
+- All files from previous tasks
+
+**Steps:**
+
+1. Run full test suite: `./gradlew test`
+2. Build check: `./gradlew assembleDebug`
+3. Manual verification:
+   - [ ] "Log Glucose" button appears on home screen
+   - [ ] Tapping "Log Glucose" launches system camera
+   - [ ] Photographing a glucometer screen extracts the reading
+   - [ ] Confirmation screen shows dual-unit display (mmol/L and mg/dL)
+   - [ ] Editing the value updates both units in real time
+   - [ ] Meal Type dropdown only shows when Relation to Meal is Before/After Meal
+   - [ ] Save writes to Health Connect successfully
+   - [ ] Snackbar shows "X.X mmol/L saved" after save
+   - [ ] Last glucose reading displays on home screen with relative time
+   - [ ] Error cases: blurry photo shows error, retake option works
+   - [ ] Health Connect permissions requested if not granted
+
+## MCP Usage During Implementation
+
+| MCP Server | Tool | Purpose |
+|------------|------|---------|
+| Linear | `save_issue` | Move issues to "In Progress" when starting, "Done" when complete |
+
+## Error Handling
+
+| Error Scenario | Expected Behavior | Test Coverage |
+|---------------|-------------------|---------------|
+| Blurry/unreadable photo | GlucoseParseResult.Error -> "Could not read glucose from image" | Unit test (Task 5) |
+| Glucose value out of range | GlucoseReading init throws IllegalArgumentException | Unit test (Task 3) |
+| Health Connect unavailable | Repository returns false/null | Unit test (Task 8) |
+| Health Connect timeout | Returns false/null after 10s | Unit test (Task 8) |
+| Permission denied | SecurityException caught, returns false/null | Unit test (Task 8) |
+| Missing API key | Error message before API call | Unit test (Task 13) |
+| HTTP 401 (auth failure) | "Authentication failed" error | Unit test (Task 5) |
+| HTTP 429 (rate limit) | "Rate limited" error | Unit test (Task 5) |
+| Network failure | "Failed to analyze image" error | Unit test (Task 5) |
+| Invalid value on confirmation | Save disabled with validation message | Unit test (Task 11) |
+
+## Risks & Open Questions
+
+- [ ] Risk: `prepareImageForApi()` is duplicated between `CameraCaptureViewModel` and `GlucoseCaptureViewModel`. Consider extracting to a shared utility after both are working, but don't block on this.
+- [ ] Risk: Health Connect 1.1.0 API surface for `BloodGlucoseRecord` — verify `SPECIMEN_SOURCE_*`, `RELATION_TO_MEAL_*`, and `MEAL_TYPE_*` constants are available. If not, fall back to available constants only.
+
+## Scope Boundaries
+
+**In Scope:**
+- GlucoseReading domain model with dual-unit support
+- Haiku glucose image parsing via tool_use API
+- Health Connect BloodGlucoseRecord write/read
+- Glucose confirmation screen with all metadata fields
+- Glucose capture flow with camera integration
+- Navigation routes and home screen integration
+- Health Connect permissions for glucose
+
+**Out of Scope:**
+- Glucose history/trends screen
+- Glucose reading editing after save
+- Share intent support for glucose (only BP has this)
+- Measurement Reminders (separate roadmap item)
+- Timestamp editing on confirmation screen (displays current time, not editable — can be added later)
