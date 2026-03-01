@@ -47,10 +47,11 @@ class FoodScannerApiClient @Inject constructor(
                 val message = when (status) {
                     401 -> "Authentication failed"
                     429 -> "Rate limited"
+                    in 500..599 -> "Server unavailable"
                     else -> "HTTP error $status"
                 }
                 when (status) {
-                    401, 429 -> Timber.w("getFoodLog(%s) HTTP error: %d", date, status)
+                    401, 429, in 500..599 -> Timber.w("getFoodLog(%s) HTTP error: %d", date, status)
                     else -> Timber.e("getFoodLog(%s) HTTP error: %d", date, status)
                 }
                 return Result.failure(Exception(message))

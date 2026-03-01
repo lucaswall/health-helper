@@ -9,13 +9,14 @@ import com.healthhelper.app.domain.repository.FoodLogRepository
 import com.healthhelper.app.domain.repository.NutritionRepository
 import com.healthhelper.app.domain.repository.SettingsRepository
 import kotlin.coroutines.cancellation.CancellationException
+import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import timber.log.Timber
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
-import kotlin.math.roundToInt
 import javax.inject.Inject
 
 class SyncNutritionUseCase @Inject constructor(
@@ -69,6 +70,9 @@ class SyncNutritionUseCase @Inject constructor(
         val pastDateResults = mutableMapOf<LocalDate, Boolean>()
         // Accumulate synced entries with their date for meal summary
         val syncedEntries = mutableListOf<Pair<String, FoodLogEntry>>()
+        // Consecutive failure tracking for abort/backoff
+        var consecutiveFailures = 0
+        var currentDelay = 500L
 
         for (date in dates) {
             val dateStr = date.format(DateTimeFormatter.ISO_LOCAL_DATE)
@@ -98,13 +102,29 @@ class SyncNutritionUseCase @Inject constructor(
                     }
                 }.let {}
                 successfulDays++
+                consecutiveFailures = 0
+                currentDelay = 500L
                 if (date != today) {
                     pastDateResults[date] = true
                 }
             } else {
                 Timber.w("SyncNutrition: %s → API error: %s", dateStr, result.exceptionOrNull()?.message)
+                consecutiveFailures++
                 if (date != today) {
                     pastDateResults[date] = false
+                }
+                if (consecutiveFailures >= 5) {
+                    Timber.w("SyncNutrition: aborting after %d consecutive API failures", consecutiveFailures)
+                    completedDays++
+                    onProgress(
+                        SyncProgress(
+                            currentDate = dateStr,
+                            totalDays = totalDays,
+                            completedDays = completedDays,
+                            recordsSynced = totalRecordsSynced,
+                        ),
+                    )
+                    break
                 }
             }
 
@@ -118,9 +138,12 @@ class SyncNutritionUseCase @Inject constructor(
                 ),
             )
 
-            // Rate limit: 500ms between API calls
+            // Rate limit with exponential backoff on consecutive failures
             if (completedDays < totalDays) {
-                delay(500)
+                delay(currentDelay)
+                if (consecutiveFailures > 0) {
+                    currentDelay = min(currentDelay * 2, 8000L)
+                }
             }
         }
 

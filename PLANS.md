@@ -88,3 +88,31 @@ After fix is merged and released, resolve Sentry issue [HEALTH-HELPER-5](https:/
 - The Sentry issue is on release `v1.1.0+4` but current is `v1.2.0`. The code path is unchanged — the fix applies to the current codebase.
 - The exponential backoff only affects the inter-request delay within a single sync invocation. WorkManager's own retry policy handles retrying the entire sync worker.
 - Seer rated this issue as `super_low` actionability because the 503 is a server-side problem — but the app-side improvements (log levels + backoff) are still valuable.
+
+---
+
+## Iteration 1
+
+**Implemented:** 2026-03-01
+**Method:** Single-agent (effort score 3, below worker threshold)
+
+### Tasks Completed This Iteration
+- Step 1: Log 5xx errors at warning level — added `in 500..599` case to `FoodScannerApiClient` HTTP error handler, message "Server unavailable", log level `Timber.w`
+- Step 2: Add exponential backoff and abort — consecutive failure counter with reset on success, abort at 5 failures, exponential delay (500ms→1s→2s→4s→8s cap)
+- Step 3: Verify — all tests pass, build succeeds
+
+### Files Modified
+- `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt` — added 5xx case to message/log-level `when` blocks
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt` — added consecutive failure tracking, abort logic, exponential backoff
+- `app/src/test/kotlin/com/healthhelper/app/data/api/FoodScannerApiClientTest.kt` — 2 new tests (503/500 → "Server unavailable")
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCaseTest.kt` — 6 new tests (abort, reset, intermittent, error/partial results, single failure)
+
+### Linear Updates
+- HEA-157: Todo → In Progress → Review
+
+### Pre-commit Verification
+- bug-hunter: 1 medium (backoff ordering — false positive, matches plan spec), 1 low (import ordering — fixed)
+- verifier: All tests pass, zero warnings
+
+### Continuation Status
+Steps 1-3 completed. Step 4 (close Sentry issue HEALTH-HELPER-5) deferred until fix is merged and released.

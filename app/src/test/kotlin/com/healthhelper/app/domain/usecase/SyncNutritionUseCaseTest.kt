@@ -616,6 +616,134 @@ class SyncNutritionUseCaseTest {
         coVerify(exactly = 0) { settingsRepository.setLastSyncedMeals(any()) }
     }
 
+    // --- Consecutive failure abort + backoff tests ---
+
+    @Test
+    @DisplayName("5 consecutive API failures aborts the sync loop — getFoodLog called exactly 5 times")
+    fun fiveConsecutiveFailuresAborts() = runTest {
+        // Setup: 10 dates to sync (today + 9 past days), all fail
+        val today = LocalDate.now()
+        configureSettings(lastSyncedDate = today.minusDays(10).format(DateTimeFormatter.ISO_LOCAL_DATE))
+
+        coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } returns Result.failure(Exception("503"))
+
+        useCase.invoke()
+
+        // Should abort after 5 consecutive failures, not call all 10
+        coVerify(exactly = 5) { foodLogRepository.getFoodLog(any(), any(), any()) }
+    }
+
+    @Test
+    @DisplayName("success after 4 consecutive failures resets counter — sync continues through all dates")
+    fun successAfter4FailuresResets() = runTest {
+        val today = LocalDate.now()
+        // 6 dates: today + 5 past days
+        configureSettings(lastSyncedDate = today.minusDays(6).format(DateTimeFormatter.ISO_LOCAL_DATE))
+
+        var callCount = 0
+        coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } answers {
+            callCount++
+            // Fail first 4, succeed on 5th, then succeed remaining
+            if (callCount in 1..4) {
+                Result.failure(Exception("503"))
+            } else {
+                Result.success(FoodLogResult.Data(listOf(testEntry)))
+            }
+        }
+        coEvery { nutritionRepository.writeNutritionRecords(any(), any()) } returns true
+
+        useCase.invoke()
+
+        // All 6 dates should be processed (4 fail + success resets counter + remaining succeed)
+        coVerify(exactly = 6) { foodLogRepository.getFoodLog(any(), any(), any()) }
+    }
+
+    @Test
+    @DisplayName("intermittent failures (fail, succeed, fail, succeed) never trigger abort")
+    fun intermittentFailuresNeverAbort() = runTest {
+        val today = LocalDate.now()
+        // 8 dates: today + 7 past days
+        configureSettings(lastSyncedDate = today.minusDays(8).format(DateTimeFormatter.ISO_LOCAL_DATE))
+
+        var callCount = 0
+        coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } answers {
+            callCount++
+            if (callCount % 2 == 1) {
+                Result.failure(Exception("transient"))
+            } else {
+                Result.success(FoodLogResult.Data(listOf(testEntry)))
+            }
+        }
+        coEvery { nutritionRepository.writeNutritionRecords(any(), any()) } returns true
+
+        useCase.invoke()
+
+        // All 8 dates should be processed — alternating never reaches 5 consecutive
+        coVerify(exactly = 8) { foodLogRepository.getFoodLog(any(), any(), any()) }
+    }
+
+    @Test
+    @DisplayName("abort with no prior successes returns SyncResult.Error")
+    fun abortWithNoSuccessesReturnsError() = runTest {
+        val today = LocalDate.now()
+        configureSettings(lastSyncedDate = today.minusDays(10).format(DateTimeFormatter.ISO_LOCAL_DATE))
+
+        coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } returns Result.failure(Exception("503"))
+
+        val result = useCase.invoke()
+
+        assertTrue(result is SyncResult.Error)
+    }
+
+    @Test
+    @DisplayName("abort with some prior successes returns SyncResult.Success with partial count")
+    fun abortWithSomeSuccessesReturnsPartialSuccess() = runTest {
+        val today = LocalDate.now()
+        // 10 dates: today + 9 past days
+        configureSettings(lastSyncedDate = today.minusDays(10).format(DateTimeFormatter.ISO_LOCAL_DATE))
+
+        var callCount = 0
+        coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } answers {
+            callCount++
+            // First 2 succeed, then 5 consecutive failures → abort
+            if (callCount <= 2) {
+                Result.success(FoodLogResult.Data(listOf(testEntry)))
+            } else {
+                Result.failure(Exception("503"))
+            }
+        }
+        coEvery { nutritionRepository.writeNutritionRecords(any(), any()) } returns true
+
+        val result = useCase.invoke()
+
+        assertTrue(result is SyncResult.Success)
+        assertEquals(2, (result as SyncResult.Success).recordsSynced)
+        // 2 succeed + 5 fail = 7 calls total
+        coVerify(exactly = 7) { foodLogRepository.getFoodLog(any(), any(), any()) }
+    }
+
+    @Test
+    @DisplayName("existing apiErrorContinues test still passes — single failure does not abort")
+    fun singleFailureDoesNotAbort() = runTest {
+        // This is conceptually the same as apiErrorContinues but explicit about abort
+        val today = LocalDate.now()
+        val yesterday = today.minusDays(1)
+        configureSettings(lastSyncedDate = yesterday.minusDays(1).format(DateTimeFormatter.ISO_LOCAL_DATE))
+
+        val todayStr = today.format(DateTimeFormatter.ISO_LOCAL_DATE)
+        val yesterdayStr = yesterday.format(DateTimeFormatter.ISO_LOCAL_DATE)
+
+        coEvery { foodLogRepository.getFoodLog(any(), any(), todayStr) } returns Result.failure(Exception("Network error"))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), yesterdayStr) } returns Result.success(FoodLogResult.Data(listOf(testEntry)))
+        coEvery { nutritionRepository.writeNutritionRecords(any(), any()) } returns true
+
+        val result = useCase.invoke()
+
+        // Both dates should be called — single failure doesn't abort
+        coVerify(exactly = 2) { foodLogRepository.getFoodLog(any(), any(), any()) }
+        assertTrue(result is SyncResult.Success)
+    }
+
     @Test
     @DisplayName("some Data with entries, others NotModified: setLastSyncedMeals IS called with Data entries only")
     fun someDataSomeNotModifiedCallsSetMeals() = runTest {

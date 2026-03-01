@@ -395,4 +395,30 @@ class FoodScannerApiClientTest {
         assertTrue(result.isSuccess)
         assertNull(result.getOrThrow().etag)
     }
+
+    // --- 5xx log level tests ---
+
+    @Test
+    @DisplayName("503 response returns failure with 'Server unavailable' message")
+    fun serverUnavailable503() = runTest {
+        val engine = MockEngine { respondError(HttpStatusCode.ServiceUnavailable) }
+        val client = createClient(engine)
+
+        val result = client.getFoodLog("https://food.example.com", "fsk_test", "2026-02-27")
+
+        assertTrue(result.isFailure)
+        assertEquals("Server unavailable", result.exceptionOrNull()?.message)
+    }
+
+    @Test
+    @DisplayName("500 response returns failure with 'Server unavailable' message")
+    fun serverError500() = runTest {
+        val engine = MockEngine { respondError(HttpStatusCode.InternalServerError) }
+        val client = createClient(engine)
+
+        val result = client.getFoodLog("https://food.example.com", "fsk_test", "2026-02-27")
+
+        assertTrue(result.isFailure)
+        assertEquals("Server unavailable", result.exceptionOrNull()?.message)
+    }
 }
