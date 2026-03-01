@@ -1,7 +1,7 @@
 ---
 name: plan-review-implementation
 description: QA review of completed implementation using an agent team with 3 domain-specialized reviewers (security, reliability, quality). Use after plan-implement finishes, or when user says "review the implementation". Moves Linear issues Review→Merge. Creates new issues in Todo for bugs found. Falls back to single-agent mode if agent teams unavailable.
-allowed-tools: Read, Edit, Write, Glob, Grep, Bash, Task, TeamCreate, TeamDelete, SendMessage, TaskCreate, TaskUpdate, TaskList, TaskGet, mcp__linear__list_teams, mcp__linear__list_issues, mcp__linear__get_issue, mcp__linear__create_issue, mcp__linear__update_issue, mcp__linear__list_issue_labels, mcp__linear__list_issue_statuses
+allowed-tools: Read, Edit, Write, Glob, Grep, Bash, Task, TeamCreate, TeamDelete, SendMessage, TaskCreate, TaskUpdate, TaskList, TaskGet, mcp__linear__list_teams, mcp__linear__list_issues, mcp__linear__get_issue, mcp__linear__create_issue, mcp__linear__update_issue, mcp__linear__list_issue_labels, mcp__linear__list_issue_statuses, mcp__sentry__update_issue, mcp__sentry__find_organizations, mcp__sentry__find_projects, mcp__sentry__search_issues
 disable-model-invocation: true
 ---
 
@@ -373,11 +373,18 @@ If there were no findings at all (clean review), a brief "No issues found" summa
 All tasks implemented and reviewed successfully. All Linear issues moved to Merge.
 ```
 
+**Then resolve Sentry issues:**
+1. Check PLANS.md header for a `**Sentry:**` or `**Sentry Issues:**` field
+2. If Sentry issue URLs/IDs are listed, resolve them using `mcp__sentry__update_issue`:
+   - Use ToolSearch to load `mcp__sentry__update_issue` if not already loaded
+   - For each Sentry issue, call `mcp__sentry__update_issue` with `status: "resolved"`
+   - Log which issues were resolved in the termination output
+
 **Then create the PR:**
 1. Commit any uncommitted changes
 2. Push to remote
 3. Create PR using the `pr-creator` subagent
-4. Inform user with PR URL
+4. Inform user with PR URL and list of Sentry issues resolved (if any)
 
 ## Fallback: Single-Agent Mode
 
