@@ -30,6 +30,7 @@ $ARGUMENTS should describe what to investigate:
 **IMPORTANT: Do NOT hardcode MCP names or folder paths.** Always read CLAUDE.md to discover:
 
 1. **Available MCP servers** - Look for "MCP SERVERS", "MCPs", or similar sections to find:
+   - **Sentry MCP** — Always available for crash/error investigation (use ToolSearch to load tools)
    - Deployment MCPs for logs and service status (Firebase, Play Console, etc.)
    - Any other configured MCPs
 
@@ -56,13 +57,39 @@ Based on $ARGUMENTS, determine what you're investigating:
 | Category | Indicators | Primary Tools |
 |----------|-----------|---------------|
 | **Build** | Compilation errors, Gradle failures, dependency issues | Codebase, Build output |
-| **Runtime** | Crashes, ANRs, unexpected behavior | Codebase, Logcat output |
+| **Runtime** | Crashes, ANRs, unexpected behavior | Sentry, Codebase, Logcat output |
 | **Data** | Wrong values, missing records, unexpected state | Codebase, Database queries |
-| **Performance** | Slow rendering, memory issues, jank | Codebase, Profiler output |
+| **Performance** | Slow rendering, memory issues, jank | Sentry, Codebase, Profiler output |
 | **Auth/Permissions** | Login failures, permission errors, Health Connect access | Codebase, Manifest |
-| **General** | Unknown cause, need exploration | All available tools |
+| **General** | Unknown cause, need exploration | Sentry, All available tools |
 
 ### Step 2: Gather Evidence
+
+**For Sentry (crashes, errors, performance):**
+
+The Sentry MCP is available for querying production crash data and error reports. Use ToolSearch to load Sentry tools before calling them. The organization slug and project slug can be discovered via `mcp__sentry__find_organizations` and `mcp__sentry__find_projects`.
+
+**When to use Sentry:**
+- User reports a crash or error happening in production
+- Investigating runtime exceptions, ANRs, or unhandled errors
+- Need crash frequency, affected user count, or error trends
+- User provides a Sentry issue URL or issue ID
+- Need stack traces from production (more reliable than local logcat)
+
+**Sentry investigation workflow:**
+1. **Find the org/project** — Use `mcp__sentry__find_organizations` then `mcp__sentry__find_projects` to get slugs
+2. **Search for issues** — Use `mcp__sentry__search_issues` with natural language (e.g., "unresolved crashes from last week", "NullPointerException errors")
+3. **Get issue details** — Use `mcp__sentry__get_issue_details` with the issue ID or URL for full stack traces and metadata
+4. **Analyze root cause** — Use `mcp__sentry__analyze_issue_with_seer` for AI-powered root cause analysis
+5. **Search events** — Use `mcp__sentry__search_events` for counts, aggregations, or individual error events
+6. **Filter issue events** — Use `mcp__sentry__search_issue_events` to filter events within an issue by time, environment, release, or user
+7. **Check distributions** — Use `mcp__sentry__get_issue_tag_values` to see how an issue is distributed across devices, OS versions, releases, etc.
+
+**Tips:**
+- Start with `search_issues` for broad exploration, `get_issue_details` when you have a specific issue
+- Use `search_events` for "how many errors today?" style questions
+- Cross-reference Sentry stack traces with local codebase to identify the exact code path
+- Check tag distributions (device, OS, release) to understand if the issue is device-specific
 
 **For Codebase Analysis:**
 - Use Grep/Glob for specific searches
@@ -202,6 +229,8 @@ When investigating build issues:
 | $ARGUMENTS is vague | Ask for more specific details |
 | CLAUDE.md doesn't exist | Continue with codebase-only investigation |
 | MCP not available | Skip that MCP, note in report what couldn't be checked |
+| Sentry org/project not found | Note in report; continue with codebase and ADB investigation |
+| Sentry has no matching issues | Note "no Sentry issues found" in report; may mean issue is not in production yet |
 | File/resource not found | Document in report (may be relevant) |
 | Cannot reproduce issue | Document steps taken, request more context |
 | Logs unavailable | Note in report, suggest alternative approaches |

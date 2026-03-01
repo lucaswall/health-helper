@@ -30,6 +30,10 @@ IMPORTANT — these cause build failures or subtle bugs if ignored:
 - **Health Connect rate limits** — use changelog sync, don't delete-and-rewrite records
 - All dependency versions managed in `gradle/libs.versions.toml`
 
+## Git
+
+- **No Co-Authored-By** — Never add `Co-Authored-By` trailers to commit messages, PR descriptions, or anywhere else
+
 ## Conventions
 
 - **Trailing commas**: on all multi-line parameter lists
