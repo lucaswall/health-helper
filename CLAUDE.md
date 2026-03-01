@@ -64,7 +64,7 @@ Tests: `app/src/test/` (unit), `app/src/androidTest/` (instrumented).
 
 | Field | Value |
 |---|---|
-| Team | HealthHelper |
+| Team | Health Helper |
 | Issue prefix | HEA-xxx |
 
 ## Skills
