@@ -4,88 +4,8 @@
 
 | Feature | Summary |
 |---------|---------|
-| [Blood Glucose Scanner](#blood-glucose-scanner) | Photograph a glucometer screen and write the reading to Health Connect |
 | [Measurement Reminders](#measurement-reminders) | Scheduled alarms to remind users to take glucose and blood pressure readings |
 
-
----
-
-## Blood Glucose Scanner
-
-### Problem
-
-Users with glucometers must manually type readings into health apps. The glucometer already displays the value on its screen, but there's no way to capture it without manual data entry. This friction leads to missed logs and incomplete glucose history.
-
-### Goal
-
-Let users photograph their glucometer screen and have the reading automatically extracted and written to Health Connect as a `BloodGlucoseRecord`, with optional metadata like meal context and specimen source.
-
-### Design
-
-#### Capture Flow
-
-1. User taps "Log Glucose" from the home screen.
-2. Camera opens in a simple viewfinder mode - no cropping or framing guides needed.
-3. User takes a photo of the glucometer display.
-4. Photo is sent to Claude Haiku with a prompt to extract the glucose value in mmol/L.
-5. Haiku returns the parsed value or an error if the screen is unreadable.
-
-#### Haiku Response Contract
-
-- **Success:** Returns a numeric value in mmol/L (e.g., `5.6`). If the device displays mg/dL, Haiku converts to mmol/L (divide by 18.018).
-- **Error:** Returns an error message explaining why the reading couldn't be extracted (blurry photo, no number visible, not a glucometer screen, etc.).
-- The app must validate the returned value is within a plausible physiological range (1.0-40.0 mmol/L). Values outside this range are treated as parse errors.
-
-#### Confirmation Screen
-
-After a successful parse, the user sees a confirmation screen with:
-
-- **Glucose value** (mmol/L) - displayed prominently, editable for manual correction.
-- **Relation to Meal** dropdown (optional): General, Fasting, Before Meal, After Meal, Unknown.
-- **Meal Type** dropdown (optional): Breakfast, Lunch, Dinner, Snack, Unknown. Only shown when Relation to Meal is Before Meal or After Meal.
-- **Specimen Source** dropdown (optional): Capillary Blood, Interstitial Fluid, Plasma, Serum, Tears, Whole Blood, Unknown.
-- **Timestamp** - defaults to now, editable.
-- **Save button** - writes to Health Connect.
-- **Retake button** - goes back to camera.
-
-#### Post-Save
-
-After saving, return to the home screen with a brief success snackbar showing the logged value.
-
-### Architecture
-
-- **Camera:** CameraX with a simple photo capture use case. No video, no continuous scanning. Store the captured image as a temporary file.
-- **AI parsing:** Call Claude Haiku via the Anthropic API with the photo and a system prompt instructing it to extract only the numeric glucose value in mmol/L. The prompt should handle both mmol/L and mg/dL displays.
-- **Health Connect record:** `BloodGlucoseRecord` with fields:
-  - `level`: `BloodGlucose.millimolesPerLiter(value)` (required)
-  - `specimenSource`: Maps to `SPECIMEN_SOURCE_CAPILLARY_BLOOD`, `SPECIMEN_SOURCE_INTERSTITIAL_FLUID`, `SPECIMEN_SOURCE_PLASMA`, `SPECIMEN_SOURCE_SERUM`, `SPECIMEN_SOURCE_TEARS`, `SPECIMEN_SOURCE_WHOLE_BLOOD`, or `SPECIMEN_SOURCE_UNKNOWN`
-  - `relationToMeal`: Maps to `RELATION_TO_MEAL_GENERAL`, `RELATION_TO_MEAL_FASTING`, `RELATION_TO_MEAL_BEFORE_MEAL`, `RELATION_TO_MEAL_AFTER_MEAL`, or `RELATION_TO_MEAL_UNKNOWN`
-  - `mealType`: Maps to `MEAL_TYPE_BREAKFAST`, `MEAL_TYPE_LUNCH`, `MEAL_TYPE_DINNER`, `MEAL_TYPE_SNACK`, or `MEAL_TYPE_UNKNOWN`
-  - `time`: User-selected Instant
-  - `zoneOffset`: Device's current zone offset
-  - `metadata`: `Metadata.manualEntry()` with clientRecordId
-- **Permissions:** `WRITE_BLOOD_GLUCOSE` added to AndroidManifest.xml
-- **Domain model:** `GlucoseReading` data class with the parsed value and optional metadata fields. Use case validates range and maps to HC record.
-
-### Edge Cases
-
-- Photo is too blurry or dark - Haiku returns error, user sees "Couldn't read the display" with option to retake.
-- Glucometer shows mg/dL instead of mmol/L - Haiku converts automatically; prompt explicitly covers both units.
-- Value outside physiological range (e.g., OCR misread "5.6" as "56") - app rejects and asks user to verify.
-- User edits the value on confirmation screen to something out of range - Save button disabled with validation message.
-- Health Connect unavailable or permission denied - show error, don't lose the parsed value (user can still see it).
-- Camera permission denied - explain why it's needed, link to app settings.
-
-### Implementation Order
-
-1. Camera integration (CameraX photo capture, temporary file storage)
-2. Haiku API client for image analysis (system prompt, response parsing, error handling)
-3. `GlucoseReading` domain model and `WriteGlucoseReadingUseCase`
-4. Health Connect `BloodGlucoseRecord` writing in repository layer
-5. Confirmation screen UI (value display, dropdowns, timestamp picker)
-6. Capture flow screen (camera viewfinder, loading state, error display)
-7. Navigation integration and home screen entry point
-8. AndroidManifest.xml permission additions
 
 ---
 
@@ -97,7 +17,7 @@ Glucose and blood pressure readings are most useful when taken consistently at s
 
 ### Prerequisites
 
-- [Blood Glucose Scanner](#blood-glucose-scanner) or Blood Pressure Scanner (at least one must exist for reminders to be useful)
+- Blood Glucose Scanner or Blood Pressure Scanner (at least one must exist for reminders to be useful)
 
 ### Goal
 
