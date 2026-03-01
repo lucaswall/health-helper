@@ -8,6 +8,8 @@ import com.healthhelper.app.data.api.dto.AnthropicMessageResponse
 import com.healthhelper.app.data.api.dto.AnthropicToolChoice
 import com.healthhelper.app.data.api.dto.AnthropicToolDefinition
 import com.healthhelper.app.domain.model.BloodPressureParseResult
+import com.healthhelper.app.domain.model.GlucoseParseResult
+import com.healthhelper.app.domain.model.GlucoseUnit
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.header
@@ -22,6 +24,7 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -73,6 +76,39 @@ class AnthropicApiClient @Inject constructor(
         private val BP_TOOL_CHOICE = AnthropicToolChoice(
             type = "tool",
             name = TOOL_NAME,
+        )
+
+        private const val GLUCOSE_TOOL_NAME = "glucose_reading"
+
+        private val GLUCOSE_TOOL = AnthropicToolDefinition(
+            name = GLUCOSE_TOOL_NAME,
+            description = "Extract a glucose reading from a glucometer display image.",
+            inputSchema = buildJsonObject {
+                put("type", "object")
+                putJsonObject("properties") {
+                    putJsonObject("value") {
+                        put("type", "number")
+                        put("description", "The numeric glucose value shown on the display")
+                    }
+                    putJsonObject("unit") {
+                        put("type", "string")
+                        put("description", "The unit of measurement: mmol/L or mg/dL")
+                    }
+                    putJsonObject("error") {
+                        put("type", "string")
+                        put("description", "Error message if the reading cannot be determined")
+                    }
+                }
+                putJsonArray("required") {
+                    add(JsonPrimitive("value"))
+                    add(JsonPrimitive("unit"))
+                }
+            },
+        )
+
+        private val GLUCOSE_TOOL_CHOICE = AnthropicToolChoice(
+            type = "tool",
+            name = GLUCOSE_TOOL_NAME,
         )
     }
 
@@ -199,5 +235,127 @@ class AnthropicApiClient @Inject constructor(
         }
 
         return BloodPressureParseResult.Success(systolic = systolic, diastolic = diastolic)
+    }
+
+    suspend fun parseGlucoseImage(
+        apiKey: String,
+        imageBytes: ByteArray,
+    ): GlucoseParseResult {
+        return try {
+            val startTime = System.currentTimeMillis()
+            val base64Image = java.util.Base64.getEncoder().encodeToString(imageBytes)
+
+            val request = AnthropicMessageRequest(
+                model = MODEL,
+                maxTokens = MAX_TOKENS,
+                system = "Extract the glucose reading from this glucometer display. " +
+                    "Return the numeric value shown and the unit displayed (mmol/L or mg/dL). " +
+                    "If the unit is not visible, infer from the numeric range: " +
+                    "values above 30 are likely mg/dL, below 30 are likely mmol/L.",
+                messages = listOf(
+                    AnthropicMessage(
+                        role = "user",
+                        content = listOf(
+                            AnthropicContentItem(
+                                type = "image",
+                                source = AnthropicImageSource(
+                                    mediaType = "image/jpeg",
+                                    data = base64Image,
+                                ),
+                            ),
+                            AnthropicContentItem(
+                                type = "text",
+                                text = "Extract the glucose reading from this glucometer display.",
+                            ),
+                        ),
+                    ),
+                ),
+                tools = listOf(GLUCOSE_TOOL),
+                toolChoice = GLUCOSE_TOOL_CHOICE,
+            )
+
+            val response = httpClient.post(API_URL) {
+                header("x-api-key", apiKey)
+                header("anthropic-version", API_VERSION)
+                contentType(ContentType.Application.Json)
+                setBody(request)
+            }
+
+            val elapsed = System.currentTimeMillis() - startTime
+            Timber.d("parseGlucoseImage completed in ${elapsed}ms")
+
+            if (!response.status.isSuccess()) {
+                val status = response.status.value
+                val errorBody = try {
+                    response.bodyAsText()
+                } catch (_: Exception) {
+                    ""
+                }
+                val message = when (status) {
+                    401 -> "Authentication failed"
+                    429 -> "Rate limited"
+                    else -> "HTTP error $status"
+                }
+                if (status == 401) {
+                    Timber.w("parseGlucoseImage HTTP %d: %s", status, errorBody)
+                } else {
+                    Timber.e("parseGlucoseImage HTTP %d: %s", status, errorBody)
+                }
+                return GlucoseParseResult.Error(message)
+            }
+
+            val messageResponse: AnthropicMessageResponse = response.body()
+            val toolUseBlock = messageResponse.content
+                .firstOrNull { it.type == "tool_use" }
+                ?: return GlucoseParseResult.Error("No tool_use content in response")
+
+            val input = toolUseBlock.input
+                ?: return GlucoseParseResult.Error("No input in tool_use response")
+
+            parseGlucoseToolInput(input)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (@Suppress("SwallowedException") e: SecurityException) {
+            Timber.e(e, "parseGlucoseImage security exception")
+            GlucoseParseResult.Error("Network access denied. Please check app permissions.")
+        } catch (e: SerializationException) {
+            Timber.e(e, "parseGlucoseImage serialization error")
+            GlucoseParseResult.Error("Failed to parse response")
+        } catch (e: Exception) {
+            Timber.e(e, "parseGlucoseImage error")
+            GlucoseParseResult.Error("Failed to analyze image")
+        }
+    }
+
+    private fun parseGlucoseToolInput(input: JsonObject): GlucoseParseResult {
+        val errorField = input["error"]?.jsonPrimitive?.content
+        if (!errorField.isNullOrBlank()) {
+            Timber.d("parseGlucoseImage: model returned error: %s", errorField)
+            return GlucoseParseResult.Error("Unable to read glucose display")
+        }
+
+        val value = input["value"]?.jsonPrimitive?.doubleOrNull
+        val unitStr = input["unit"]?.jsonPrimitive?.content
+
+        if (value == null || unitStr.isNullOrBlank()) {
+            Timber.w("parseGlucoseImage: missing value or unit in response")
+            return GlucoseParseResult.Error("Missing glucose values in response")
+        }
+
+        if (value <= 0) {
+            Timber.w("parseGlucoseImage: value %f is not positive", value)
+            return GlucoseParseResult.Error("Glucose value must be positive")
+        }
+
+        val detectedUnit = when (unitStr) {
+            "mmol/L" -> GlucoseUnit.MMOL_L
+            "mg/dL" -> GlucoseUnit.MG_DL
+            else -> {
+                Timber.w("parseGlucoseImage: unrecognized unit: %s", unitStr)
+                return GlucoseParseResult.Error("Unrecognized glucose unit: $unitStr")
+            }
+        }
+
+        return GlucoseParseResult.Success(value = value, detectedUnit = detectedUnit)
     }
 }

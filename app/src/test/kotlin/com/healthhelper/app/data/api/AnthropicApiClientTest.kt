@@ -1,6 +1,8 @@
 package com.healthhelper.app.data.api
 
 import com.healthhelper.app.domain.model.BloodPressureParseResult
+import com.healthhelper.app.domain.model.GlucoseParseResult
+import com.healthhelper.app.domain.model.GlucoseUnit
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -312,5 +314,163 @@ class AnthropicApiClientTest {
         val body = capturedBody!!
         assertTrue(body.contains("\"tool_choice\""))
         assertTrue(body.contains("\"blood_pressure_reading\""))
+    }
+
+    // --- Glucose parsing tests ---
+
+    private fun glucoseSuccessResponse(value: Double, unit: String): String = """
+        {
+            "id": "msg_test",
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_test",
+                    "name": "glucose_reading",
+                    "input": {"value": $value, "unit": "$unit"}
+                }
+            ],
+            "model": "claude-haiku-4-5-20251001",
+            "stop_reason": "tool_use",
+            "usage": {"input_tokens": 100, "output_tokens": 20}
+        }
+    """.trimIndent()
+
+    private fun glucoseErrorResponse(reason: String): String = """
+        {
+            "id": "msg_test",
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_test",
+                    "name": "glucose_reading",
+                    "input": {"value": 0, "unit": "", "error": "$reason"}
+                }
+            ],
+            "model": "claude-haiku-4-5-20251001",
+            "stop_reason": "tool_use",
+            "usage": {"input_tokens": 100, "output_tokens": 10}
+        }
+    """.trimIndent()
+
+    @Test
+    @DisplayName("glucose: returns Success with value and detected unit mmol/L")
+    fun glucoseReturnsSuccessMmolL() = runTest {
+        val engine = MockEngine { respond(content = glucoseSuccessResponse(5.6, "mmol/L"), headers = jsonHeaders) }
+        val client = createClient(engine)
+
+        val result = client.parseGlucoseImage(testApiKey, testImageBytes)
+
+        assertIs<GlucoseParseResult.Success>(result)
+        assertEquals(5.6, result.value)
+        assertEquals(GlucoseUnit.MMOL_L, result.detectedUnit)
+    }
+
+    @Test
+    @DisplayName("glucose: returns Success with value and detected unit mg/dL")
+    fun glucoseReturnsSuccessMgDl() = runTest {
+        val engine = MockEngine { respond(content = glucoseSuccessResponse(101.0, "mg/dL"), headers = jsonHeaders) }
+        val client = createClient(engine)
+
+        val result = client.parseGlucoseImage(testApiKey, testImageBytes)
+
+        assertIs<GlucoseParseResult.Success>(result)
+        assertEquals(101.0, result.value)
+        assertEquals(GlucoseUnit.MG_DL, result.detectedUnit)
+    }
+
+    @Test
+    @DisplayName("glucose: returns Error when model returns error field")
+    fun glucoseReturnsErrorOnModelError() = runTest {
+        val engine = MockEngine { respond(content = glucoseErrorResponse("blurry image"), headers = jsonHeaders) }
+        val client = createClient(engine)
+
+        val result = client.parseGlucoseImage(testApiKey, testImageBytes)
+
+        assertIs<GlucoseParseResult.Error>(result)
+    }
+
+    @Test
+    @DisplayName("glucose: returns Error on HTTP 401")
+    fun glucoseReturnsErrorOn401() = runTest {
+        val engine = MockEngine { respondError(HttpStatusCode.Unauthorized) }
+        val client = createClient(engine)
+
+        val result = client.parseGlucoseImage(testApiKey, testImageBytes)
+
+        assertIs<GlucoseParseResult.Error>(result)
+        assertEquals("Authentication failed", result.message)
+    }
+
+    @Test
+    @DisplayName("glucose: returns Error on HTTP 429")
+    fun glucoseReturnsErrorOn429() = runTest {
+        val engine = MockEngine { respondError(HttpStatusCode.TooManyRequests) }
+        val client = createClient(engine)
+
+        val result = client.parseGlucoseImage(testApiKey, testImageBytes)
+
+        assertIs<GlucoseParseResult.Error>(result)
+        assertEquals("Rate limited", result.message)
+    }
+
+    @Test
+    @DisplayName("glucose: returns Error on network exception")
+    fun glucoseReturnsErrorOnNetworkFailure() = runTest {
+        val engine = MockEngine { throw java.io.IOException("Connection refused") }
+        val client = createClient(engine)
+
+        val result = client.parseGlucoseImage(testApiKey, testImageBytes)
+
+        assertIs<GlucoseParseResult.Error>(result)
+        assertEquals("Failed to analyze image", result.message)
+    }
+
+    @Test
+    @DisplayName("glucose: returns Error when value is 0 or negative")
+    fun glucoseReturnsErrorOnZeroOrNegativeValue() = runTest {
+        val engine = MockEngine { respond(content = glucoseSuccessResponse(0.0, "mmol/L"), headers = jsonHeaders) }
+        val client = createClient(engine)
+
+        val result = client.parseGlucoseImage(testApiKey, testImageBytes)
+
+        assertIs<GlucoseParseResult.Error>(result)
+    }
+
+    @Test
+    @DisplayName("glucose: returns Error when unit string is invalid")
+    fun glucoseReturnsErrorOnInvalidUnit() = runTest {
+        val engine = MockEngine { respond(content = glucoseSuccessResponse(5.6, "invalid"), headers = jsonHeaders) }
+        val client = createClient(engine)
+
+        val result = client.parseGlucoseImage(testApiKey, testImageBytes)
+
+        assertIs<GlucoseParseResult.Error>(result)
+    }
+
+    @Test
+    @DisplayName("glucose: CancellationException propagates")
+    fun glucoseCancellationExceptionPropagates() = runTest {
+        val engine = MockEngine { throw CancellationException("Cancelled") }
+        val client = createClient(engine)
+
+        assertFailsWith<CancellationException> {
+            client.parseGlucoseImage(testApiKey, testImageBytes)
+        }
+    }
+
+    @Test
+    @DisplayName("glucose: returns Error on SecurityException")
+    fun glucoseReturnsErrorOnSecurityException() = runTest {
+        val engine = MockEngine { throw SecurityException("EPERM") }
+        val client = createClient(engine)
+
+        val result = client.parseGlucoseImage(testApiKey, testImageBytes)
+
+        assertIs<GlucoseParseResult.Error>(result)
+        assertTrue(result.message.contains("Network access denied"))
     }
 }

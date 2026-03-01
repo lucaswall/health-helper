@@ -2,17 +2,20 @@ package com.healthhelper.app.presentation.viewmodel
 
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.permission.HealthPermission
+import androidx.health.connect.client.records.BloodGlucoseRecord
 import androidx.health.connect.client.records.BloodPressureRecord
 import androidx.health.connect.client.records.NutritionRecord
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.healthhelper.app.data.sync.SyncScheduler
 import com.healthhelper.app.domain.model.BloodPressureReading
+import com.healthhelper.app.domain.model.GlucoseReading
 import com.healthhelper.app.domain.model.SyncProgress
 import com.healthhelper.app.domain.model.SyncResult
 import com.healthhelper.app.domain.model.SyncedMealSummary
 import com.healthhelper.app.domain.repository.SettingsRepository
 import com.healthhelper.app.domain.usecase.GetLastBloodPressureReadingUseCase
+import com.healthhelper.app.domain.usecase.GetLastGlucoseReadingUseCase
 import com.healthhelper.app.domain.usecase.SyncNutritionUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.Instant
@@ -48,6 +51,9 @@ data class SyncUiState(
     val lastBpReading: BloodPressureReading? = null,
     val lastBpReadingDisplay: String = "",
     val lastBpReadingTime: String = "",
+    val lastGlucoseReading: GlucoseReading? = null,
+    val lastGlucoseReadingDisplay: String = "",
+    val lastGlucoseReadingTime: String = "",
 )
 
 @HiltViewModel
@@ -56,6 +62,7 @@ class SyncViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val syncScheduler: SyncScheduler,
     private val getLastBpReadingUseCase: GetLastBloodPressureReadingUseCase,
+    private val getLastGlucoseReadingUseCase: GetLastGlucoseReadingUseCase,
     private val healthConnectClient: HealthConnectClient?,
 ) : ViewModel() {
 
@@ -64,6 +71,8 @@ class SyncViewModel @Inject constructor(
             HealthPermission.getWritePermission(NutritionRecord::class),
             HealthPermission.getWritePermission(BloodPressureRecord::class),
             HealthPermission.getReadPermission(BloodPressureRecord::class),
+            HealthPermission.getWritePermission(BloodGlucoseRecord::class),
+            HealthPermission.getReadPermission(BloodGlucoseRecord::class),
         )
     }
 
@@ -99,9 +108,12 @@ class SyncViewModel @Inject constructor(
             }
         }
 
-        // Load last BP reading on launch
+        // Load last BP and glucose readings on launch
         viewModelScope.launch {
             loadLastBpReading()
+        }
+        viewModelScope.launch {
+            loadLastGlucoseReading()
         }
 
         // Observe all settings flows for UI state — isConfigured derived reactively
@@ -138,11 +150,17 @@ class SyncViewModel @Inject constructor(
                 if (lastSyncTimestamp > 0) {
                     _uiState.update { it.copy(lastSyncTime = formatRelativeTime(lastSyncTimestamp)) }
                 }
-                // Also refresh BP reading time display
+                // Also refresh BP and glucose reading time displays
                 val currentReading = _uiState.value.lastBpReading
                 if (currentReading != null) {
                     _uiState.update {
                         it.copy(lastBpReadingTime = formatRelativeTime(currentReading.timestamp.toEpochMilli()))
+                    }
+                }
+                val currentGlucose = _uiState.value.lastGlucoseReading
+                if (currentGlucose != null) {
+                    _uiState.update {
+                        it.copy(lastGlucoseReadingTime = formatRelativeTime(currentGlucose.timestamp.toEpochMilli()))
                     }
                 }
             }
@@ -212,6 +230,33 @@ class SyncViewModel @Inject constructor(
     fun refreshLastBpReading() {
         viewModelScope.launch {
             loadLastBpReading()
+        }
+    }
+
+    private suspend fun loadLastGlucoseReading() {
+        try {
+            val reading = getLastGlucoseReadingUseCase.invoke()
+            _uiState.update {
+                it.copy(
+                    lastGlucoseReading = reading,
+                    lastGlucoseReadingDisplay = if (reading != null) {
+                        "${"%.1f".format(reading.valueMmolL)} mmol/L (${reading.displayInMgDl()} mg/dL)"
+                    } else {
+                        ""
+                    },
+                    lastGlucoseReadingTime = if (reading != null) formatRelativeTime(reading.timestamp.toEpochMilli()) else "",
+                )
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to load last glucose reading")
+        }
+    }
+
+    fun refreshLastGlucoseReading() {
+        viewModelScope.launch {
+            loadLastGlucoseReading()
         }
     }
 

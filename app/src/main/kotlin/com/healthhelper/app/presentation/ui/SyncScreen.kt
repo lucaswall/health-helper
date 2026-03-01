@@ -47,10 +47,13 @@ import com.healthhelper.app.presentation.viewmodel.SyncViewModel
 fun SyncScreen(
     onNavigateToSettings: () -> Unit,
     onNavigateToCamera: () -> Unit = {},
+    onNavigateToGlucoseCamera: () -> Unit = {},
     snackbarMessage: String? = null,
     onSnackbarShown: () -> Unit = {},
     bpScanError: String? = null,
     onBpScanErrorShown: () -> Unit = {},
+    glucoseScanError: String? = null,
+    onGlucoseScanErrorShown: () -> Unit = {},
     viewModel: SyncViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -260,6 +263,63 @@ fun SyncScreen(
                     if (!uiState.cameraPermissionGranted) {
                         Text(
                             text = "Camera permission required to scan blood pressure readings.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+
+            // Section 3: Blood Glucose
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text(
+                        text = "Blood Glucose",
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+
+                    if (glucoseScanError != null) {
+                        Text(
+                            text = glucoseScanError,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+
+                    if (uiState.lastGlucoseReadingDisplay.isNotEmpty()) {
+                        val timeLabel = if (uiState.lastGlucoseReadingTime.isNotEmpty()) " · ${uiState.lastGlucoseReadingTime}" else ""
+                        Text(
+                            text = "${uiState.lastGlucoseReadingDisplay}$timeLabel",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    } else {
+                        Text(
+                            text = "No readings yet",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+
+                    Button(
+                        onClick = {
+                            onGlucoseScanErrorShown()
+                            viewModel.refreshLastGlucoseReading()
+                            onNavigateToGlucoseCamera()
+                        },
+                        enabled = uiState.permissionGranted && uiState.cameraPermissionGranted,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Log Glucose")
+                    }
+
+                    if (!uiState.cameraPermissionGranted) {
+                        Text(
+                            text = "Camera permission required to scan glucose readings.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

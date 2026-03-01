@@ -1,6 +1,6 @@
 # Implementation Plan: Glucose Scanner
 
-**Status:** IN_PROGRESS
+**Status:** COMPLETE
 **Branch:** feat/HEA-150-glucose-scanner
 **Issues:** HEA-150, HEA-151, HEA-152, HEA-153, HEA-154
 **Created:** 2026-02-28
@@ -698,3 +698,69 @@ Implement the Blood Glucose Scanner feature end-to-end. Users photograph their g
 - Share intent support for glucose (only BP has this)
 - Measurement Reminders (separate roadmap item)
 - Timestamp editing on confirmation screen (displays current time, not editable — can be added later)
+
+---
+
+## Iteration 1
+
+**Implemented:** 2026-02-28
+**Method:** Single-agent (fly solo captain)
+
+### Tasks Completed This Iteration
+- Task 1: Domain models — GlucoseUnit, RelationToMeal, GlucoseMealType, SpecimenSource enums
+- Task 2: GlucoseReading data class with validation and dual-unit conversion
+- Task 3: GlucoseParseResult sealed class
+- Task 4: Domain model tests
+- Task 5: Anthropic API client glucose image parsing (parseGlucoseImage + tool definitions)
+- Task 6: BloodGlucoseRepository interface
+- Task 7: BloodGlucoseRecordMapper with Health Connect enum mappings
+- Task 8: HealthConnectBloodGlucoseRepository implementation
+- Task 9: WriteGlucoseReadingUseCase and GetLastGlucoseReadingUseCase
+- Task 10: AndroidManifest permissions and Hilt DI bindings
+- Task 11: GlucoseConfirmationViewModel with dual-unit conversion, validation, meal type visibility
+- Task 12: GlucoseConfirmationScreen composable with dropdown menus
+- Task 13: GlucoseCaptureViewModel with image preparation and API integration
+- Task 14: GlucoseCaptureScreen composable with camera launch
+- Task 15: Navigation routes (camera-glucose, glucose-confirm) and SyncScreen integration (glucose card, last reading display)
+- Task 16: Integration verification — all tests pass, lint clean, build successful
+
+### Files Modified
+- `app/src/main/AndroidManifest.xml` — Added WRITE/READ_BLOOD_GLUCOSE permissions
+- `app/src/main/kotlin/.../data/api/AnthropicApiClient.kt` — Added parseGlucoseImage(), glucose tool definitions
+- `app/src/main/kotlin/.../data/repository/BloodGlucoseRecordMapper.kt` — NEW: HC record ↔ domain model mapping
+- `app/src/main/kotlin/.../data/repository/HealthConnectBloodGlucoseRepository.kt` — NEW: HC repository implementation
+- `app/src/main/kotlin/.../di/AppModule.kt` — Added BloodGlucoseRepository binding
+- `app/src/main/kotlin/.../domain/model/GlucoseUnit.kt` — NEW: MMOL_L, MG_DL enum
+- `app/src/main/kotlin/.../domain/model/RelationToMeal.kt` — NEW: meal relation enum
+- `app/src/main/kotlin/.../domain/model/GlucoseMealType.kt` — NEW: meal type enum
+- `app/src/main/kotlin/.../domain/model/SpecimenSource.kt` — NEW: specimen source enum
+- `app/src/main/kotlin/.../domain/model/GlucoseReading.kt` — NEW: data class with validation
+- `app/src/main/kotlin/.../domain/model/GlucoseParseResult.kt` — NEW: Success/Error sealed class
+- `app/src/main/kotlin/.../domain/repository/BloodGlucoseRepository.kt` — NEW: repository interface
+- `app/src/main/kotlin/.../domain/usecase/WriteGlucoseReadingUseCase.kt` — NEW
+- `app/src/main/kotlin/.../domain/usecase/GetLastGlucoseReadingUseCase.kt` — NEW
+- `app/src/main/kotlin/.../presentation/viewmodel/GlucoseConfirmationViewModel.kt` — NEW
+- `app/src/main/kotlin/.../presentation/viewmodel/GlucoseCaptureViewModel.kt` — NEW
+- `app/src/main/kotlin/.../presentation/viewmodel/SyncViewModel.kt` — Added glucose state, permissions, refresh
+- `app/src/main/kotlin/.../presentation/ui/GlucoseConfirmationScreen.kt` — NEW
+- `app/src/main/kotlin/.../presentation/ui/GlucoseCaptureScreen.kt` — NEW
+- `app/src/main/kotlin/.../presentation/ui/AppNavigation.kt` — Added glucose routes
+- `app/src/main/kotlin/.../presentation/ui/SyncScreen.kt` — Added glucose card section
+- All corresponding test files (15 test files created/modified)
+
+### Linear Updates
+- HEA-150: Todo → In Progress → Review
+- HEA-151: Todo → In Progress → Review
+- HEA-152: Todo → In Progress → Review
+- HEA-153: Todo → In Progress → Review
+- HEA-154: Todo → In Progress → Review
+
+### Pre-commit Verification
+- bug-hunter: Found 3 bugs (1 HIGH, 1 MEDIUM, 1 LOW), all fixed before commit
+  - HIGH: CancellationException swallowed in loadLastGlucoseReading — added rethrow
+  - MEDIUM: Out-of-range HC records crash getLastReading — added graceful fallback
+  - LOW: Dead code in formatMmolL — simplified to single expression
+- verifier: All tests pass, zero lint warnings, build successful
+
+### Continuation Status
+All tasks completed.

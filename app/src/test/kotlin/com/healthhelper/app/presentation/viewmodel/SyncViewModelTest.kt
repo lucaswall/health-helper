@@ -14,7 +14,9 @@ import com.healthhelper.app.domain.model.SyncProgress
 import com.healthhelper.app.domain.model.SyncResult
 import com.healthhelper.app.domain.model.SyncedMealSummary
 import com.healthhelper.app.domain.repository.SettingsRepository
+import com.healthhelper.app.domain.model.GlucoseReading
 import com.healthhelper.app.domain.usecase.GetLastBloodPressureReadingUseCase
+import com.healthhelper.app.domain.usecase.GetLastGlucoseReadingUseCase
 import com.healthhelper.app.domain.usecase.SyncNutritionUseCase
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -47,6 +49,7 @@ class SyncViewModelTest {
     private lateinit var settingsRepository: SettingsRepository
     private lateinit var syncScheduler: SyncScheduler
     private lateinit var getLastBpReadingUseCase: GetLastBloodPressureReadingUseCase
+    private lateinit var getLastGlucoseReadingUseCase: GetLastGlucoseReadingUseCase
     private lateinit var viewModel: SyncViewModel
 
     @BeforeEach
@@ -56,6 +59,7 @@ class SyncViewModelTest {
         settingsRepository = mockk()
         syncScheduler = mockk(relaxed = true)
         getLastBpReadingUseCase = mockk()
+        getLastGlucoseReadingUseCase = mockk()
 
         every { settingsRepository.apiKeyFlow } returns flowOf("fsk_test")
         every { settingsRepository.baseUrlFlow } returns flowOf("https://example.com")
@@ -68,6 +72,7 @@ class SyncViewModelTest {
         coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.NeedsConfiguration
         every { syncScheduler.getNextSyncTimeFlow() } returns flowOf(null)
         coEvery { getLastBpReadingUseCase.invoke() } returns null
+        coEvery { getLastGlucoseReadingUseCase.invoke() } returns null
     }
 
     @AfterEach
@@ -78,7 +83,7 @@ class SyncViewModelTest {
     private val healthConnectClient: HealthConnectClient? = mockk(relaxed = true)
 
     private fun createViewModel(hcClient: HealthConnectClient? = healthConnectClient): SyncViewModel =
-        SyncViewModel(syncNutritionUseCase, settingsRepository, syncScheduler, getLastBpReadingUseCase, hcClient)
+        SyncViewModel(syncNutritionUseCase, settingsRepository, syncScheduler, getLastBpReadingUseCase, getLastGlucoseReadingUseCase, hcClient)
 
     /**
      * Wraps [runTest] to cancel viewModelScope after the test body,
@@ -716,6 +721,101 @@ class SyncViewModelTest {
         viewModel.uiState.test {
             val state = awaitItem()
             assertEquals(reading, state.lastBpReading)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    // --- Glucose reading on home screen ---
+
+    @Test
+    fun `lastGlucoseReading is null by default`() = viewModelTest {
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertNull(state.lastGlucoseReading)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `lastGlucoseReading populated after init loads from GetLastGlucoseReadingUseCase`() = viewModelTest {
+        val reading = GlucoseReading(valueMmolL = 5.6, timestamp = Instant.now())
+        coEvery { getLastGlucoseReadingUseCase.invoke() } returns reading
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals(reading, state.lastGlucoseReading)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `lastGlucoseReadingDisplay formats as value mmol_L`() = viewModelTest {
+        val reading = GlucoseReading(valueMmolL = 5.6, timestamp = Instant.now())
+        coEvery { getLastGlucoseReadingUseCase.invoke() } returns reading
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals("5.6 mmol/L (101 mg/dL)", state.lastGlucoseReadingDisplay)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `lastGlucoseReadingTime shows relative time when reading exists`() = viewModelTest {
+        val twoHoursAgo = Instant.now().minusSeconds(7200)
+        val reading = GlucoseReading(valueMmolL = 5.6, timestamp = twoHoursAgo)
+        coEvery { getLastGlucoseReadingUseCase.invoke() } returns reading
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertTrue(
+                state.lastGlucoseReadingTime.contains("hr ago") || state.lastGlucoseReadingTime.contains("min ago"),
+                "Expected relative time in '${state.lastGlucoseReadingTime}'",
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `lastGlucoseReadingDisplay is empty when no reading exists`() = viewModelTest {
+        coEvery { getLastGlucoseReadingUseCase.invoke() } returns null
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals("", state.lastGlucoseReadingDisplay)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `refreshLastGlucoseReading reloads from use case`() = viewModelTest {
+        val reading = GlucoseReading(valueMmolL = 7.2, timestamp = Instant.now())
+        coEvery { getLastGlucoseReadingUseCase.invoke() } returns null andThen reading
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.refreshLastGlucoseReading()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals(reading, state.lastGlucoseReading)
             cancelAndIgnoreRemainingEvents()
         }
     }
