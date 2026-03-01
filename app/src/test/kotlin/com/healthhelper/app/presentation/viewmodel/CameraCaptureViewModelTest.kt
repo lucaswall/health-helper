@@ -2,6 +2,7 @@ package com.healthhelper.app.presentation.viewmodel
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import androidx.lifecycle.SavedStateHandle
 import app.cash.turbine.test
 import com.healthhelper.app.data.api.AnthropicApiClient
 import com.healthhelper.app.domain.model.BloodPressureParseResult
@@ -85,8 +86,8 @@ class CameraCaptureViewModelTest {
         unmockkStatic(BitmapFactory::class)
     }
 
-    private fun createViewModel() =
-        CameraCaptureViewModel(anthropicApiClient, settingsRepository, testDispatcher)
+    private fun createViewModel(savedStateHandle: SavedStateHandle = SavedStateHandle()) =
+        CameraCaptureViewModel(anthropicApiClient, settingsRepository, savedStateHandle, testDispatcher)
 
     @Test
     fun `initial state has isProcessing false and no error`() = runTest {
@@ -335,5 +336,35 @@ class CameraCaptureViewModelTest {
         advanceUntilIdle()
 
         assertNotNull(capturedBytes)
+    }
+
+    @Test
+    fun `setTempFilePath persists path and clearTempFilePath clears it`() = runTest {
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.tempFilePath.test {
+            assertEquals(null, awaitItem())
+
+            viewModel.setTempFilePath("/cache/bp_images/bp_123.jpg")
+            assertEquals("/cache/bp_images/bp_123.jpg", awaitItem())
+
+            viewModel.clearTempFilePath()
+            assertEquals(null, awaitItem())
+
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `tempFilePath survives SavedStateHandle restoration`() = runTest {
+        val savedState = SavedStateHandle(mapOf("temp_file_path" to "/cache/bp_images/bp_456.jpg"))
+        viewModel = createViewModel(savedStateHandle = savedState)
+        advanceTimeBy(1_000)
+
+        viewModel.tempFilePath.test {
+            assertEquals("/cache/bp_images/bp_456.jpg", awaitItem())
+            cancelAndIgnoreRemainingEvents()
+        }
     }
 }

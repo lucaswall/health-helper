@@ -24,10 +24,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -71,10 +68,9 @@ fun CameraCaptureScreen(
     viewModel: CameraCaptureViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val tempFilePath by viewModel.tempFilePath.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-
-    var tempFile by remember { mutableStateOf<File?>(null) }
 
     LaunchedEffect(Unit) {
         viewModel.navigateToConfirmation.collect { (systolic, diastolic) ->
@@ -86,14 +82,19 @@ fun CameraCaptureScreen(
         contract = ActivityResultContracts.TakePicture(),
     ) { success ->
         scope.launch {
+            val file = tempFilePath?.let { File(it) }
             try {
-                if (success && tempFile != null) {
+                if (success) {
+                    if (file == null) {
+                        viewModel.onCaptureError("Could not read captured photo.")
+                        return@launch
+                    }
                     val bytes = withContext(Dispatchers.IO) {
                         context.contentResolver.openInputStream(
                             FileProvider.getUriForFile(
                                 context,
                                 "${context.packageName}.fileprovider",
-                                tempFile!!,
+                                file,
                             ),
                         )?.use { readBytesLimited(it, MAX_IMAGE_BYTES) }
                     }
@@ -112,8 +113,8 @@ fun CameraCaptureScreen(
                 Timber.e(e, "Failed to read captured photo")
                 viewModel.onCaptureError("Could not read captured photo.")
             } finally {
-                tempFile?.delete()
-                tempFile = null
+                withContext(Dispatchers.IO) { file?.delete() }
+                viewModel.clearTempFilePath()
             }
         }
     }
@@ -206,7 +207,7 @@ fun CameraCaptureScreen(
                                 val imageDir = File(context.cacheDir, "bp_images")
                                 imageDir.mkdirs()
                                 val file = File.createTempFile("bp_", ".jpg", imageDir)
-                                tempFile = file
+                                viewModel.setTempFilePath(file.absolutePath)
                                 val uri = FileProvider.getUriForFile(
                                     context,
                                     "${context.packageName}.fileprovider",
@@ -215,6 +216,7 @@ fun CameraCaptureScreen(
                                 takePictureLauncher.launch(uri)
                             } catch (e: Exception) {
                                 Timber.e(e, "Failed to launch camera")
+                                viewModel.clearTempFilePath()
                                 viewModel.onCaptureError("Could not open camera.")
                             }
                         },

@@ -2,6 +2,7 @@ package com.healthhelper.app.presentation.viewmodel
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.healthhelper.app.data.api.AnthropicApiClient
@@ -36,11 +37,22 @@ data class CameraCaptureUiState(
 class CameraCaptureViewModel @Inject constructor(
     private val anthropicApiClient: AnthropicApiClient,
     private val settingsRepository: SettingsRepository,
+    private val savedStateHandle: SavedStateHandle,
     @param:DefaultDispatcher private val defaultDispatcher: CoroutineDispatcher,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(CameraCaptureUiState())
     val uiState: StateFlow<CameraCaptureUiState> = _uiState.asStateFlow()
+
+    val tempFilePath: StateFlow<String?> = savedStateHandle.getStateFlow(KEY_TEMP_FILE_PATH, null)
+
+    fun setTempFilePath(path: String) {
+        savedStateHandle[KEY_TEMP_FILE_PATH] = path
+    }
+
+    fun clearTempFilePath() {
+        savedStateHandle[KEY_TEMP_FILE_PATH] = null
+    }
 
     private val _navigateToConfirmation = MutableSharedFlow<Pair<Int, Int>>(
         replay = 0,
@@ -153,5 +165,9 @@ class CameraCaptureViewModel @Inject constructor(
             Timber.w(e, "prepareImageForApi: failed to process image")
             null
         }
+    }
+
+    companion object {
+        private const val KEY_TEMP_FILE_PATH = "temp_file_path"
     }
 }

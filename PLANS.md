@@ -1,7 +1,7 @@
 # Fix Plan: BP Scanner Crash on Network Errors + System Camera UI
 
 **Date:** 2026-02-28
-**Status:** Planning
+**Status:** COMPLETE
 **Linear Issues:** [HEA-142](https://linear.app/lw-claude/issue/HEA-142), [HEA-143](https://linear.app/lw-claude/issue/HEA-143)
 **Branch:** fix/HEA-142-bp-scanner-crash-and-camera-ui
 
@@ -493,3 +493,47 @@ All tasks completed.
 7. In `finally` block, call `viewModel.clearTempFilePath()` and delete the file
 8. Write test: verify `setTempFilePath` persists and `clearTempFilePath` clears
 9. Verify all existing tests pass
+
+---
+
+## Iteration 3
+
+**Implemented:** 2026-02-28
+**Method:** Single-agent (user requested fly solo)
+
+### Tasks Completed This Iteration
+- Fix 1: Move tempFile path to ViewModel SavedStateHandle for process death survival (HEA-149)
+
+### Files Modified
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/CameraCaptureViewModel.kt` — Added SavedStateHandle, tempFilePath StateFlow, set/clear methods, companion KEY constant
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/CameraCaptureScreen.kt` — Replaced `remember` tempFile with ViewModel tempFilePath, added explicit error on success+null file, added cleanup in onClick catch block
+- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/CameraCaptureViewModelTest.kt` — Added SavedStateHandle to createViewModel, 2 new tests for set/clear/restore
+
+### Linear Updates
+- HEA-149: Todo → In Progress → Review
+
+### Pre-commit Verification
+- bug-hunter: Found 2 real issues (both fixed: explicit error guard on null file, cleanup on launch failure), 2 discarded (hardcoded test key is fine — assertion catches renames; double-tap race is practically impossible)
+- verifier: All tests pass, zero warnings
+
+### Review Findings
+
+Summary: 0 issue(s) found (single-agent review)
+Files reviewed: 3 (CameraCaptureViewModel.kt, CameraCaptureScreen.kt, CameraCaptureViewModelTest.kt)
+Checks applied: Security, Logic, Async, Resources, Type Safety, Conventions
+
+No issues found — SavedStateHandle integration is correct, temp file cleanup covers all paths (success, cancel, error, launch failure), tests verify persistence and restoration.
+
+### Linear Updates
+- HEA-149: Review → Merge
+
+<!-- REVIEW COMPLETE -->
+
+### Continuation Status
+All tasks completed.
+
+---
+
+## Status: COMPLETE
+
+All tasks implemented and reviewed successfully. All Linear issues moved to Merge.
