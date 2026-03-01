@@ -85,7 +85,10 @@ object AppModule {
     @Singleton
     fun provideHttpClient(): HttpClient = HttpClient(CIO) {
         install(ContentNegotiation) {
-            json(Json { ignoreUnknownKeys = true })
+            json(Json {
+                ignoreUnknownKeys = true
+                encodeDefaults = true
+            })
         }
         install(HttpTimeout) {
             requestTimeoutMillis = 30_000L
