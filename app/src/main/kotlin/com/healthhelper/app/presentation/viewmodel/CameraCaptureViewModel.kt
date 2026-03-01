@@ -30,7 +30,6 @@ import javax.inject.Inject
 
 data class CameraCaptureUiState(
     val isProcessing: Boolean = false,
-    val error: String? = null,
 )
 
 @HiltViewModel
@@ -61,6 +60,13 @@ class CameraCaptureViewModel @Inject constructor(
     )
     val navigateToConfirmation: SharedFlow<Pair<Int, Int>> = _navigateToConfirmation.asSharedFlow()
 
+    private val _navigateBackWithError = MutableSharedFlow<String>(
+        replay = 0,
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    val navigateBackWithError: SharedFlow<String> = _navigateBackWithError.asSharedFlow()
+
     private var processingJob: Job? = null
 
     fun onPhotoCaptured(imageBytes: ByteArray) {
@@ -68,13 +74,12 @@ class CameraCaptureViewModel @Inject constructor(
 
         processingJob?.cancel()
         processingJob = viewModelScope.launch {
-            _uiState.update { it.copy(isProcessing = true, error = null) }
+            _uiState.update { it.copy(isProcessing = true) }
             try {
                 val apiKey = settingsRepository.anthropicApiKeyFlow.first()
                 if (apiKey.isEmpty()) {
-                    _uiState.update {
-                        it.copy(isProcessing = false, error = "Configure Anthropic API key in Settings")
-                    }
+                    _uiState.update { it.copy(isProcessing = false) }
+                    _navigateBackWithError.emit("Configure Anthropic API key in Settings")
                     return@launch
                 }
 
@@ -82,12 +87,8 @@ class CameraCaptureViewModel @Inject constructor(
                     prepareImageForApi(imageBytes, maxDimension = 1568)
                 }
                 if (preparedBytes == null) {
-                    _uiState.update {
-                        it.copy(
-                            isProcessing = false,
-                            error = "Could not process image. Please try a different photo.",
-                        )
-                    }
+                    _uiState.update { it.copy(isProcessing = false) }
+                    _navigateBackWithError.emit("Could not process image. Please try a different photo.")
                     return@launch
                 }
                 when (val result = anthropicApiClient.parseBloodPressureImage(apiKey, preparedBytes)) {
@@ -97,12 +98,8 @@ class CameraCaptureViewModel @Inject constructor(
                     }
                     is BloodPressureParseResult.Error -> {
                         Timber.w("BP parse error: ${result.message}")
-                        _uiState.update {
-                            it.copy(
-                                isProcessing = false,
-                                error = "Could not read blood pressure from image. Please retake.",
-                            )
-                        }
+                        _uiState.update { it.copy(isProcessing = false) }
+                        _navigateBackWithError.emit("Could not read blood pressure from image. Please retake.")
                     }
                 }
             } catch (e: CancellationException) {
@@ -110,20 +107,17 @@ class CameraCaptureViewModel @Inject constructor(
                 throw e
             } catch (e: Exception) {
                 Timber.e(e, "Unexpected error capturing blood pressure image")
-                _uiState.update {
-                    it.copy(isProcessing = false, error = "Something went wrong. Please try again.")
-                }
+                _uiState.update { it.copy(isProcessing = false) }
+                _navigateBackWithError.emit("Something went wrong. Please try again.")
             }
         }
     }
 
     fun onCaptureError(message: String) {
-        _uiState.update { it.copy(isProcessing = false, error = message) }
-    }
-
-    fun onRetake() {
-        processingJob?.cancel()
-        _uiState.update { it.copy(isProcessing = false, error = null) }
+        _uiState.update { it.copy(isProcessing = false) }
+        viewModelScope.launch {
+            _navigateBackWithError.emit(message)
+        }
     }
 
     private fun prepareImageForApi(imageBytes: ByteArray, maxDimension: Int): ByteArray? {

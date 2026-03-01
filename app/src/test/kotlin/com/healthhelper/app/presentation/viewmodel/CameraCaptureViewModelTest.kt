@@ -25,7 +25,6 @@ import kotlinx.coroutines.test.setMain
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import java.io.ByteArrayOutputStream
 import java.io.OutputStream
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -90,14 +89,13 @@ class CameraCaptureViewModelTest {
         CameraCaptureViewModel(anthropicApiClient, settingsRepository, savedStateHandle, testDispatcher)
 
     @Test
-    fun `initial state has isProcessing false and no error`() = runTest {
+    fun `initial state has isProcessing false`() = runTest {
         viewModel = createViewModel()
         advanceTimeBy(1_000)
 
         viewModel.uiState.test {
             val state = awaitItem()
             assertFalse(state.isProcessing)
-            assertNull(state.error)
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -159,41 +157,17 @@ class CameraCaptureViewModelTest {
     }
 
     @Test
-    fun `onPhotoCaptured parse error sets error message and clears isProcessing`() = runTest {
+    fun `onPhotoCaptured parse error emits navigateBackWithError`() = runTest {
         coEvery { anthropicApiClient.parseBloodPressureImage(any(), any()) } returns
             BloodPressureParseResult.Error("Could not parse reading")
 
         viewModel = createViewModel()
         advanceTimeBy(1_000)
 
-        viewModel.onPhotoCaptured(testImageBytes)
-        advanceUntilIdle()
-
-        viewModel.uiState.test {
-            val state = awaitItem()
-            assertFalse(state.isProcessing)
-            assertEquals("Could not read blood pressure from image. Please retake.", state.error)
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
-    fun `onRetake clears error`() = runTest {
-        coEvery { anthropicApiClient.parseBloodPressureImage(any(), any()) } returns
-            BloodPressureParseResult.Error("Failed")
-
-        viewModel = createViewModel()
-        advanceTimeBy(1_000)
-
-        viewModel.onPhotoCaptured(testImageBytes)
-        advanceUntilIdle()
-
-        viewModel.onRetake()
-
-        viewModel.uiState.test {
-            val state = awaitItem()
-            assertNull(state.error)
-            assertFalse(state.isProcessing)
+        viewModel.navigateBackWithError.test {
+            viewModel.onPhotoCaptured(testImageBytes)
+            advanceUntilIdle()
+            assertEquals("Could not read blood pressure from image. Please retake.", awaitItem())
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -221,44 +195,38 @@ class CameraCaptureViewModelTest {
     }
 
     @Test
-    fun `network error shows generic error message`() = runTest {
+    fun `network error emits navigateBackWithError`() = runTest {
         coEvery { anthropicApiClient.parseBloodPressureImage(any(), any()) } throws
             RuntimeException("Network timeout")
 
         viewModel = createViewModel()
         advanceTimeBy(1_000)
 
-        viewModel.onPhotoCaptured(testImageBytes)
-        advanceUntilIdle()
-
-        viewModel.uiState.test {
-            val state = awaitItem()
-            assertFalse(state.isProcessing)
-            assertEquals("Something went wrong. Please try again.", state.error)
+        viewModel.navigateBackWithError.test {
+            viewModel.onPhotoCaptured(testImageBytes)
+            advanceUntilIdle()
+            assertEquals("Something went wrong. Please try again.", awaitItem())
             cancelAndIgnoreRemainingEvents()
         }
     }
 
     @Test
-    fun `empty API key shows configuration error without calling API`() = runTest {
+    fun `empty API key emits navigateBackWithError`() = runTest {
         every { settingsRepository.anthropicApiKeyFlow } returns flowOf("")
 
         viewModel = createViewModel()
         advanceTimeBy(1_000)
 
-        viewModel.onPhotoCaptured(testImageBytes)
-        advanceUntilIdle()
-
-        viewModel.uiState.test {
-            val state = awaitItem()
-            assertFalse(state.isProcessing)
-            assertEquals("Configure Anthropic API key in Settings", state.error)
+        viewModel.navigateBackWithError.test {
+            viewModel.onPhotoCaptured(testImageBytes)
+            advanceUntilIdle()
+            assertEquals("Configure Anthropic API key in Settings", awaitItem())
             cancelAndIgnoreRemainingEvents()
         }
     }
 
     @Test
-    fun `CancellationException resets isProcessing without setting error`() = runTest {
+    fun `CancellationException resets isProcessing without emitting error`() = runTest {
         coEvery { anthropicApiClient.parseBloodPressureImage(any(), any()) } throws
             CancellationException("Cancelled")
 
@@ -269,32 +237,29 @@ class CameraCaptureViewModelTest {
         advanceUntilIdle()
 
         // CancellationException must not be swallowed as a generic error:
-        // isProcessing must reset to false AND error must remain null
+        // isProcessing must reset to false
         viewModel.uiState.test {
             val state = awaitItem()
             assertFalse(state.isProcessing)
-            assertNull(state.error)
             cancelAndIgnoreRemainingEvents()
         }
     }
 
     @Test
-    fun `onCaptureError sets error message and clears isProcessing`() = runTest {
+    fun `onCaptureError emits navigateBackWithError`() = runTest {
         viewModel = createViewModel()
         advanceTimeBy(1_000)
 
-        viewModel.onCaptureError("Camera capture failed")
-
-        viewModel.uiState.test {
-            val state = awaitItem()
-            assertFalse(state.isProcessing)
-            assertEquals("Camera capture failed", state.error)
+        viewModel.navigateBackWithError.test {
+            viewModel.onCaptureError("Camera capture failed")
+            advanceUntilIdle()
+            assertEquals("Camera capture failed", awaitItem())
             cancelAndIgnoreRemainingEvents()
         }
     }
 
     @Test
-    fun `prepareImageForApi returns null for undecodable bytes sets error`() = runTest {
+    fun `prepareImageForApi returns null for undecodable bytes emits navigateBackWithError`() = runTest {
         // Override BitmapFactory to simulate undecodable image (dimensions = 0)
         every {
             BitmapFactory.decodeByteArray(any(), any(), any(), any<BitmapFactory.Options>())
@@ -310,13 +275,10 @@ class CameraCaptureViewModelTest {
         viewModel = createViewModel()
         advanceTimeBy(1_000)
 
-        viewModel.onPhotoCaptured(byteArrayOf(0xFF.toByte(), 0xFE.toByte()))
-        advanceUntilIdle()
-
-        viewModel.uiState.test {
-            val state = awaitItem()
-            assertFalse(state.isProcessing)
-            assertEquals("Could not process image. Please try a different photo.", state.error)
+        viewModel.navigateBackWithError.test {
+            viewModel.onPhotoCaptured(byteArrayOf(0xFF.toByte(), 0xFE.toByte()))
+            advanceUntilIdle()
+            assertEquals("Could not process image. Please try a different photo.", awaitItem())
             cancelAndIgnoreRemainingEvents()
         }
     }

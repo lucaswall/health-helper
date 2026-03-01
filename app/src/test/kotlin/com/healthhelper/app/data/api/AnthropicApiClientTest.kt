@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 
 class AnthropicApiClientTest {
 
@@ -41,12 +42,14 @@ class AnthropicApiClientTest {
             "role": "assistant",
             "content": [
                 {
-                    "type": "text",
-                    "text": "{\"systolic\": $systolic, \"diastolic\": $diastolic}"
+                    "type": "tool_use",
+                    "id": "toolu_test",
+                    "name": "blood_pressure_reading",
+                    "input": {"systolic": $systolic, "diastolic": $diastolic}
                 }
             ],
             "model": "claude-haiku-4-5-20251001",
-            "stop_reason": "end_turn",
+            "stop_reason": "tool_use",
             "usage": {"input_tokens": 100, "output_tokens": 20}
         }
     """.trimIndent()
@@ -58,18 +61,20 @@ class AnthropicApiClientTest {
             "role": "assistant",
             "content": [
                 {
-                    "type": "text",
-                    "text": "{\"error\": \"$reason\"}"
+                    "type": "tool_use",
+                    "id": "toolu_test",
+                    "name": "blood_pressure_reading",
+                    "input": {"systolic": 0, "diastolic": 0, "error": "$reason"}
                 }
             ],
             "model": "claude-haiku-4-5-20251001",
-            "stop_reason": "end_turn",
+            "stop_reason": "tool_use",
             "usage": {"input_tokens": 100, "output_tokens": 10}
         }
     """.trimIndent()
 
     @Test
-    @DisplayName("returns Success with systolic and diastolic when Haiku responds with valid JSON")
+    @DisplayName("returns Success with systolic and diastolic when Haiku responds with valid tool_use")
     fun returnsSuccessOnValidResponse() = runTest {
         val engine = MockEngine { respond(content = successResponse(120, 80), headers = jsonHeaders) }
         val client = createClient(engine)
@@ -82,7 +87,7 @@ class AnthropicApiClientTest {
     }
 
     @Test
-    @DisplayName("returns Error when Haiku indicates unreadable display")
+    @DisplayName("returns Error when Haiku indicates unreadable display via tool_use error field")
     fun returnsErrorOnUnreadableDisplay() = runTest {
         val engine = MockEngine { respond(content = errorResponse("unreadable display"), headers = jsonHeaders) }
         val client = createClient(engine)
@@ -126,11 +131,11 @@ class AnthropicApiClientTest {
     }
 
     @Test
-    @DisplayName("returns Error on malformed response JSON")
-    fun returnsErrorOnMalformedJson() = runTest {
+    @DisplayName("returns Error when no tool_use content in response")
+    fun returnsErrorWhenToolUseContentMissing() = runTest {
         val engine = MockEngine {
             respond(
-                content = """{"id":"msg","content":[{"type":"text","text":"not json at all"}]}""",
+                content = """{"id":"msg","content":[{"type":"text","text":"I cannot read this"}]}""",
                 headers = jsonHeaders,
             )
         }
@@ -261,5 +266,51 @@ class AnthropicApiClientTest {
         assertIs<BloodPressureParseResult.Success>(result)
         assertEquals(300, result.systolic)
         assertEquals(200, result.diastolic)
+    }
+
+    @Test
+    @DisplayName("returns Error on SecurityException (DNS/network permission denied)")
+    fun returnsErrorOnSecurityException() = runTest {
+        val engine = MockEngine { throw SecurityException("EPERM on DNS resolution") }
+        val client = createClient(engine)
+
+        val result = client.parseBloodPressureImage(testApiKey, testImageBytes)
+
+        assertIs<BloodPressureParseResult.Error>(result)
+        assertTrue(result.message.contains("Network access denied"))
+    }
+
+    @Test
+    @DisplayName("request contains tools array with blood_pressure_reading tool")
+    fun requestContainsToolsArray() = runTest {
+        var capturedBody: String? = null
+        val engine = MockEngine { request ->
+            capturedBody = (request.body as io.ktor.http.content.TextContent).text
+            respond(content = successResponse(120, 80), headers = jsonHeaders)
+        }
+        val client = createClient(engine)
+
+        client.parseBloodPressureImage(testApiKey, testImageBytes)
+
+        val body = capturedBody!!
+        assertTrue(body.contains("\"tools\""))
+        assertTrue(body.contains("\"blood_pressure_reading\""))
+    }
+
+    @Test
+    @DisplayName("request contains tool_choice forcing blood_pressure_reading")
+    fun requestContainsToolChoice() = runTest {
+        var capturedBody: String? = null
+        val engine = MockEngine { request ->
+            capturedBody = (request.body as io.ktor.http.content.TextContent).text
+            respond(content = successResponse(120, 80), headers = jsonHeaders)
+        }
+        val client = createClient(engine)
+
+        client.parseBloodPressureImage(testApiKey, testImageBytes)
+
+        val body = capturedBody!!
+        assertTrue(body.contains("\"tool_choice\""))
+        assertTrue(body.contains("\"blood_pressure_reading\""))
     }
 }

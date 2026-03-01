@@ -2,13 +2,29 @@ package com.healthhelper.app.data.api.dto
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 
 @Serializable
 data class AnthropicMessageRequest(
     val model: String,
     @SerialName("max_tokens") val maxTokens: Int,
-    val system: String,
+    val system: String? = null,
     val messages: List<AnthropicMessage>,
+    val tools: List<AnthropicToolDefinition>? = null,
+    @SerialName("tool_choice") val toolChoice: AnthropicToolChoice? = null,
+)
+
+@Serializable
+data class AnthropicToolDefinition(
+    val name: String,
+    val description: String,
+    @SerialName("input_schema") val inputSchema: JsonObject,
+)
+
+@Serializable
+data class AnthropicToolChoice(
+    val type: String,
+    val name: String? = null,
 )
 
 @Serializable
@@ -40,5 +56,8 @@ data class AnthropicMessageResponse(
 @Serializable
 data class AnthropicResponseContent(
     val type: String = "",
-    val text: String = "",
+    val text: String? = null,
+    val id: String? = null,
+    val name: String? = null,
+    val input: JsonObject? = null,
 )

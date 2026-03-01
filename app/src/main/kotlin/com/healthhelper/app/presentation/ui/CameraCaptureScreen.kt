@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -25,6 +24,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -64,6 +66,7 @@ private fun readBytesLimited(inputStream: InputStream, maxSize: Int): ByteArray 
 fun CameraCaptureScreen(
     onNavigateToConfirmation: (Int, Int) -> Unit,
     onNavigateBack: () -> Unit,
+    onNavigateBackWithError: (String) -> Unit = {},
     sharedImageUri: String? = null,
     viewModel: CameraCaptureViewModel = hiltViewModel(),
 ) {
@@ -71,10 +74,17 @@ fun CameraCaptureScreen(
     val tempFilePath by viewModel.tempFilePath.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    var cameraLaunched by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         viewModel.navigateToConfirmation.collect { (systolic, diastolic) ->
             onNavigateToConfirmation(systolic, diastolic)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        viewModel.navigateBackWithError.collect { error ->
+            onNavigateBackWithError(error)
         }
     }
 
@@ -103,6 +113,8 @@ fun CameraCaptureScreen(
                     } else {
                         viewModel.onCaptureError("Could not read captured photo.")
                     }
+                } else {
+                    onNavigateBack()
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -150,6 +162,29 @@ fun CameraCaptureScreen(
         }
     }
 
+    // Launch camera immediately if not a share intent
+    LaunchedEffect(Unit) {
+        if (sharedImageUri == null && !cameraLaunched) {
+            cameraLaunched = true
+            try {
+                val imageDir = File(context.cacheDir, "bp_images")
+                imageDir.mkdirs()
+                val file = File.createTempFile("bp_", ".jpg", imageDir)
+                viewModel.setTempFilePath(file.absolutePath)
+                val uri = FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    file,
+                )
+                takePictureLauncher.launch(uri)
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to launch camera")
+                viewModel.clearTempFilePath()
+                viewModel.onCaptureError("Could not open camera.")
+            }
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -171,58 +206,17 @@ fun CameraCaptureScreen(
                 .padding(innerPadding),
             contentAlignment = Alignment.Center,
         ) {
-            when {
-                uiState.isProcessing -> {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
-                    ) {
-                        CircularProgressIndicator(modifier = Modifier.size(64.dp))
-                        Spacer(modifier = Modifier.size(16.dp))
-                        Text(
-                            text = "Analyzing...",
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
-                    }
-                }
-                uiState.error != null -> {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        Text(
-                            text = uiState.error!!,
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
-                        Spacer(modifier = Modifier.size(16.dp))
-                        Button(onClick = viewModel::onRetake) {
-                            Text("Try Again")
-                        }
-                    }
-                }
-                else -> {
-                    Button(
-                        onClick = {
-                            try {
-                                val imageDir = File(context.cacheDir, "bp_images")
-                                imageDir.mkdirs()
-                                val file = File.createTempFile("bp_", ".jpg", imageDir)
-                                viewModel.setTempFilePath(file.absolutePath)
-                                val uri = FileProvider.getUriForFile(
-                                    context,
-                                    "${context.packageName}.fileprovider",
-                                    file,
-                                )
-                                takePictureLauncher.launch(uri)
-                            } catch (e: Exception) {
-                                Timber.e(e, "Failed to launch camera")
-                                viewModel.clearTempFilePath()
-                                viewModel.onCaptureError("Could not open camera.")
-                            }
-                        },
-                    ) {
-                        Text("Take Photo")
-                    }
+            if (uiState.isProcessing) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(64.dp))
+                    Spacer(modifier = Modifier.size(16.dp))
+                    Text(
+                        text = "Analyzing...",
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
                 }
             }
         }

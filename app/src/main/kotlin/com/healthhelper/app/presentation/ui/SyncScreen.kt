@@ -49,6 +49,8 @@ fun SyncScreen(
     onNavigateToCamera: () -> Unit = {},
     snackbarMessage: String? = null,
     onSnackbarShown: () -> Unit = {},
+    bpScanError: String? = null,
+    onBpScanErrorShown: () -> Unit = {},
     viewModel: SyncViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -221,6 +223,14 @@ fun SyncScreen(
                         style = MaterialTheme.typography.titleMedium,
                     )
 
+                    if (bpScanError != null) {
+                        Text(
+                            text = bpScanError,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+
                     if (uiState.lastBpReadingDisplay.isNotEmpty()) {
                         val timeLabel = if (uiState.lastBpReadingTime.isNotEmpty()) " · ${uiState.lastBpReadingTime}" else ""
                         Text(
@@ -237,6 +247,7 @@ fun SyncScreen(
 
                     Button(
                         onClick = {
+                            onBpScanErrorShown()
                             viewModel.refreshLastBpReading()
                             onNavigateToCamera()
                         },

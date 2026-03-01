@@ -37,6 +37,8 @@ fun AppNavigation(sharedImageUri: String? = null) {
                 onNavigateToCamera = { navController.navigate("camera-bp") },
                 snackbarMessage = backStackEntry.savedStateHandle.get<String>("snackbar_msg"),
                 onSnackbarShown = { backStackEntry.savedStateHandle.remove<String>("snackbar_msg") },
+                bpScanError = backStackEntry.savedStateHandle.get<String>("bp_scan_error"),
+                onBpScanErrorShown = { backStackEntry.savedStateHandle.remove<String>("bp_scan_error") },
             )
         }
         composable("settings") {
@@ -63,6 +65,10 @@ fun AppNavigation(sharedImageUri: String? = null) {
                     navController.navigate("bp-confirm/$sys/$dia")
                 },
                 onNavigateBack = { navController.popBackStack() },
+                onNavigateBackWithError = { error ->
+                    navController.popBackStack()
+                    navController.getBackStackEntry("sync").savedStateHandle["bp_scan_error"] = error
+                },
                 sharedImageUri = decodedUri,
             )
         }
