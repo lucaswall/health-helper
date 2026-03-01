@@ -125,12 +125,11 @@ After spawning, use `TaskUpdate` to assign each task to its reviewer by name.
 
 While waiting for reviewer messages:
 1. Reviewer messages are **automatically delivered** — do NOT poll or manually check inbox
-2. Teammates go idle after each turn — this is normal, not an error. They're done when they send their findings message.
-3. Track progress via `TaskList`
-4. Acknowledge receipt as each reviewer reports
-5. Wait until ALL 3 reviewers have reported before proceeding to merge
+2. **Shut down each reviewer immediately after they report findings** — send `SendMessage` with `type: "shutdown_request"` as soon as you receive their findings message. Do NOT wait for all reviewers before shutting down the first ones.
+3. Track shutdown count — when all 3 reviewers have been shut down, immediately call `TeamDelete` to destroy the team
+4. Wait until ALL 3 reviewers have reported before proceeding to merge
 
-**If a reviewer gets stuck or stops without reporting:** Send them a message asking for their findings. If they don't respond, note that domain as "incomplete".
+**If a reviewer gets stuck or stops without reporting:** Send them a message asking for their findings. If they don't respond, shut them down and note that domain as "incomplete".
 
 ## Merge & Evaluate Findings
 
@@ -202,9 +201,9 @@ Announce: "N fix(es), all S-size — fixing inline." or "N fix(es) including M/L
 1. For each S-size fix, apply TDD:
    - Write failing test → run (`./gradlew test --tests "pattern"`) → implement fix → run → verify pass
 2. Run full test suite: `./gradlew test`
-3. Run bug-hunter:
+3. Run bug-hunter (as a standalone subagent, NOT a teammate — do NOT pass `team_name`):
    ```
-   Task tool with subagent_type "bug-hunter"
+   Agent tool with subagent_type "bug-hunter"
    ```
 4. **If clean:** Proceed to Document Findings with "fixed inline" format
 5. **If bug-hunter finds new issues in the fixes:** Abandon inline approach — create Fix Plan as normal. Document the original findings plus new ones from bug-hunter.
@@ -327,13 +326,6 @@ No issues found - all implementations are correct and follow project conventions
 
 **Then continue to the next iteration needing review.**
 
-## Shutdown Team
-
-After documenting findings for the current batch of iterations:
-1. Send shutdown requests to all 3 reviewers using `SendMessage` with `type: "shutdown_request"`
-2. Wait for shutdown confirmations
-3. Use `TeamDelete` to remove team resources
-
 ## After ALL Iterations Reviewed
 
 ### Report Findings to User
@@ -365,9 +357,9 @@ If there were no findings at all (clean review), a brief "No issues found" summa
   2. Inform user: "Review complete. Changes committed and pushed. Run `/plan-implement` to continue implementation."
 
 - **If all tasks complete and no fix plans needed** (includes iterations where all bugs were fixed inline) → Run instrumented tests, update header status, append final status, then create PR:
-  1. **Run instrumented tests** using the verifier agent in E2E mode:
+  1. **Run instrumented tests** using the verifier agent in E2E mode (as a standalone subagent, NOT a teammate — do NOT pass `team_name`):
      ```
-     Use Task tool with subagent_type "verifier" with prompt "e2e"
+     Use Agent tool with subagent_type "verifier" with prompt "e2e"
      ```
      If instrumented tests fail, do NOT mark complete — create new Linear issues in Todo for the failures (same as review findings), add a Fix Plan, commit/push, and inform user to run `/plan-implement`.
   2. **Update the header** on line 3: change `**Status:** IN_PROGRESS` to `**Status:** COMPLETE`
@@ -489,3 +481,5 @@ If the scope assessment chose single-agent mode (≤4 changed files) OR `TeamCre
 - **Inline fix threshold: ≤3 S-size fixes** — When all FIX findings are S-size (surgical, single-line or few-line) and count ≤3, fix them inline with TDD instead of creating a Fix Plan. Abandon inline approach if tests fail or bug-hunter finds new issues.
 - **Inline fixes still get Linear issues** — Create issues in "Merge" state for traceability. Never skip the audit trail.
 - **Review scope assessment** — ≤4 changed files → single-agent review. 5+ files → 3 reviewers. Always use team for security-sensitive changes regardless of file count.
+- **Only reviewers are teammates** — Bug-hunter, verifier, and pr-creator are standalone subagents spawned via `Agent` tool WITHOUT `team_name`. Only the 3 domain reviewers are team members.
+- **Shut down reviewers immediately** — Send shutdown request to each reviewer as soon as they report findings. Call `TeamDelete` as soon as the last reviewer is shut down. Do NOT keep teammates alive during merge/evaluate/document phases.
