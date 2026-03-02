@@ -15,6 +15,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import timber.log.Timber
 import java.time.LocalDate
+import java.time.LocalTime
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 import javax.inject.Inject
@@ -179,11 +181,19 @@ class SyncNutritionUseCase @Inject constructor(
                             .thenByDescending { it.second.time ?: "" },
                     )
                     .take(3)
-                    .map { (_, entry) ->
+                    .map { (dateStr, entry) ->
+                        val date = LocalDate.parse(dateStr, DateTimeFormatter.ISO_LOCAL_DATE)
+                        val time = try {
+                            entry.time?.let { LocalTime.parse(it) } ?: LocalTime.NOON
+                        } catch (_: DateTimeParseException) {
+                            LocalTime.NOON
+                        }
+                        val timestamp = date.atTime(time).atZone(ZoneId.systemDefault()).toInstant()
                         SyncedMealSummary(
                             foodName = entry.foodName,
                             mealType = entry.mealType,
                             calories = entry.calories.roundToInt().coerceAtLeast(0),
+                            timestamp = timestamp,
                         )
                     }
                 settingsRepository.setLastSyncedMeals(summaries)

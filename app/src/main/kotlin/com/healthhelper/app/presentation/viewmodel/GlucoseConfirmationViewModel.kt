@@ -8,6 +8,7 @@ import com.healthhelper.app.domain.model.GlucoseReading
 import com.healthhelper.app.domain.model.GlucoseUnit
 import com.healthhelper.app.domain.model.RelationToMeal
 import com.healthhelper.app.domain.model.SpecimenSource
+import com.healthhelper.app.domain.usecase.InferGlucoseDefaultsUseCase
 import com.healthhelper.app.domain.usecase.WriteGlucoseReadingUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
@@ -44,6 +45,7 @@ data class GlucoseConfirmationUiState(
 class GlucoseConfirmationViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val writeGlucoseReadingUseCase: WriteGlucoseReadingUseCase,
+    private val inferGlucoseDefaultsUseCase: InferGlucoseDefaultsUseCase,
 ) : ViewModel() {
 
     private val rawValue: Float = savedStateHandle["value"] ?: 5.6f
@@ -68,6 +70,27 @@ class GlucoseConfirmationViewModel @Inject constructor(
         ),
     )
     val uiState: StateFlow<GlucoseConfirmationUiState> = _uiState.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            try {
+                val defaults = inferGlucoseDefaultsUseCase()
+                _uiState.update {
+                    it.copy(
+                        relationToMeal = defaults.relationToMeal,
+                        glucoseMealType = defaults.glucoseMealType,
+                        specimenSource = defaults.specimenSource,
+                        mealTypeVisible = defaults.relationToMeal == RelationToMeal.BEFORE_MEAL ||
+                            defaults.relationToMeal == RelationToMeal.AFTER_MEAL,
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to infer glucose defaults")
+            }
+        }
+    }
 
     private val _navigateHome = MutableSharedFlow<String>(
         replay = 0,

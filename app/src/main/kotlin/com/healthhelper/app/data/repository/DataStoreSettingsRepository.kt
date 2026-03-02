@@ -25,6 +25,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import timber.log.Timber
+import java.time.Instant
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
@@ -40,6 +41,7 @@ class DataStoreSettingsRepository @Inject constructor(
         val foodName: String,
         val mealType: String,
         val calories: Int,
+        val timestamp: String? = null,
     )
 
     private companion object {
@@ -143,6 +145,13 @@ class DataStoreSettingsRepository @Inject constructor(
                 val dtos = Json.decodeFromString<List<SyncedMealDto>>(json)
                 dtos.mapNotNull { dto ->
                     try {
+                        val timestamp = dto.timestamp?.let {
+                            try {
+                                Instant.parse(it)
+                            } catch (_: Exception) {
+                                Instant.EPOCH
+                            }
+                        } ?: Instant.EPOCH
                         SyncedMealSummary(
                             foodName = dto.foodName,
                             mealType = try {
@@ -151,6 +160,7 @@ class DataStoreSettingsRepository @Inject constructor(
                                 MealType.UNKNOWN
                             },
                             calories = dto.calories,
+                            timestamp = timestamp,
                         )
                     } catch (e: IllegalArgumentException) {
                         null
@@ -199,7 +209,14 @@ class DataStoreSettingsRepository @Inject constructor(
     }
 
     override suspend fun setLastSyncedMeals(meals: List<SyncedMealSummary>) {
-        val dtos = meals.map { SyncedMealDto(it.foodName, it.mealType.name, it.calories) }
+        val dtos = meals.map {
+            SyncedMealDto(
+                it.foodName,
+                it.mealType.name,
+                it.calories,
+                it.timestamp.toString(),
+            )
+        }
         val json = Json.encodeToString(dtos)
         dataStore.edit { it[LAST_SYNCED_MEALS] = json }
     }

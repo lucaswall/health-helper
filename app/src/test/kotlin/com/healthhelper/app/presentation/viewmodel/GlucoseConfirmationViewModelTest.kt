@@ -2,10 +2,12 @@ package com.healthhelper.app.presentation.viewmodel
 
 import app.cash.turbine.test
 import androidx.lifecycle.SavedStateHandle
+import com.healthhelper.app.domain.model.GlucoseDefaults
 import com.healthhelper.app.domain.model.GlucoseUnit
 import com.healthhelper.app.domain.model.RelationToMeal
 import com.healthhelper.app.domain.model.GlucoseMealType
 import com.healthhelper.app.domain.model.SpecimenSource
+import com.healthhelper.app.domain.usecase.InferGlucoseDefaultsUseCase
 import com.healthhelper.app.domain.usecase.WriteGlucoseReadingUseCase
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -31,8 +33,15 @@ import kotlin.test.assertTrue
 class GlucoseConfirmationViewModelTest {
 
     private val testDispatcher = StandardTestDispatcher()
-    private lateinit var useCase: WriteGlucoseReadingUseCase
+    private lateinit var writeUseCase: WriteGlucoseReadingUseCase
+    private lateinit var inferDefaultsUseCase: InferGlucoseDefaultsUseCase
     private lateinit var viewModel: GlucoseConfirmationViewModel
+
+    private val unknownDefaults = GlucoseDefaults(
+        relationToMeal = RelationToMeal.UNKNOWN,
+        glucoseMealType = GlucoseMealType.UNKNOWN,
+        specimenSource = SpecimenSource.CAPILLARY_BLOOD,
+    )
 
     private fun createSavedStateHandle(
         value: Float = 5.6f,
@@ -43,7 +52,9 @@ class GlucoseConfirmationViewModelTest {
     @BeforeEach
     fun setUp() {
         Dispatchers.setMain(testDispatcher)
-        useCase = mockk()
+        writeUseCase = mockk()
+        inferDefaultsUseCase = mockk()
+        coEvery { inferDefaultsUseCase.invoke(any()) } returns unknownDefaults
     }
 
     @AfterEach
@@ -55,7 +66,11 @@ class GlucoseConfirmationViewModelTest {
         value: Float = 5.6f,
         unit: String = "mmol/L",
         detectedUnit: String = "mmol/L",
-    ) = GlucoseConfirmationViewModel(createSavedStateHandle(value, unit, detectedUnit), useCase)
+    ) = GlucoseConfirmationViewModel(
+        createSavedStateHandle(value, unit, detectedUnit),
+        writeUseCase,
+        inferDefaultsUseCase,
+    )
 
     @Test
     fun `initial state populated from SavedStateHandle in mmol_L`() = runTest {
@@ -256,7 +271,7 @@ class GlucoseConfirmationViewModelTest {
 
     @Test
     fun `save success emits navigateHome event with mmol_L value`() = runTest {
-        coEvery { useCase.invoke(any()) } returns true
+        coEvery { writeUseCase.invoke(any()) } returns true
         viewModel = createViewModel(5.6f, "mmol/L", "mmol/L")
         advanceTimeBy(1_000)
 
@@ -272,7 +287,7 @@ class GlucoseConfirmationViewModelTest {
 
     @Test
     fun `save failure sets error message`() = runTest {
-        coEvery { useCase.invoke(any()) } returns false
+        coEvery { writeUseCase.invoke(any()) } returns false
         viewModel = createViewModel()
         advanceTimeBy(1_000)
 
@@ -290,7 +305,7 @@ class GlucoseConfirmationViewModelTest {
     @Test
     fun `save while already saving is ignored`() = runTest {
         var callCount = 0
-        coEvery { useCase.invoke(any()) } coAnswers {
+        coEvery { writeUseCase.invoke(any()) } coAnswers {
             callCount++
             kotlinx.coroutines.delay(2_000)
             true
@@ -308,7 +323,7 @@ class GlucoseConfirmationViewModelTest {
 
     @Test
     fun `save exception sets generic error message`() = runTest {
-        coEvery { useCase.invoke(any()) } throws RuntimeException("Write failed")
+        coEvery { writeUseCase.invoke(any()) } throws RuntimeException("Write failed")
         viewModel = createViewModel()
         advanceTimeBy(1_000)
 
@@ -325,7 +340,7 @@ class GlucoseConfirmationViewModelTest {
 
     @Test
     fun `save calls use case with correct GlucoseReading`() = runTest {
-        coEvery { useCase.invoke(any()) } returns true
+        coEvery { writeUseCase.invoke(any()) } returns true
         viewModel = createViewModel(5.6f, "mmol/L", "mmol/L")
         advanceTimeBy(1_000)
 
@@ -333,11 +348,103 @@ class GlucoseConfirmationViewModelTest {
         advanceUntilIdle()
 
         coVerify {
-            useCase.invoke(
+            writeUseCase.invoke(
                 match { reading ->
                     reading.valueMmolL in 5.59..5.61
                 },
             )
+        }
+    }
+
+    // --- Smart defaults tests ---
+
+    @Test
+    fun `initial state reflects AFTER_MEAL defaults when meal is recent`() = runTest {
+        coEvery { inferDefaultsUseCase.invoke(any()) } returns GlucoseDefaults(
+            relationToMeal = RelationToMeal.AFTER_MEAL,
+            glucoseMealType = GlucoseMealType.BREAKFAST,
+            specimenSource = SpecimenSource.CAPILLARY_BLOOD,
+        )
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals(RelationToMeal.AFTER_MEAL, state.relationToMeal)
+            assertEquals(GlucoseMealType.BREAKFAST, state.glucoseMealType)
+            assertEquals(SpecimenSource.CAPILLARY_BLOOD, state.specimenSource)
+            assertTrue(state.mealTypeVisible)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `initial state shows FASTING when meal is old`() = runTest {
+        coEvery { inferDefaultsUseCase.invoke(any()) } returns GlucoseDefaults(
+            relationToMeal = RelationToMeal.FASTING,
+            glucoseMealType = GlucoseMealType.UNKNOWN,
+            specimenSource = SpecimenSource.CAPILLARY_BLOOD,
+        )
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals(RelationToMeal.FASTING, state.relationToMeal)
+            assertEquals(SpecimenSource.CAPILLARY_BLOOD, state.specimenSource)
+            assertFalse(state.mealTypeVisible)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `initial state shows UNKNOWN when no meals or middle window`() = runTest {
+        coEvery { inferDefaultsUseCase.invoke(any()) } returns unknownDefaults
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals(RelationToMeal.UNKNOWN, state.relationToMeal)
+            assertEquals(GlucoseMealType.UNKNOWN, state.glucoseMealType)
+            assertEquals(SpecimenSource.CAPILLARY_BLOOD, state.specimenSource)
+            assertFalse(state.mealTypeVisible)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `user can override inferred defaults`() = runTest {
+        coEvery { inferDefaultsUseCase.invoke(any()) } returns GlucoseDefaults(
+            relationToMeal = RelationToMeal.AFTER_MEAL,
+            glucoseMealType = GlucoseMealType.BREAKFAST,
+            specimenSource = SpecimenSource.CAPILLARY_BLOOD,
+        )
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.updateRelationToMeal(RelationToMeal.FASTING)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals(RelationToMeal.FASTING, state.relationToMeal)
+            assertFalse(state.mealTypeVisible)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `infer defaults exception keeps UNKNOWN defaults`() = runTest {
+        coEvery { inferDefaultsUseCase.invoke(any()) } throws RuntimeException("error")
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals(RelationToMeal.UNKNOWN, state.relationToMeal)
+            assertEquals(GlucoseMealType.UNKNOWN, state.glucoseMealType)
+            assertEquals(SpecimenSource.UNKNOWN, state.specimenSource)
+            cancelAndIgnoreRemainingEvents()
         }
     }
 }
