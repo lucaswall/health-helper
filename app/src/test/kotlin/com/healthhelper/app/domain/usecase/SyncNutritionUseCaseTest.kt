@@ -17,6 +17,9 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import java.io.IOException
+import java.time.Instant
+import java.time.LocalTime
+import java.time.ZoneId
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
@@ -742,6 +745,56 @@ class SyncNutritionUseCaseTest {
         // Both dates should be called — single failure doesn't abort
         coVerify(exactly = 2) { foodLogRepository.getFoodLog(any(), any(), any()) }
         assertTrue(result is SyncResult.Success)
+    }
+
+    // --- Timestamp population tests ---
+
+    @Test
+    @DisplayName("synced meal summaries include timestamp derived from entry date + time")
+    fun syncedMealSummariesIncludeTimestamp() = runTest {
+        val today = LocalDate.now()
+        val todayStr = today.format(DateTimeFormatter.ISO_LOCAL_DATE)
+        configureSettings(lastSyncedDate = today.format(DateTimeFormatter.ISO_LOCAL_DATE))
+
+        val entry = testEntry.copy(foodName = "Lunch", time = "12:30:00")
+        coEvery { foodLogRepository.getFoodLog(any(), any(), todayStr) } returns Result.success(FoodLogResult.Data(listOf(entry)))
+        coEvery { nutritionRepository.writeNutritionRecords(any(), any()) } returns true
+
+        useCase.invoke()
+
+        val expectedInstant = today.atTime(LocalTime.of(12, 30, 0)).atZone(ZoneId.systemDefault()).toInstant()
+        coVerify {
+            settingsRepository.setLastSyncedMeals(
+                withArg { meals ->
+                    assertEquals(1, meals.size)
+                    assertEquals(expectedInstant, meals[0].timestamp)
+                },
+            )
+        }
+    }
+
+    @Test
+    @DisplayName("synced meal summaries with null time get timestamp at noon of the entry date")
+    fun syncedMealSummariesWithNullTimeDefaultToNoon() = runTest {
+        val today = LocalDate.now()
+        val todayStr = today.format(DateTimeFormatter.ISO_LOCAL_DATE)
+        configureSettings(lastSyncedDate = today.format(DateTimeFormatter.ISO_LOCAL_DATE))
+
+        val entry = testEntry.copy(foodName = "Lunch", time = null)
+        coEvery { foodLogRepository.getFoodLog(any(), any(), todayStr) } returns Result.success(FoodLogResult.Data(listOf(entry)))
+        coEvery { nutritionRepository.writeNutritionRecords(any(), any()) } returns true
+
+        useCase.invoke()
+
+        val expectedInstant = today.atTime(LocalTime.NOON).atZone(ZoneId.systemDefault()).toInstant()
+        coVerify {
+            settingsRepository.setLastSyncedMeals(
+                withArg { meals ->
+                    assertEquals(1, meals.size)
+                    assertEquals(expectedInstant, meals[0].timestamp)
+                },
+            )
+        }
     }
 
     @Test
