@@ -173,6 +173,48 @@ class InferGlucoseDefaultsUseCaseTest {
     }
 
     @Test
+    @DisplayName("future-dated meal timestamp returns all UNKNOWN + CAPILLARY_BLOOD")
+    fun futureMealReturnsDefaults() = runTest {
+        val now = Instant.parse("2026-03-01T14:00:00Z")
+        val futureTime = now.plus(2, ChronoUnit.HOURS)
+        every { settingsRepository.lastSyncedMealsFlow } returns flowOf(listOf(meal(MealType.LUNCH, futureTime)))
+
+        val result = useCase.invoke(now)
+
+        assertEquals(RelationToMeal.UNKNOWN, result.relationToMeal)
+        assertEquals(GlucoseMealType.UNKNOWN, result.glucoseMealType)
+        assertEquals(SpecimenSource.CAPILLARY_BLOOD, result.specimenSource)
+    }
+
+    @Test
+    @DisplayName("meal exactly 3 hours ago returns UNKNOWN (middle window boundary)")
+    fun exactlyThreeHoursReturnsUnknown() = runTest {
+        val now = Instant.parse("2026-03-01T14:00:00Z")
+        val mealTime = now.minus(3, ChronoUnit.HOURS)
+        every { settingsRepository.lastSyncedMealsFlow } returns flowOf(listOf(meal(MealType.LUNCH, mealTime)))
+
+        val result = useCase.invoke(now)
+
+        assertEquals(RelationToMeal.UNKNOWN, result.relationToMeal)
+        assertEquals(GlucoseMealType.UNKNOWN, result.glucoseMealType)
+        assertEquals(SpecimenSource.CAPILLARY_BLOOD, result.specimenSource)
+    }
+
+    @Test
+    @DisplayName("meal exactly 8 hours ago returns FASTING (fasting boundary)")
+    fun exactlyEightHoursReturnsFasting() = runTest {
+        val now = Instant.parse("2026-03-01T14:00:00Z")
+        val mealTime = now.minus(8, ChronoUnit.HOURS)
+        every { settingsRepository.lastSyncedMealsFlow } returns flowOf(listOf(meal(MealType.LUNCH, mealTime)))
+
+        val result = useCase.invoke(now)
+
+        assertEquals(RelationToMeal.FASTING, result.relationToMeal)
+        assertEquals(GlucoseMealType.UNKNOWN, result.glucoseMealType)
+        assertEquals(SpecimenSource.CAPILLARY_BLOOD, result.specimenSource)
+    }
+
+    @Test
     @DisplayName("SettingsRepository read exception returns all UNKNOWN + CAPILLARY_BLOOD")
     fun repositoryExceptionReturnsDefaults() = runTest {
         val now = Instant.parse("2026-03-01T14:00:00Z")

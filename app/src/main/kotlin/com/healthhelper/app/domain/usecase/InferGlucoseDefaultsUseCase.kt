@@ -6,6 +6,7 @@ import com.healthhelper.app.domain.model.RelationToMeal
 import com.healthhelper.app.domain.model.SpecimenSource
 import com.healthhelper.app.domain.repository.SettingsRepository
 import kotlinx.coroutines.flow.first
+import timber.log.Timber
 import java.time.Duration
 import java.time.Instant
 import javax.inject.Inject
@@ -19,7 +20,8 @@ class InferGlucoseDefaultsUseCase @Inject constructor(
             settingsRepository.lastSyncedMealsFlow.first()
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to read synced meals for glucose defaults")
             return DEFAULTS
         }
 
@@ -31,6 +33,7 @@ class InferGlucoseDefaultsUseCase @Inject constructor(
         }
 
         val elapsed = Duration.between(mostRecent.timestamp, now)
+        if (elapsed.isNegative) return DEFAULTS
         val hours = elapsed.toHours()
 
         return when {
