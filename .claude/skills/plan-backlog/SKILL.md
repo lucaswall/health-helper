@@ -261,7 +261,18 @@ For each issue:
 
 #### 4.3 Write PLANS.md
 
-Write the plan to `PLANS.md` at the project root using the structure template in [references/plans-template.md](references/plans-template.md).
+## PLANS.md Structure
+
+Read `references/plans-template.md` for the complete template.
+
+**Source field:** `Backlog: HEA-123, HEA-456` (list the issue keys being planned)
+
+Include: Context Gathered (Codebase Analysis + MCP Context + Triage Results), Tasks, Post-Implementation Checklist, Plan Summary.
+Omit: Investigation subsection.
+
+Weave each issue's acceptance criteria into the relevant task steps — do not create a separate Issues section.
+
+Write the plan to `PLANS.md` at the project root.
 
 #### 4.4 Validate Plan Against CLAUDE.md
 
@@ -381,32 +392,8 @@ If the user asks to also implement the plan, tell them to use the `plan-implemen
 
 ---
 
-## Termination: Git Workflow
+## Termination
 
-After writing `PLANS.md` and moving issues to Todo in Linear, complete the session with these git operations:
+Follow the termination procedure in `references/plans-template.md`: output the Plan Summary, then create branch, commit (no `Co-Authored-By` tags), and push.
 
-1. **Create a feature branch:**
-   ```bash
-   git checkout -b feat/PROJ-123-short-description
-   ```
-   Use the primary issue key in the branch name. If multiple issues, use the first one.
-
-2. **Stage and commit the plan** (no `Co-Authored-By` tags):
-   ```bash
-   git add PLANS.md
-   git commit -m "plan(PROJ-123): add implementation plan for [short description]
-
-   Issues: PROJ-123, PROJ-456
-   Status: Todo in Linear"
-   ```
-
-3. **Push the branch:**
-   ```bash
-   git push -u origin feat/PROJ-123-short-description
-   ```
-
-4. **Report completion** to the user with:
-   - Branch name
-   - Summary of what was planned
-   - Number of tasks in the plan
-   - Next step: use `plan-implement` to start implementation
+Do not ask follow-up questions. Do not offer to implement. Output the summary and stop.

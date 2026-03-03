@@ -111,75 +111,14 @@ When possible, try to reproduce via Bash (Gradle commands are appropriate for Ba
 
 ## 7. Document Findings in PLANS.md
 
-Write or append to `PLANS.md` at the project root with this structure:
+Read `references/plans-template.md` for the complete template.
 
-```markdown
-# Fix Plan: [Brief Bug Title]
+**Source field:** `Bug report: [Summary of $ARGUMENTS]`
 
-**Issue:** PROJ-xxx (if Linear issue exists, otherwise "To be created")
-**Sentry:** [Sentry issue URL] (if originating from Sentry, otherwise omit this line)
-**Date:** YYYY-MM-DD
-**Status:** Planning
-**Branch:** fix/PROJ-xxx-brief-description (proposed)
+Include: Context Gathered (Codebase Analysis + MCP Context + Investigation), Tasks, Post-Implementation Checklist, Plan Summary.
+Omit: Triage Results subsection.
 
-## Investigation
-
-### Bug Report
-[What was reported - user's description of the problem]
-
-### Classification
-- **Type:** [Build Error | Runtime Crash | UI Bug | Data Issue | DI Issue | Navigation | Performance | Integration]
-- **Severity:** [Critical | High | Medium | Low]
-- **Affected Area:** [specific Composable/ViewModel/UseCase/Repository]
-
-### Root Cause Analysis
-[What you found during investigation]
-
-#### Evidence
-- **File:** `path/to/File.kt:lineNumber` - [what's wrong here]
-- **File:** `path/to/AnotherFile.kt:lineNumber` - [related issue]
-- **Logs:** [relevant log output if any]
-
-#### Related Code
-- `path/to/File.kt:lineNumber` — [describe what this code does and why it's problematic]
-- `path/to/OtherFile.kt:lineNumber` — [describe the related code]
-(Reference files and line numbers. Do NOT paste code blocks — the implementer will read the files.)
-
-### Impact
-- [What breaks because of this bug]
-- [Who is affected]
-- [Any data implications]
-
-## Fix Plan (TDD Approach)
-
-### Step 1: [Short description of change]
-**File:** `app/src/main/kotlin/com/healthhelper/app/.../File.kt` (create | modify)
-**Test:** `app/src/test/kotlin/com/healthhelper/app/.../FileTest.kt` (create | modify)
-**Pattern:** Follow `app/src/main/kotlin/com/healthhelper/app/.../SimilarExistingFile.kt` structure
-
-**Behavior:**
-- [What this component/function should do — written as a behavioral spec]
-- [State transitions, edge cases, error handling]
-- [Reference existing patterns by file path]
-
-**Tests:**
-1. [Test assertion in plain English]
-2. [Test assertion in plain English]
-3. [Test assertion in plain English]
-
-### Step 2: [Next change]
-(Same structure — behavioral spec, not code)
-
-### Step N: Verify
-- [ ] All new tests pass
-- [ ] All existing tests pass
-- [ ] Kotlin compiles without errors (`./gradlew assembleDebug`)
-- [ ] Lint passes (`./gradlew lint`)
-- [ ] Build succeeds
-
-## Notes
-- [Any additional context, workarounds, or considerations]
-```
+The Investigation subsection under Context Gathered must include: bug report, classification (type/severity/affected area), root cause, evidence (file paths with line numbers -- no code blocks), and impact.
 
 ## 8. Create Linear Issue
 
@@ -278,25 +217,10 @@ This skill is NOT for:
 - General investigation without a fix intent (use investigate)
 - Refactoring (create a separate task)
 
-## 12. Termination and Git Workflow
+## 12. Termination
 
-When investigation and planning are complete:
+Follow the termination procedure in `references/plans-template.md`: output the Plan Summary, then create branch, commit (no `Co-Authored-By` tags), and push.
 
-1. **Summarize findings** to the user:
-   - Bug classification and severity
-   - Root cause (confirmed or hypothesized)
-   - Files affected
-   - Linear issue created (PROJ-xxx)
+If chained from investigate skill, reference the investigation findings and note any additional evidence found during planning.
 
-2. **Create branch, commit (no `Co-Authored-By` tags), and push:**
-   ```bash
-   git checkout -b fix/PROJ-xxx-brief-description && git add PLANS.md && git commit -m "plan(PROJ-xxx): add fix plan for brief description" && git push -u origin fix/PROJ-xxx-brief-description
-   ```
-
-3. **Suggest next steps:**
-   - "Run `/plan-implement` to implement the fix plan"
-   - If critical: "This is a critical issue - recommend implementing immediately"
-
-4. **If chained from investigate skill:**
-   - Reference the investigation findings
-   - Note any additional evidence found during the fix planning phase
+Do not ask follow-up questions. Do not offer to implement. Output the summary and stop.

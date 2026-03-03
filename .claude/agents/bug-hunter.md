@@ -133,13 +133,13 @@ Analyze uncommitted git changes for bugs and project rule violations.
 
 ### AI-Generated Code Risks
 
-Apply extra scrutiny for:
-- Logic errors (75% more common in AI code)
-- Security flaws (~45% of AI code contains them)
-- Code duplication
-- Hallucinated APIs (non-existent methods/libraries)
-- Missing business context
-- Java-style patterns instead of idiomatic Kotlin
+All code in this diff is AI-generated. Apply extra scrutiny for:
+- **Logic errors** — off-by-one, inverted conditions, wrong variable in copy-pasted blocks
+- **Security gaps** — missing input validation, auth checks, or output encoding that a human would add from experience
+- **Hallucinated APIs** — calls to methods, options, or libraries that don't exist
+- **Shallow error handling** — catch blocks that swallow errors or return misleading defaults
+- **Missing edge cases** — empty inputs, null/undefined, concurrent access, timeout/retry
+- **Java-style patterns** instead of idiomatic Kotlin
 
 ## Output Format
 

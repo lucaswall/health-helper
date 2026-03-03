@@ -1,7 +1,7 @@
 ---
 name: push-to-production
 description: Release a new version with debug APK on GitHub. Use when user says "push to production", "release", "deploy", or "new version". Runs tests, bumps version, builds debug APK, merges main to release, tags, creates GitHub Release with APK download, and transitions Linear issues.
-allowed-tools: Read, Edit, Write, Glob, Grep, Bash, Task, mcp__linear__list_teams, mcp__linear__list_issues, mcp__linear__get_issue, mcp__linear__save_issue, mcp__linear__list_issue_statuses
+allowed-tools: Read, Edit, Write, Glob, Grep, Bash, Task, mcp__linear__list_teams, mcp__linear__list_issues, mcp__linear__get_issue, mcp__linear__update_issue, mcp__linear__list_issue_statuses
 argument-hint: [version]
 disable-model-invocation: true
 ---
@@ -12,7 +12,9 @@ Release `main` to `release` with automated testing, version bump, debug APK buil
 
 ### 1.1 Verify Linear MCP
 
-**ALWAYS call `mcp__linear__list_teams` directly.** Do NOT try to determine MCP availability by inspecting the tool list, checking settings, or reasoning about it — you MUST actually invoke the tool and check the result. If the call fails or returns an error, **STOP** and tell the user: "Linear MCP is not connected. Run `/mcp` to reconnect, then re-run this skill."
+**ALWAYS call `mcp__linear__list_teams` directly.** Do NOT try to determine MCP availability by inspecting the tool list, checking settings, or reasoning about it — you MUST actually invoke the tool and check the result. If the call fails or returns an error, **warn** but do not stop — Linear state transitions are cosmetic, the release can proceed without them.
+
+Extract the team name from the response (there should only be one team in most cases).
 
 ### 1.2 Git State
 
@@ -28,7 +30,13 @@ git status --porcelain
 
 If any check fails, **STOP** and tell the user what to fix.
 
-### 1.3 Build & Tests
+### 1.3 Check for Pending PLANS.md
+
+Read `PLANS.md` from project root (if it exists). If it contains incomplete tasks (tasks not marked as done), **STOP**: "There are incomplete tasks in PLANS.md. Finish implementation first or clear the plan before releasing."
+
+If PLANS.md doesn't exist or has no incomplete tasks, continue.
+
+### 1.4 Build & Tests
 
 Run the `verifier` agent (full mode) to confirm unit tests and build pass:
 
@@ -38,7 +46,7 @@ Use Task tool with subagent_type "verifier"
 
 If verifier reports failures, **STOP**. Do not proceed with a broken build.
 
-### 1.4 Release Branch Exists
+### 1.5 Release Branch Exists
 
 ```bash
 git rev-parse --verify origin/release
@@ -48,10 +56,6 @@ If `release` branch doesn't exist, **STOP** and tell the user to create it:
 ```
 git checkout -b release && git push -u origin release && git checkout main
 ```
-
-### 1.5 Check for Pending PLANS.md
-
-Read `PLANS.md` from project root (if it exists). If it contains incomplete tasks (tasks not marked as done), **STOP**: "There are incomplete tasks in PLANS.md. Finish implementation first or clear the plan before releasing."
 
 ### 1.6 Diff Assessment
 
@@ -68,13 +72,15 @@ Show the user the commit list and file diff summary.
 
 **First release (no prior tags):** If `git describe --tags` fails, this is the first tagged release. Use the full commit history and treat the current `build.gradle.kts` version as the starting version.
 
+**IMPORTANT:** Wait for the user to acknowledge the diff summary before proceeding to Phase 2.
+
 ## Phase 2: Version & Changelog
 
 ### 2.1 Determine Version
 
 Follows [Semantic Versioning 2.0.0](https://semver.org/):
 
-1. Read `CHANGELOG.md` and extract the current version from the first `## [x.y.z]` header. If no version exists yet (first release), treat current as `0.0.0`.
+1. Read `CHANGELOG.md` and extract the current version from the first `## [x.y.z]` header. If `CHANGELOG.md` doesn't exist, this is the first release — create it fresh.
 2. If `<arguments>` contains a version (e.g., `2.0.0`):
    - Validate it's valid semver (X.Y.Z)
    - Validate it's strictly higher than current version
@@ -183,19 +189,19 @@ Extract release notes from `CHANGELOG.md` — the content between the new `## [v
 Write the release notes to a temporary file:
 
 ```
-Use the Write tool to create /tmp/health-helper-release-notes.md with the extracted changelog content
+Use the Write tool to create release-notes.md with the extracted changelog content
 ```
 
 Create the release with the debug APK attached:
 
 ```bash
-gh release create "v<version>" app/build/outputs/apk/debug/app-debug.apk --title "v<version>" --notes-file /tmp/health-helper-release-notes.md --verify-tag
+gh release create "v<version>" app/build/outputs/apk/debug/app-debug.apk --title "v<version>" --notes-file release-notes.md --verify-tag
 ```
 
 Clean up:
 
 ```bash
-rm -f /tmp/health-helper-release-notes.md
+rm -f release-notes.md
 ```
 
 **Flags reference:**
@@ -206,30 +212,38 @@ rm -f /tmp/health-helper-release-notes.md
 **Error handling:** If `gh release create` fails, **do NOT stop the release**. Log a warning in the Phase 6 report:
 ```
 **Warning:** GitHub Release creation failed: [error message]. Create manually with:
-gh release create "v<version>" app/build/outputs/apk/debug/app-debug.apk --title "v<version>" --notes-file /tmp/health-helper-release-notes.md --verify-tag
+gh release create "v<version>" app/build/outputs/apk/debug/app-debug.apk --title "v<version>" --notes-file release-notes.md --verify-tag
 ```
 
 The git tag and merge already succeeded — the GitHub Release is cosmetic and can be created manually later.
 
 ## Phase 6: Post-Release
 
-### 6.1 Move Done Issues to Released
+### 6.1 Move Issues to Released
 
-Transition all Linear issues in "Done" to "Released" now that the code is live.
+Transition all Linear issues in "Done" or "Merge" to "Released" now that the code is live.
 
-1. Query all issues in Done state:
+1. Look up the Released state UUID using `mcp__linear__list_issue_statuses` with team "Health Helper". Find the status with `name: "Released"` (or similar — check what states exist in the team).
+
+2. Query issues stuck in "Merge" state (PR was merged but Linear automation didn't fire):
+   ```
+   mcp__linear__list_issues with team: "Health Helper", state: "Merge"
+   ```
+
+3. Query all issues in "Done" state:
    ```
    mcp__linear__list_issues with team: "Health Helper", state: "Done"
    ```
 
-2. For each issue found, transition to Released using the **state UUID** (both Done and Released are `type: completed` — passing by name could silently no-op):
+4. For each issue found (from both queries), transition to Released using the **state UUID** (both Done and Released are `type: completed` — passing by name could silently no-op):
    ```
-   mcp__linear__save_issue with id: <issue-id>, state: "81f24ed2-206c-49c0-b13d-e5aacc6cdb06"
+   mcp__linear__update_issue with id: <issue-id>, state: "<released-state-uuid>"
    ```
+   **Batch efficiently:** Call up to 10 `update_issue` calls in parallel. If there are more than 30 issues, update the first 30 and note the remainder in the report for manual transition.
 
-3. Collect the list of moved issues (identifier + title) for the report.
+5. Collect the list of moved issues (identifier + title) for the report.
 
-If no issues are in Done, that's fine — skip silently.
+If no issues are in Done or Merge, that's fine — skip silently.
 
 If the Linear MCP is unavailable (tools fail), **do not STOP** — log a warning in the report and continue. The release itself succeeded; issue state is cosmetic.
 
@@ -282,6 +296,7 @@ If the Linear MCP is unavailable (tools fail), **do not STOP** — log a warning
 - **Debug APK for distribution** — Until signing is configured, all releases ship debug APKs
 - **Semantic Versioning 2.0.0** — Version bumps follow semver rules
 - **versionCode always increments** — By exactly 1 each release (Play Store requirement if ever used)
+- **Linear is cosmetic** — Issue state transitions are nice-to-have. Never block a release because Linear MCP is down.
 - **Stop on any failure** — Better to abort than ship a broken release
 - **Changelog describes user-visible changes** — Not internal refactors or tooling
 - **GitHub Release is non-blocking** — If it fails, the git release (tag + merge) already succeeded

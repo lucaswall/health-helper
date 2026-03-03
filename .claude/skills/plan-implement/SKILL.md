@@ -53,7 +53,7 @@ For each pending task/fix, estimate its size:
 
 Announce the decision with reasoning: "N tasks across M independent units, effort score P — [workers/single-agent mode]." Then jump to "Fallback: Single-Agent Mode" if single-agent, or continue to "Work Partitioning" if workers.
 
-**Rationale:** Pure task/file counts miss complexity. Five surgical fixes (5xS=5 points) don't justify workers even across 7 files, but four substantial features (4xL=16 points) clearly do. The effort score captures this.
+**Rationale:** Pure task/file counts miss complexity. Five surgical fixes (5xS=5 points) don't justify workers even across 7 files, but four substantial features (4xL=16 points) clearly do. The effort score captures this. Calibrated from real iterations: a batch of 7 mixed M/L tasks (e.g., new ViewModel + Repository + 2 Composables + use cases) → workers justified; a batch of 3 small fixes → worker overhead exceeded the work; a fix plan of 5 S-sized UI/condition tweaks → single-agent was correct.
 
 ## Work Partitioning
 
@@ -242,8 +242,13 @@ If the user reports a worker is struggling, check worktree status first. If chan
 1. Worker messages are **automatically delivered** — do NOT poll
 2. Teammates go idle after each turn — normal and expected
 3. Track progress via `TaskList`
-4. Acknowledge each worker's task completion
-5. If a worker reports a blocker, help resolve it
+4. When a worker reports ALL tasks complete and has committed:
+   a. Acknowledge completion
+   b. Update Linear issues (In Progress → Review)
+   c. Mark their TaskList task as completed via `TaskUpdate`
+   d. **Immediately send shutdown request** via `SendMessage` with `type: "shutdown_request"` — do not wait for other workers to finish
+5. When the **last worker confirms shutdown**, call `TeamDelete` immediately — the team is no longer needed. Deleting it now prevents bug-hunter/verifier subagents from accidentally joining as team members.
+6. If a worker reports a blocker, help resolve it
 
 ### Handling Blockers
 
@@ -273,12 +278,13 @@ git -C _workers/worker-N add -A -- ':!local.properties' ':!*.jks' ':!*.keystore'
 git -C _workers/worker-N commit -m "lead: salvage worker-N uncommitted progress"
 ```
 
-### 2. Shutdown Workers and Delete Team
+### 2. Verify All Workers Shut Down and Team Deleted
 
-1. Send shutdown requests to all workers using `SendMessage` with `type: "shutdown_request"`
-2. Wait for shutdown confirmations — timeout after 2 minutes per worker
-3. Mark all work unit tasks as completed via `TaskUpdate`
-4. **Delete the team immediately:** `TeamDelete` — the team is no longer needed after workers are done. Deleting it now prevents bug-hunter/verifier from accidentally joining as team members.
+Workers should already be shut down individually during the Coordination phase (each shut down as they completed). Verify:
+- All work unit tasks are marked completed via `TaskList`
+- `TeamDelete` was called after the last shutdown confirmation
+
+**If any worker was NOT shut down during coordination** (e.g., went idle without reporting), salvage their work (step 1) and send shutdown now. Call `TeamDelete` after the last confirmation.
 
 **CRITICAL: Never delete worktrees while workers are alive.** Worktree deletion is IRREVERSIBLE and destroys all uncommitted worker progress. The sequence MUST be: shutdown all workers → verify all confirmed → THEN delete worktrees in the Cleanup phase.
 

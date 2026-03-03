@@ -142,71 +142,12 @@ Example arguments:
 
 ## PLANS.md Structure
 
-```markdown
-# Implementation Plan
+Read `references/plans-template.md` for the complete template.
 
-**Created:** YYYY-MM-DD
-**Source:** Inline request: [Summary of $ARGUMENTS]
-**Sentry Issues:** [Sentry issue URLs] (if originating from Sentry, otherwise omit this line)
-**Linear Issues:** [PROJ-123](https://linear.app/...), [PROJ-124](https://linear.app/...)
+**Source field:** `Inline request: [Summary of $ARGUMENTS]`
 
-## Context Gathered
-
-### Codebase Analysis
-- **Related files:** [files found through exploration]
-- **Existing patterns:** [patterns to follow]
-- **Test conventions:** [how tests are structured in this area]
-
-### MCP Context (if applicable)
-- **MCPs used:** [which MCPs were consulted]
-- **Findings:** [relevant information discovered]
-
-## Original Plan
-
-### Task 1: [Name]
-**Linear Issue:** [PROJ-123](https://linear.app/...)
-
-1. Write test in [file]Test.kt for [function/scenario]
-2. Run verifier (expect fail)
-3. Implement [function] in [file].kt
-4. Run verifier (expect pass)
-
-### Task 2: [Name]
-**Linear Issue:** [PROJ-124](https://linear.app/...)
-
-1. Write test...
-2. Run verifier...
-3. Implement...
-4. Run verifier...
-
-## Post-Implementation Checklist
-1. Run `bug-hunter` agent - Review changes for bugs
-2. Run `verifier` agent - Verify all tests pass and zero warnings
-
----
-
-## Plan Summary
-
-**Objective:** [One sentence describing what this plan accomplishes]
-
-**Request:** [Brief paraphrase of the original $ARGUMENTS]
-
-**Linear Issues:** [PROJ-123, PROJ-124, ...]
-
-**Approach:** [2-3 sentences describing the implementation strategy at a high level]
-
-**Scope:**
-- Tasks: [count]
-- Files affected: [estimated count]
-- New tests: [yes/no]
-
-**Key Decisions:**
-- [Important architectural or design decision 1]
-- [Important decision 2, if any]
-
-**Risks/Considerations:**
-- [Any risks or things to watch out for]
-```
+Include: Context Gathered (Codebase Analysis + MCP Context), Tasks, Post-Implementation Checklist, Plan Summary.
+Omit: Investigation subsection, Triage Results subsection.
 
 ## Linear Issue Creation
 
@@ -306,50 +247,6 @@ If CLAUDE.md doesn't list MCPs, skip MCP context gathering.
 
 ## Termination
 
-When you finish writing PLANS.md (and creating Linear issues), output the plan summary followed by the completion message:
-
-```
-Plan created in PLANS.md
-Linear issues created in Todo: PROJ-123, PROJ-124, ...
-
-## Plan Summary
-
-**Objective:** [Copy from PLANS.md summary]
-
-**Request:** [Copy from PLANS.md summary]
-
-**Linear Issues:** [Copy from PLANS.md summary]
-
-**Approach:** [Copy from PLANS.md summary]
-
-**Scope:**
-- Tasks: [count]
-- Files affected: [estimated count]
-- New tests: [yes/no]
-
-**Key Decisions:**
-- [List from PLANS.md summary]
-
-**Risks/Considerations:**
-- [List from PLANS.md summary]
-
----
-
-Create a feature branch and commit the plan.
-```
-
-**Then execute git workflow:**
-
-1. Create a feature branch with proper naming:
-   - Use `feat/` prefix for new features
-   - Use `fix/` prefix for bug fixes
-   - Use `refactor/` prefix for refactoring
-   - Branch name should be kebab-case, derived from the plan objective
-   - Example: `feat/daily-calorie-calculator`, `refactor/extract-common-health-utils`
-
-2. Stage, commit (no `Co-Authored-By` tags), and push:
-```bash
-git checkout -b <type>/<task-description> && git add PLANS.md && git commit -m "plan: <task-description>" && git push -u origin <type>/<task-description>
-```
+Follow the termination procedure in `references/plans-template.md`: output the Plan Summary, then create branch, commit (no `Co-Authored-By` tags), and push.
 
 Do not ask follow-up questions. Do not offer to implement. Output the summary and stop.

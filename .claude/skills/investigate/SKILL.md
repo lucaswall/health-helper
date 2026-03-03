@@ -67,7 +67,7 @@ Based on $ARGUMENTS, determine what you're investigating:
 
 **For Sentry (crashes, errors, performance):**
 
-The Sentry MCP is available for querying production crash data and error reports. Use ToolSearch to load Sentry tools before calling them. The organization slug and project slug can be discovered via `mcp__sentry__find_organizations` and `mcp__sentry__find_projects`.
+The Sentry MCP is available for querying production crash data and error reports. Use ToolSearch to load Sentry tools before calling them. Read CLAUDE.md SENTRY section for the organization slug, project slug, and region URL — pass these to Sentry MCP tools directly.
 
 **When to use Sentry:**
 - User reports a crash or error happening in production
@@ -77,7 +77,7 @@ The Sentry MCP is available for querying production crash data and error reports
 - Need stack traces from production (more reliable than local logcat)
 
 **Sentry investigation workflow:**
-1. **Find the org/project** — Use `mcp__sentry__find_organizations` then `mcp__sentry__find_projects` to get slugs
+1. **Get org/project from CLAUDE.md** — Read SENTRY section for organization, project, and region URL
 2. **Search for issues** — Use `mcp__sentry__search_issues` with natural language (e.g., "unresolved crashes from last week", "NullPointerException errors")
 3. **Get issue details** — Use `mcp__sentry__get_issue_details` with the issue ID or URL for full stack traces and metadata
 4. **Analyze root cause** — Use `mcp__sentry__analyze_issue_with_seer` for AI-powered root cause analysis

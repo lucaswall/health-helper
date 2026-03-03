@@ -4,30 +4,33 @@ After documenting results (skip in single-agent fallback mode), the lead MUST cl
 
 ## 1. Remove Worktrees
 
+Run each worktree removal as a **separate Bash call** (no chaining). Pre-shutdown verification already commits any uncommitted changes, so `--force` is unnecessary:
 ```bash
-# Remove each worktree (--force handles any uncommitted leftovers)
-git worktree remove _workers/worker-1 --force
-git worktree remove _workers/worker-2 --force
-# ... repeat for each worker
+git worktree remove _workers/worker-1
 ```
+```bash
+git worktree remove _workers/worker-2
+```
+Repeat for each worker. If a removal fails due to uncommitted changes, commit them first via `git -C _workers/worker-N add -A && git -C _workers/worker-N commit -m "lead: salvage"`, then retry the remove.
 
 ## 2. Remove Worker Directory
 
+Run as **separate Bash calls** (don't chain git and rm commands):
 ```bash
-# Safety net — remove the entire _workers/ directory
 rm -rf _workers/
-
-# Prune stale worktree metadata from .git/worktrees/
+```
+```bash
 git worktree prune
 ```
 
 ## 3. Delete Worker Branches
 
+Run each branch delete as a **separate Bash call**:
 ```bash
-# Worker branches are already merged — safe delete
 git branch -d <FEATURE_BRANCH>-worker-1
+```
+```bash
 git branch -d <FEATURE_BRANCH>-worker-2
-# ... repeat for each worker
 ```
 
 ## 4. Sync Dependencies
@@ -47,4 +50,4 @@ git worktree list
 
 Should show only the main worktree. If stale entries remain, run `git worktree prune` again.
 
-**Note:** `TeamDelete` was already called in the Post-Worker Phase (step 2). If it wasn't called there for any reason, call it now.
+**Note:** `TeamDelete` was already called during the Coordination phase (after the last worker confirmed shutdown). If it wasn't called there for any reason, call it now.

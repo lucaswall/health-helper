@@ -67,6 +67,14 @@ Tests: `app/src/test/` (unit), `app/src/androidTest/` (instrumented).
 | Team | Health Helper |
 | Issue prefix | HEA-xxx |
 
+## Sentry
+
+| Field | Value |
+|-------|-------|
+| Organization | lucas-wall |
+| Project | health-helper |
+| Region URL | https://us.sentry.io |
+
 ## Skills
 
 Invoke with `/<skill-name>`. All skills in `.claude/skills/<name>/SKILL.md`.
@@ -79,6 +87,7 @@ Invoke with `/<skill-name>`. All skills in `.claude/skills/<name>/SKILL.md`.
 | `add-to-backlog` | Quick-add an issue to Linear Backlog |
 | `backlog-refine` | Refine and prioritize the Linear Backlog |
 | `pull-from-roadmap` | Pull issues from Roadmap into the current sprint |
+| `push-to-roadmap` | Evaluate a new idea and write a complete feature spec to the roadmap file |
 | `plan-implement` | Implement the current plan (TDD workflow) |
 | `plan-review-implementation` | QA review of completed implementation (3 specialized reviewers) |
 | `code-audit` | Full codebase security and quality audit + Sentry issue triage |
