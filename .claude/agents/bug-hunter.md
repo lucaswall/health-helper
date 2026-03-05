@@ -129,7 +129,7 @@ Analyze uncommitted git changes for bugs and project rule violations.
 
 ### UI Safety (When Code Touches User-Visible State)
 
-- Raw `Exception.message`, `e.localizedMessage`, or server/API response text flowing directly to UI-visible state (Text composable, Toast, Snackbar, error state fields) — use generic user-facing messages and log the raw message for debugging only
+- Raw `Exception.message`, `e.localizedMessage`, or server/API response text flowing directly to UI-visible state (Text composable, Toast, Snackbar, error state fields) — use generic user-facing messages and log the raw message server-side for debugging only
 
 ### AI-Generated Code Risks
 

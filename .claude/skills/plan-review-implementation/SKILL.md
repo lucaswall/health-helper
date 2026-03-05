@@ -15,7 +15,7 @@ Review **ALL** implementation iterations that need review using an agent team wi
 
 1. **Read PLANS.md** — Understand the full plan and iteration history
 2. **Read CLAUDE.md** — Understand project standards and conventions
-3. **Verify Linear MCP** — Call `mcp__linear__list_teams`. If unavailable, STOP and tell the user: "Linear MCP is not connected. Run `/mcp` to reconnect, then re-run this skill."
+3. **Verify Linear MCP** — Call `mcp__linear__list_issues` with `team: "Health Helper"` and `state: "Review"`. If unavailable, STOP and tell the user: "Linear MCP is not connected. Run `/mcp` to reconnect, then re-run this skill."
 4. **Assess AI-generated code risk** — If implementation is large or shows AI patterns, apply extra scrutiny
 
 ## Linear State Management
@@ -325,6 +325,12 @@ No issues found - all implementations are correct and follow project conventions
 ```
 
 **Then continue to the next iteration needing review.**
+
+## Shutdown Team
+
+Reviewers should already be shut down individually during the Coordination phase (each shut down as they reported findings), and `TeamDelete` should already be called.
+
+**If any reviewer was NOT shut down during coordination** (e.g., went idle without reporting), send shutdown request now. Call `TeamDelete` after the last confirmation if not already called.
 
 ## After ALL Iterations Reviewed
 

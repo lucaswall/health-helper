@@ -15,7 +15,7 @@ Each worker operates in its own **git worktree** — a fully isolated working di
 
 1. **Read PLANS.md** — Understand the full context and history
 2. **Read CLAUDE.md** — Understand TDD workflow and project rules
-3. **Verify Linear MCP** — Call `mcp__linear__list_teams` **directly** (never delegate to a subagent — subagents don't have MCP access). If the tool is unavailable or errors, **STOP immediately** and tell the user: "Linear MCP is not connected. Run `/mcp` to reconnect, then re-run this skill." Do NOT rationalize continuing without Linear.
+3. **Verify Linear MCP** — Call `mcp__linear__list_issues` with `team: "Health Helper"` and `state: "Todo"` **directly** (never delegate to a subagent — subagents don't have MCP access). If the tool is unavailable or errors, **STOP immediately** and tell the user: "Linear MCP is not connected. Run `/mcp` to reconnect, then re-run this skill." Do NOT rationalize continuing without Linear.
 4. **Identify pending work** — Use this priority order:
    - Check latest Iteration block for "Tasks Remaining" section
    - Look for `## Fix Plan` (h2 level) with no iteration after it
@@ -183,8 +183,6 @@ Spawn all workers in parallel (concurrent Task calls in one message).
 ### Worker Prompt Template
 
 Read [references/worker-prompt-template.md](references/worker-prompt-template.md) for the full worker prompt template, testing context examples, and protocol consistency block.
-
-Spawn all workers in parallel (concurrent Task calls in one message).
 
 ### Assign tasks and label issues
 
@@ -413,17 +411,12 @@ If `TeamCreate` fails or worktree setup fails, implement the plan sequentially a
 
 **Steps:**
 1. Stage modified files: `git status --porcelain=v1`, then `git add <file> ...` — **skip** files matching `.env*`, `*.key`, `*.pem`, `credentials*`, `secrets*`, `*.jks`, `*.keystore`, `local.properties`
-2. Create commit (do **not** include `Co-Authored-By` tags):
+2. Create commit with a **simple `-m` string** (do **not** include `Co-Authored-By` tags):
+   ```bash
+   git commit -m "plan: implement iteration N - [brief summary]"
    ```
-   plan: implement iteration N - [brief summary]
-
-   Tasks completed:
-   - Task X: [title]
-   - Task Y: [title]
-
-   Method: agent team (N workers, worktree-isolated)
-   ```
-   (Use "Method: single-agent" in fallback mode)
+   Use "Method: single-agent" in fallback mode. Keep the message on one line -- task details are already in PLANS.md.
+   **IMPORTANT:** Do NOT use `git commit -m "$(cat <<'EOF'...)"` or any `$()` subshell -- the subshell triggers permission prompts even with `Bash(git *)` in the allow list.
 3. Push to current branch: `git push`
 
 **Branch handling:**

@@ -192,6 +192,7 @@ Create a Linear issue in the discovered team with status "Todo":
 - **ALWAYS check for existing Linear issues** before creating new ones to avoid duplicates.
 - **ALWAYS include file paths and line numbers** in evidence and fix plans.
 - **ALWAYS propose a branch name** following the pattern `fix/PROJ-xxx-brief-description`.
+- **Discover MCPs from CLAUDE.md** - don't hardcode MCP names or paths
 - **Keep fix plans actionable** - another developer (or AI agent) should be able to follow the plan without additional context.
 - **Severity guidelines:**
   - **Critical:** App crashes on launch, data loss, security vulnerability
