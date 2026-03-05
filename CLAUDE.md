@@ -86,8 +86,7 @@ Invoke with `/<skill-name>`. All skills in `.claude/skills/<name>/SKILL.md`.
 | `plan-backlog` | Plan a batch of Backlog issues into an implementation plan |
 | `add-to-backlog` | Quick-add an issue to Linear Backlog |
 | `backlog-refine` | Refine and prioritize the Linear Backlog |
-| `pull-from-roadmap` | Pull issues from Roadmap into the current sprint |
-| `push-to-roadmap` | Evaluate a new idea and write a complete feature spec to the roadmap file |
+| `roadmap` | Deep research and discussion of a roadmap feature or new idea — write to roadmap, pull to backlog, plan, modify, or drop |
 | `plan-implement` | Implement the current plan (TDD workflow) |
 | `plan-review-implementation` | QA review of completed implementation (3 specialized reviewers) |
 | `code-audit` | Full codebase security and quality audit + Sentry issue triage |
