@@ -396,6 +396,20 @@ class FoodScannerApiClientTest {
         assertNull(result.getOrThrow().etag)
     }
 
+    // --- Network exception tests ---
+
+    @Test
+    @DisplayName("UnresolvedAddressException returns failure result")
+    fun unresolvedAddressException() = runTest {
+        val engine = MockEngine { throw java.nio.channels.UnresolvedAddressException() }
+        val client = createClient(engine)
+
+        val result = client.getFoodLog("https://food.example.com", "fsk_test", "2026-02-27")
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull() is java.nio.channels.UnresolvedAddressException)
+    }
+
     // --- 5xx log level tests ---
 
     @Test
