@@ -66,25 +66,29 @@ class ETagStorageTest {
         repository = DataStoreSettingsRepository(dataStore, encryptedPrefs)
     }
 
+    private val today = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE)
+    private val yesterday = LocalDate.now().minusDays(1).format(DateTimeFormatter.ISO_LOCAL_DATE)
+    private val twoDaysAgo = LocalDate.now().minusDays(2).format(DateTimeFormatter.ISO_LOCAL_DATE)
+
     @Test
     @DisplayName("getETag returns null when no ETag stored")
     fun getETagReturnsNullWhenNoETagStored() = testScope.runTest {
-        assertNull(repository.getETag("2026-02-28"))
+        assertNull(repository.getETag(today))
     }
 
     @Test
     @DisplayName("setETag then getETag returns stored value")
     fun setETagThenGetETagReturnsStoredValue() = testScope.runTest {
-        repository.setETag("2026-02-28", "\"abc123\"")
-        assertEquals("\"abc123\"", repository.getETag("2026-02-28"))
+        repository.setETag(today, "\"abc123\"")
+        assertEquals("\"abc123\"", repository.getETag(today))
     }
 
     @Test
     @DisplayName("setETag overwrites previous ETag for same date")
     fun setETagOverwritesPreviousETagForSameDate() = testScope.runTest {
-        repository.setETag("2026-02-28", "\"abc123\"")
-        repository.setETag("2026-02-28", "\"def456\"")
-        assertEquals("\"def456\"", repository.getETag("2026-02-28"))
+        repository.setETag(today, "\"abc123\"")
+        repository.setETag(today, "\"def456\"")
+        assertEquals("\"def456\"", repository.getETag(today))
     }
 
     @Test
@@ -118,17 +122,17 @@ class ETagStorageTest {
         dataStore.edit { it[key] = "this is not valid json{{{" }
         repository = DataStoreSettingsRepository(dataStore, encryptedPrefs)
 
-        assertNull(repository.getETag("2026-02-28"))
+        assertNull(repository.getETag(today))
     }
 
     @Test
     @DisplayName("ETags for different dates are independent")
     fun eTagsForDifferentDatesAreIndependent() = testScope.runTest {
-        repository.setETag("2026-02-27", "\"etag_27\"")
-        repository.setETag("2026-02-28", "\"etag_28\"")
+        repository.setETag(yesterday, "\"etag_yesterday\"")
+        repository.setETag(today, "\"etag_today\"")
 
-        assertEquals("\"etag_27\"", repository.getETag("2026-02-27"))
-        assertEquals("\"etag_28\"", repository.getETag("2026-02-28"))
-        assertNull(repository.getETag("2026-02-26"))
+        assertEquals("\"etag_yesterday\"", repository.getETag(yesterday))
+        assertEquals("\"etag_today\"", repository.getETag(today))
+        assertNull(repository.getETag(twoDaysAgo))
     }
 }

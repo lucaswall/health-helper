@@ -84,3 +84,28 @@
 
 **Risks/Considerations:**
 - Truly unexpected `IOException` subtypes will now be logged at warning level — acceptable tradeoff since all exceptions in this catch block are from network calls
+
+---
+
+## Iteration 1
+
+**Implemented:** 2026-03-10
+**Method:** Single-agent (effort score 1, single work unit)
+
+### Tasks Completed This Iteration
+- Task 1: Downgrade transient network exceptions from Timber.e to Timber.w
+
+### Files Modified
+- `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt` — Added IOException/UnresolvedAddressException check to use Timber.w instead of Timber.e
+- `app/src/test/kotlin/com/healthhelper/app/data/api/FoodScannerApiClientTest.kt` — Added UnresolvedAddressException test
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/ETagStorageTest.kt` — Fixed pre-existing bug: hardcoded dates replaced with relative dates to prevent 7-day prune cutoff failures
+
+### Linear Updates
+- HEA-164: Todo → In Progress → Review
+
+### Pre-commit Verification
+- bug-hunter: Passed, no bugs found
+- verifier: All tests pass, zero warnings, build successful
+
+### Continuation Status
+All tasks completed.

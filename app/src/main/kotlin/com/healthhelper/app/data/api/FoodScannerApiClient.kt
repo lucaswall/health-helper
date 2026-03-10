@@ -94,7 +94,11 @@ class FoodScannerApiClient @Inject constructor(
             Result.failure(Exception("Failed to parse response"))
         } catch (e: Exception) {
             if (e is CancellationException) throw e
-            Timber.e(e, "getFoodLog(%s) error", date)
+            if (e is java.io.IOException || e is java.nio.channels.UnresolvedAddressException) {
+                Timber.w(e, "getFoodLog(%s) network error", date)
+            } else {
+                Timber.e(e, "getFoodLog(%s) error", date)
+            }
             Result.failure(e)
         }
     }
