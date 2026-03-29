@@ -27,8 +27,7 @@ class FoodScannerHealthRepositoryImpl @Inject constructor(
         val zoneOffset = zoneOffsetString(reading.timestamp)
         val dto = GlucoseReadingDto(
             measuredAt = reading.timestamp.toString(),
-            // reading.valueMgDl after Worker-1 merges; using displayInMgDl() as workaround
-            valueMgDl = reading.displayInMgDl(),
+            valueMgDl = reading.valueMgDl,
             zoneOffset = zoneOffset,
             relationToMeal = reading.relationToMeal.name.lowercase(),
             mealType = reading.glucoseMealType.name.lowercase(),
