@@ -32,12 +32,9 @@ class FoodScannerHealthRepositoryImplTest {
     private lateinit var settingsRepository: SettingsRepository
     private lateinit var repository: FoodScannerHealthRepositoryImpl
 
-    // Old constructor (valueMmolL) used for worktree compat.
-    // After Worker-1 merges, this should be GlucoseReading(valueMgDl = 90).
-    // (5.0 * 18.018).roundToInt() = 90
     private val fixedTimestamp = Instant.parse("2026-03-29T10:00:00Z")
     private val testGlucoseReading = GlucoseReading(
-        valueMmolL = 5.0,
+        valueMgDl = 90,
         relationToMeal = RelationToMeal.BEFORE_MEAL,
         glucoseMealType = GlucoseMealType.BREAKFAST,
         specimenSource = SpecimenSource.CAPILLARY_BLOOD,

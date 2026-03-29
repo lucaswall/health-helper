@@ -4,6 +4,7 @@ import app.cash.turbine.test
 import androidx.lifecycle.SavedStateHandle
 import com.healthhelper.app.domain.model.GlucoseDefaults
 import com.healthhelper.app.domain.model.GlucoseUnit
+import com.healthhelper.app.domain.model.HealthDataWriteResult
 import com.healthhelper.app.domain.model.RelationToMeal
 import com.healthhelper.app.domain.model.GlucoseMealType
 import com.healthhelper.app.domain.model.SpecimenSource
@@ -271,7 +272,10 @@ class GlucoseConfirmationViewModelTest {
 
     @Test
     fun `save success emits navigateHome event with mg_dL value`() = runTest {
-        coEvery { writeUseCase.invoke(any()) } returns true
+        coEvery { writeUseCase.invoke(any()) } returns HealthDataWriteResult(
+            healthConnectSuccess = true,
+            foodScannerResult = Result.success(Unit),
+        )
         viewModel = createViewModel(5.6f, "mmol/L", "mmol/L")
         advanceTimeBy(1_000)
 
@@ -286,8 +290,97 @@ class GlucoseConfirmationViewModelTest {
     }
 
     @Test
+    fun `save with both succeed clears isSaving and no error`() = runTest {
+        coEvery { writeUseCase.invoke(any()) } returns HealthDataWriteResult(
+            healthConnectSuccess = true,
+            foodScannerResult = Result.success(Unit),
+        )
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.save()
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertFalse(state.isSaving)
+            assertNull(state.error)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `save with HC fail and FS success navigates home with warning`() = runTest {
+        coEvery { writeUseCase.invoke(any()) } returns HealthDataWriteResult(
+            healthConnectSuccess = false,
+            foodScannerResult = Result.success(Unit),
+        )
+        viewModel = createViewModel(5.6f, "mmol/L", "mmol/L")
+        advanceTimeBy(1_000)
+
+        viewModel.navigateHome.test {
+            viewModel.save()
+            advanceUntilIdle()
+            val msg = awaitItem()
+            assertNotNull(msg)
+            cancelAndIgnoreRemainingEvents()
+        }
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertNotNull(state.warning)
+            assertNull(state.error)
+            assertFalse(state.isSaving)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `save with FS fail sets error and does not navigate`() = runTest {
+        coEvery { writeUseCase.invoke(any()) } returns HealthDataWriteResult(
+            healthConnectSuccess = true,
+            foodScannerResult = Result.failure(RuntimeException("sync failed")),
+        )
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.save()
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertNotNull(state.error)
+            assertFalse(state.isSaving)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `save with both fail sets error and does not navigate`() = runTest {
+        coEvery { writeUseCase.invoke(any()) } returns HealthDataWriteResult(
+            healthConnectSuccess = false,
+            foodScannerResult = Result.failure(RuntimeException("sync failed")),
+        )
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.save()
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertNotNull(state.error)
+            assertFalse(state.isSaving)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
     fun `save failure sets error message`() = runTest {
-        coEvery { writeUseCase.invoke(any()) } returns false
+        coEvery { writeUseCase.invoke(any()) } returns HealthDataWriteResult(
+            healthConnectSuccess = false,
+            foodScannerResult = Result.failure(RuntimeException("sync failed")),
+        )
         viewModel = createViewModel()
         advanceTimeBy(1_000)
 
@@ -308,7 +401,10 @@ class GlucoseConfirmationViewModelTest {
         coEvery { writeUseCase.invoke(any()) } coAnswers {
             callCount++
             kotlinx.coroutines.delay(2_000)
-            true
+            HealthDataWriteResult(
+                healthConnectSuccess = true,
+                foodScannerResult = Result.success(Unit),
+            )
         }
         viewModel = createViewModel()
         advanceTimeBy(1_000)
@@ -340,7 +436,10 @@ class GlucoseConfirmationViewModelTest {
 
     @Test
     fun `save calls use case with correct GlucoseReading`() = runTest {
-        coEvery { writeUseCase.invoke(any()) } returns true
+        coEvery { writeUseCase.invoke(any()) } returns HealthDataWriteResult(
+            healthConnectSuccess = true,
+            foodScannerResult = Result.success(Unit),
+        )
         viewModel = createViewModel(5.6f, "mmol/L", "mmol/L")
         advanceTimeBy(1_000)
 
