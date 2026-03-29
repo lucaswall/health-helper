@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-03-29
+
+### Added
+
+- Glucose and blood pressure readings now sync to the Food Scanner API alongside Health Connect
+- Glucose values displayed in mg/dL as the primary unit, with mmol/L shown as secondary
+
+### Changed
+
+- Blood pressure confirmation now defaults to sitting position and left upper arm
+
+### Fixed
+
+- Fixed crash when reading out-of-range glucose values from Health Connect
+- Fixed coroutine cancellation handling during permission checks and blood pressure loading
+
 ## [1.3.1] - 2026-03-10
 
 ### Fixed
@@ -68,7 +84,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Settings screen for API configuration and sync interval
 - Adaptive launcher icon with health cross design
 
-[Unreleased]: https://github.com/lucaswall/health-helper/compare/v1.3.1...HEAD
+[Unreleased]: https://github.com/lucaswall/health-helper/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/lucaswall/health-helper/compare/v1.3.1...v1.4.0
 [1.3.1]: https://github.com/lucaswall/health-helper/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/lucaswall/health-helper/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/lucaswall/health-helper/compare/v1.2.0...v1.2.1
