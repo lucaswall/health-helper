@@ -13,6 +13,7 @@ import com.healthhelper.app.data.api.AnthropicApiClient
 import com.healthhelper.app.data.api.FoodScannerApiClient
 import com.healthhelper.app.data.repository.DataStoreSettingsRepository
 import com.healthhelper.app.data.repository.FoodScannerFoodLogRepository
+import com.healthhelper.app.data.repository.FoodScannerHealthRepositoryImpl
 import com.healthhelper.app.data.repository.HealthConnectBloodGlucoseRepository
 import com.healthhelper.app.data.repository.HealthConnectBloodPressureRepository
 import com.healthhelper.app.data.repository.HealthConnectNutritionRepository
@@ -20,6 +21,7 @@ import com.healthhelper.app.data.sync.SyncScheduler
 import com.healthhelper.app.domain.repository.BloodGlucoseRepository
 import com.healthhelper.app.domain.repository.BloodPressureRepository
 import com.healthhelper.app.domain.repository.FoodLogRepository
+import com.healthhelper.app.domain.repository.FoodScannerHealthRepository
 import com.healthhelper.app.domain.repository.NutritionRepository
 import com.healthhelper.app.domain.repository.SettingsRepository
 import dagger.Module
@@ -120,6 +122,13 @@ object AppModule {
         apiClient: FoodScannerApiClient,
         settingsRepository: SettingsRepository,
     ): FoodLogRepository = FoodScannerFoodLogRepository(apiClient, settingsRepository)
+
+    @Provides
+    @Singleton
+    fun provideFoodScannerHealthRepository(
+        apiClient: FoodScannerApiClient,
+        settingsRepository: SettingsRepository,
+    ): FoodScannerHealthRepository = FoodScannerHealthRepositoryImpl(apiClient, settingsRepository)
 
     @Provides
     @Singleton

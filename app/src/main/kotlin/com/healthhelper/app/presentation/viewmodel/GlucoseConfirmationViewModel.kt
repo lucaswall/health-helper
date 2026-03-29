@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.healthhelper.app.domain.model.GlucoseMealType
 import com.healthhelper.app.domain.model.GlucoseReading
 import com.healthhelper.app.domain.model.GlucoseUnit
+import com.healthhelper.app.domain.model.HealthDataWriteResult
 import com.healthhelper.app.domain.model.RelationToMeal
 import com.healthhelper.app.domain.model.SpecimenSource
 import com.healthhelper.app.domain.usecase.InferGlucoseDefaultsUseCase
@@ -27,8 +28,8 @@ import javax.inject.Inject
 import kotlin.math.roundToInt
 
 data class GlucoseConfirmationUiState(
-    val valueMmolL: String = "",
-    val displayMgDl: String = "",
+    val valueMgDl: String = "",
+    val displayMmolL: String = "",
     val detectedUnit: GlucoseUnit = GlucoseUnit.MMOL_L,
     val originalValue: String = "",
     val relationToMeal: RelationToMeal = RelationToMeal.UNKNOWN,
@@ -38,6 +39,7 @@ data class GlucoseConfirmationUiState(
     val isSaveEnabled: Boolean = false,
     val isSaving: Boolean = false,
     val error: String? = null,
+    val warning: String? = null,
     val validationError: String? = null,
 )
 
@@ -54,19 +56,19 @@ class GlucoseConfirmationViewModel @Inject constructor(
 
     private val detectedUnit = if (detectedUnitStr == "mg/dL") GlucoseUnit.MG_DL else GlucoseUnit.MMOL_L
 
-    private val initialMmolL: Double = if (unitStr == "mg/dL") {
-        (rawValue / 18.018).toBigDecimal().setScale(1, java.math.RoundingMode.HALF_UP).toDouble()
+    private val initialMgDl: Int = if (unitStr == "mg/dL") {
+        rawValue.roundToInt()
     } else {
-        rawValue.toBigDecimal().setScale(1, java.math.RoundingMode.HALF_UP).toDouble()
+        GlucoseReading.fromMmolL(rawValue.toDouble())
     }
 
     private val _uiState = MutableStateFlow(
         GlucoseConfirmationUiState(
-            valueMmolL = formatMmolL(initialMmolL),
-            displayMgDl = computeMgDl(initialMmolL),
+            valueMgDl = initialMgDl.toString(),
+            displayMmolL = computeMmolL(initialMgDl.toDouble()),
             detectedUnit = detectedUnit,
             originalValue = if (detectedUnit == GlucoseUnit.MG_DL) rawValue.roundToInt().toString() else "",
-            isSaveEnabled = validate(formatMmolL(initialMmolL)).first,
+            isSaveEnabled = validate(initialMgDl.toString()).first,
         ),
     )
     val uiState: StateFlow<GlucoseConfirmationUiState> = _uiState.asStateFlow()
@@ -103,11 +105,11 @@ class GlucoseConfirmationViewModel @Inject constructor(
 
     fun updateValue(value: String) {
         val (enabled, validationError) = validate(value)
-        val mgDl = value.toDoubleOrNull()?.let { computeMgDl(it) } ?: ""
+        val mmolL = value.toDoubleOrNull()?.let { computeMmolL(it) } ?: ""
         _uiState.update {
             it.copy(
-                valueMmolL = value,
-                displayMgDl = mgDl,
+                valueMgDl = value,
+                displayMmolL = mmolL,
                 isSaveEnabled = enabled,
                 validationError = validationError,
             )
@@ -136,25 +138,52 @@ class GlucoseConfirmationViewModel @Inject constructor(
         val state = _uiState.value
         if (!state.isSaveEnabled) return
 
-        val mmolL = state.valueMmolL.toDoubleOrNull() ?: return
+        val mgDl = state.valueMgDl.toDoubleOrNull()?.roundToInt() ?: return
 
         savingJob?.cancel()
         savingJob = viewModelScope.launch {
             _uiState.update { it.copy(isSaving = true, error = null) }
             try {
                 val reading = GlucoseReading(
-                    valueMmolL = mmolL,
+                    valueMgDl = mgDl,
                     relationToMeal = state.relationToMeal,
                     glucoseMealType = state.glucoseMealType,
                     specimenSource = state.specimenSource,
                 )
-                val success = writeGlucoseReadingUseCase.invoke(reading)
-                if (success) {
-                    _uiState.update { it.copy(isSaving = false) }
-                    _navigateHome.emit("${state.valueMmolL} mmol/L saved")
-                } else {
-                    _uiState.update {
-                        it.copy(isSaving = false, error = "Failed to save reading. Please try again.")
+                val result = writeGlucoseReadingUseCase.invoke(reading)
+                when {
+                    result.allSucceeded -> {
+                        _uiState.update { it.copy(isSaving = false) }
+                        _navigateHome.emit("${state.valueMgDl} mg/dL saved")
+                    }
+                    result.healthConnectSuccess && result.foodScannerFailed -> {
+                        Timber.w(result.foodScannerResult.exceptionOrNull(), "Food-scanner sync failed for glucose")
+                        _uiState.update {
+                            it.copy(
+                                isSaving = false,
+                                warning = "Saved to Health Connect but could not sync to food-scanner.",
+                            )
+                        }
+                        _navigateHome.emit("${state.valueMgDl} mg/dL saved")
+                    }
+                    !result.healthConnectSuccess && !result.foodScannerFailed -> {
+                        Timber.w("Health Connect write failed for glucose (non-blocking)")
+                        _uiState.update {
+                            it.copy(
+                                isSaving = false,
+                                warning = "Reading saved but could not be written to Health Connect.",
+                            )
+                        }
+                        _navigateHome.emit("${state.valueMgDl} mg/dL saved")
+                    }
+                    else -> {
+                        Timber.w(result.foodScannerResult.exceptionOrNull(), "Both writes failed for glucose")
+                        _uiState.update {
+                            it.copy(
+                                isSaving = false,
+                                error = "Failed to save reading. Please try again.",
+                            )
+                        }
                     }
                 }
             } catch (e: CancellationException) {
@@ -171,18 +200,15 @@ class GlucoseConfirmationViewModel @Inject constructor(
 
     private companion object {
         fun validate(valueStr: String): Pair<Boolean, String?> {
-            val value = valueStr.toDoubleOrNull()
+            val value = valueStr.toDoubleOrNull()?.roundToInt()
                 ?: return Pair(false, "Please enter a valid number")
 
-            if (value < 1.0 || value > 40.0) {
-                return Pair(false, "Value must be between 1.0 and 40.0 mmol/L")
+            if (value < 18 || value > 720) {
+                return Pair(false, "Value must be between 18 and 720 mg/dL")
             }
             return Pair(true, null)
         }
 
-        fun formatMmolL(value: Double): String = "%.1f".format(value)
-
-        fun computeMgDl(mmolL: Double): String =
-            (mmolL * 18.018).roundToInt().toString()
+        fun computeMmolL(mgDl: Double): String = "%.1f".format(mgDl / 18.018)
     }
 }

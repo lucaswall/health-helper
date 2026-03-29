@@ -4,6 +4,7 @@ import app.cash.turbine.test
 import androidx.lifecycle.SavedStateHandle
 import com.healthhelper.app.domain.model.BloodPressureReading
 import com.healthhelper.app.domain.model.BodyPosition
+import com.healthhelper.app.domain.model.HealthDataWriteResult
 import com.healthhelper.app.domain.model.MeasurementLocation
 import com.healthhelper.app.domain.usecase.WriteBloodPressureReadingUseCase
 import io.mockk.coEvery
@@ -61,6 +62,30 @@ class BpConfirmationViewModelTest {
             val state = awaitItem()
             assertEquals("120", state.systolic)
             assertEquals("80", state.diastolic)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `initial state has SITTING_DOWN body position`() = runTest {
+        viewModel = createViewModel(120, 80)
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals(BodyPosition.SITTING_DOWN, state.bodyPosition)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `initial state has LEFT_UPPER_ARM measurement location`() = runTest {
+        viewModel = createViewModel(120, 80)
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals(MeasurementLocation.LEFT_UPPER_ARM, state.measurementLocation)
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -206,7 +231,10 @@ class BpConfirmationViewModelTest {
 
     @Test
     fun `save calls WriteBloodPressureReadingUseCase with correct domain model`() = runTest {
-        coEvery { useCase.invoke(any()) } returns true
+        coEvery { useCase.invoke(any()) } returns HealthDataWriteResult(
+            healthConnectSuccess = true,
+            foodScannerResult = Result.success(Unit),
+        )
         viewModel = createViewModel(120, 80)
         advanceTimeBy(1_000)
 
@@ -224,7 +252,10 @@ class BpConfirmationViewModelTest {
 
     @Test
     fun `save on success emits navigateHome event`() = runTest {
-        coEvery { useCase.invoke(any()) } returns true
+        coEvery { useCase.invoke(any()) } returns HealthDataWriteResult(
+            healthConnectSuccess = true,
+            foodScannerResult = Result.success(Unit),
+        )
         viewModel = createViewModel(120, 80)
         advanceTimeBy(1_000)
 
@@ -239,8 +270,103 @@ class BpConfirmationViewModelTest {
     }
 
     @Test
+    fun `save with both succeed clears isSaving and no error`() = runTest {
+        coEvery { useCase.invoke(any()) } returns HealthDataWriteResult(
+            healthConnectSuccess = true,
+            foodScannerResult = Result.success(Unit),
+        )
+        viewModel = createViewModel(120, 80)
+        advanceTimeBy(1_000)
+
+        viewModel.save()
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertFalse(state.isSaving)
+            assertNull(state.error)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `save with HC fail and FS success navigates home with warning`() = runTest {
+        coEvery { useCase.invoke(any()) } returns HealthDataWriteResult(
+            healthConnectSuccess = false,
+            foodScannerResult = Result.success(Unit),
+        )
+        viewModel = createViewModel(120, 80)
+        advanceTimeBy(1_000)
+
+        viewModel.navigateHome.test {
+            viewModel.save()
+            advanceUntilIdle()
+            val msg = awaitItem()
+            assertNotNull(msg)
+            cancelAndIgnoreRemainingEvents()
+        }
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertNotNull(state.warning)
+            assertNull(state.error)
+            assertFalse(state.isSaving)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `save with HC success and FS fail navigates home with warning`() = runTest {
+        coEvery { useCase.invoke(any()) } returns HealthDataWriteResult(
+            healthConnectSuccess = true,
+            foodScannerResult = Result.failure(RuntimeException("sync failed")),
+        )
+        viewModel = createViewModel(120, 80)
+        advanceTimeBy(1_000)
+
+        viewModel.navigateHome.test {
+            viewModel.save()
+            advanceUntilIdle()
+            val msg = awaitItem()
+            assertNotNull(msg)
+            cancelAndIgnoreRemainingEvents()
+        }
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertNotNull(state.warning)
+            assertNull(state.error)
+            assertFalse(state.isSaving)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `save with both fail sets error and does not navigate`() = runTest {
+        coEvery { useCase.invoke(any()) } returns HealthDataWriteResult(
+            healthConnectSuccess = false,
+            foodScannerResult = Result.failure(RuntimeException("sync failed")),
+        )
+        viewModel = createViewModel(120, 80)
+        advanceTimeBy(1_000)
+
+        viewModel.save()
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertNotNull(state.error)
+            assertFalse(state.isSaving)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
     fun `save on failure sets error message`() = runTest {
-        coEvery { useCase.invoke(any()) } returns false
+        coEvery { useCase.invoke(any()) } returns HealthDataWriteResult(
+            healthConnectSuccess = false,
+            foodScannerResult = Result.failure(RuntimeException("sync failed")),
+        )
         viewModel = createViewModel(120, 80)
         advanceTimeBy(1_000)
 
@@ -261,7 +387,10 @@ class BpConfirmationViewModelTest {
         coEvery { useCase.invoke(any()) } coAnswers {
             callCount++
             kotlinx.coroutines.delay(2_000)
-            true
+            HealthDataWriteResult(
+                healthConnectSuccess = true,
+                foodScannerResult = Result.success(Unit),
+            )
         }
         viewModel = createViewModel(120, 80)
         advanceTimeBy(1_000)

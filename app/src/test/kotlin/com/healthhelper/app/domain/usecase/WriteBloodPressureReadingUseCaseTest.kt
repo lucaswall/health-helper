@@ -1,9 +1,9 @@
 package com.healthhelper.app.domain.usecase
 
 import com.healthhelper.app.domain.model.BloodPressureReading
-import com.healthhelper.app.domain.model.BodyPosition
-import com.healthhelper.app.domain.model.MeasurementLocation
+import com.healthhelper.app.domain.model.HealthDataWriteResult
 import com.healthhelper.app.domain.repository.BloodPressureRepository
+import com.healthhelper.app.domain.repository.FoodScannerHealthRepository
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
@@ -16,7 +16,8 @@ import kotlin.test.assertTrue
 
 class WriteBloodPressureReadingUseCaseTest {
 
-    private lateinit var repository: BloodPressureRepository
+    private lateinit var bloodPressureRepository: BloodPressureRepository
+    private lateinit var foodScannerRepository: FoodScannerHealthRepository
     private lateinit var useCase: WriteBloodPressureReadingUseCase
 
     private val testReading = BloodPressureReading(
@@ -26,55 +27,92 @@ class WriteBloodPressureReadingUseCaseTest {
 
     @BeforeEach
     fun setUp() {
-        repository = mockk()
-        useCase = WriteBloodPressureReadingUseCase(repository)
+        bloodPressureRepository = mockk()
+        foodScannerRepository = mockk()
+        useCase = WriteBloodPressureReadingUseCase(bloodPressureRepository, foodScannerRepository)
     }
 
     @Test
-    @DisplayName("returns true when repository write succeeds")
-    fun returnsTrueOnSuccess() = runTest {
-        coEvery { repository.writeBloodPressureRecord(any()) } returns true
+    @DisplayName("both succeed: healthConnectSuccess=true and foodScannerResult=success")
+    fun bothSucceed() = runTest {
+        coEvery { bloodPressureRepository.writeBloodPressureRecord(any()) } returns true
+        coEvery { foodScannerRepository.pushBloodPressureReading(any()) } returns Result.success(Unit)
+
         val result = useCase.invoke(testReading)
-        assertTrue(result)
+
+        assertTrue(result.healthConnectSuccess)
+        assertTrue(result.foodScannerResult.isSuccess)
+        assertTrue(result.allSucceeded)
+        assertFalse(result.foodScannerFailed)
     }
 
     @Test
-    @DisplayName("returns false when repository write fails")
-    fun returnsFalseOnFailure() = runTest {
-        coEvery { repository.writeBloodPressureRecord(any()) } returns false
+    @DisplayName("HC fails, FS succeeds: healthConnectSuccess=false, foodScannerResult=success")
+    fun hcFailsFsSucceeds() = runTest {
+        coEvery { bloodPressureRepository.writeBloodPressureRecord(any()) } returns false
+        coEvery { foodScannerRepository.pushBloodPressureReading(any()) } returns Result.success(Unit)
+
         val result = useCase.invoke(testReading)
-        assertFalse(result)
+
+        assertFalse(result.healthConnectSuccess)
+        assertTrue(result.foodScannerResult.isSuccess)
+        assertFalse(result.allSucceeded)
+        assertFalse(result.foodScannerFailed)
     }
 
     @Test
-    @DisplayName("passes the BloodPressureReading to repository")
-    fun passesReadingToRepository() = runTest {
-        coEvery { repository.writeBloodPressureRecord(any()) } returns true
-        useCase.invoke(testReading)
-        coVerify { repository.writeBloodPressureRecord(testReading) }
+    @DisplayName("HC succeeds, FS fails: healthConnectSuccess=true, foodScannerResult=failure")
+    fun hcSucceedsFsFails() = runTest {
+        val exception = RuntimeException("FS error")
+        coEvery { bloodPressureRepository.writeBloodPressureRecord(any()) } returns true
+        coEvery { foodScannerRepository.pushBloodPressureReading(any()) } returns Result.failure(exception)
+
+        val result = useCase.invoke(testReading)
+
+        assertTrue(result.healthConnectSuccess)
+        assertTrue(result.foodScannerResult.isFailure)
+        assertTrue(result.foodScannerFailed)
+        assertFalse(result.allSucceeded)
     }
 
     @Test
-    @DisplayName("works with STANDING_UP body position")
-    fun worksWithStandingUp() = runTest {
-        val reading = BloodPressureReading(systolic = 130, diastolic = 85, bodyPosition = BodyPosition.STANDING_UP)
-        coEvery { repository.writeBloodPressureRecord(any()) } returns true
-        val result = useCase.invoke(reading)
-        assertTrue(result)
-        coVerify { repository.writeBloodPressureRecord(reading) }
+    @DisplayName("both fail: healthConnectSuccess=false, foodScannerResult=failure")
+    fun bothFail() = runTest {
+        val exception = RuntimeException("FS error")
+        coEvery { bloodPressureRepository.writeBloodPressureRecord(any()) } returns false
+        coEvery { foodScannerRepository.pushBloodPressureReading(any()) } returns Result.failure(exception)
+
+        val result = useCase.invoke(testReading)
+
+        assertFalse(result.healthConnectSuccess)
+        assertTrue(result.foodScannerResult.isFailure)
+        assertTrue(result.foodScannerFailed)
+        assertFalse(result.allSucceeded)
     }
 
     @Test
-    @DisplayName("works with RIGHT_WRIST measurement location")
-    fun worksWithRightWrist() = runTest {
-        val reading = BloodPressureReading(
-            systolic = 118,
-            diastolic = 76,
-            measurementLocation = MeasurementLocation.RIGHT_WRIST,
-        )
-        coEvery { repository.writeBloodPressureRecord(any()) } returns true
-        val result = useCase.invoke(reading)
-        assertTrue(result)
-        coVerify { repository.writeBloodPressureRecord(reading) }
+    @DisplayName("HC exception does not prevent FS attempt")
+    fun hcExceptionDoesNotPreventFsAttempt() = runTest {
+        coEvery { bloodPressureRepository.writeBloodPressureRecord(any()) } throws RuntimeException("HC error")
+        coEvery { foodScannerRepository.pushBloodPressureReading(any()) } returns Result.success(Unit)
+
+        val result = useCase.invoke(testReading)
+
+        assertFalse(result.healthConnectSuccess)
+        assertTrue(result.foodScannerResult.isSuccess)
+        coVerify { foodScannerRepository.pushBloodPressureReading(any()) }
+    }
+
+    @Test
+    @DisplayName("FS exception does not prevent HC attempt")
+    fun fsExceptionDoesNotPreventHcAttempt() = runTest {
+        coEvery { bloodPressureRepository.writeBloodPressureRecord(any()) } returns true
+        coEvery { foodScannerRepository.pushBloodPressureReading(any()) } throws RuntimeException("FS error")
+
+        val result = useCase.invoke(testReading)
+
+        assertTrue(result.healthConnectSuccess)
+        assertTrue(result.foodScannerResult.isFailure)
+        coVerify { bloodPressureRepository.writeBloodPressureRecord(any()) }
     }
 }

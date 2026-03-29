@@ -84,7 +84,7 @@ fun GlucoseConfirmationScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
-                text = "${uiState.valueMmolL} mmol/L (${uiState.displayMgDl} mg/dL)",
+                text = "${uiState.valueMgDl} mg/dL (${uiState.displayMmolL} mmol/L)",
                 style = MaterialTheme.typography.headlineMedium,
             )
 
@@ -97,14 +97,14 @@ fun GlucoseConfirmationScreen(
             }
 
             OutlinedTextField(
-                value = uiState.valueMmolL,
+                value = uiState.valueMgDl,
                 onValueChange = viewModel::updateValue,
-                label = { Text("Glucose (mmol/L)") },
+                label = { Text("Glucose (mg/dL)") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
-                supportingText = if (uiState.displayMgDl.isNotEmpty()) {
-                    { Text("${uiState.displayMgDl} mg/dL") }
+                supportingText = if (uiState.displayMmolL.isNotEmpty()) {
+                    { Text("${uiState.displayMmolL} mmol/L") }
                 } else {
                     null
                 },
@@ -131,6 +131,14 @@ fun GlucoseConfirmationScreen(
                 Text(
                     text = validationError,
                     color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+
+            uiState.warning?.let { warning ->
+                Text(
+                    text = warning,
+                    color = MaterialTheme.colorScheme.tertiary,
                     style = MaterialTheme.typography.bodySmall,
                 )
             }

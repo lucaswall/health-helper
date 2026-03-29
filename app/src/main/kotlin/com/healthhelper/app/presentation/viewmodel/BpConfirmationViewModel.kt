@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.healthhelper.app.domain.model.BloodPressureReading
 import com.healthhelper.app.domain.model.BodyPosition
+import com.healthhelper.app.domain.model.HealthDataWriteResult
 import com.healthhelper.app.domain.model.MeasurementLocation
 import com.healthhelper.app.domain.usecase.WriteBloodPressureReadingUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -25,11 +26,12 @@ import javax.inject.Inject
 data class BpConfirmationUiState(
     val systolic: String = "",
     val diastolic: String = "",
-    val bodyPosition: BodyPosition = BodyPosition.UNKNOWN,
-    val measurementLocation: MeasurementLocation = MeasurementLocation.UNKNOWN,
+    val bodyPosition: BodyPosition = BodyPosition.SITTING_DOWN,
+    val measurementLocation: MeasurementLocation = MeasurementLocation.LEFT_UPPER_ARM,
     val isSaveEnabled: Boolean = false,
     val isSaving: Boolean = false,
     val error: String? = null,
+    val warning: String? = null,
     val validationError: String? = null,
 )
 
@@ -108,13 +110,40 @@ class BpConfirmationViewModel @Inject constructor(
                     bodyPosition = state.bodyPosition,
                     measurementLocation = state.measurementLocation,
                 )
-                val success = writeBloodPressureReadingUseCase.invoke(reading)
-                if (success) {
-                    _uiState.update { it.copy(isSaving = false) }
-                    _navigateHome.emit("$systolic/$diastolic mmHg saved")
-                } else {
-                    _uiState.update {
-                        it.copy(isSaving = false, error = "Failed to save reading. Please try again.")
+                val result = writeBloodPressureReadingUseCase.invoke(reading)
+                when {
+                    result.allSucceeded -> {
+                        _uiState.update { it.copy(isSaving = false) }
+                        _navigateHome.emit("$systolic/$diastolic mmHg saved")
+                    }
+                    result.healthConnectSuccess && result.foodScannerFailed -> {
+                        Timber.w(result.foodScannerResult.exceptionOrNull(), "Food-scanner sync failed for blood pressure")
+                        _uiState.update {
+                            it.copy(
+                                isSaving = false,
+                                warning = "Saved to Health Connect but could not sync to food-scanner.",
+                            )
+                        }
+                        _navigateHome.emit("$systolic/$diastolic mmHg saved")
+                    }
+                    !result.healthConnectSuccess && !result.foodScannerFailed -> {
+                        Timber.w("Health Connect write failed for blood pressure (non-blocking)")
+                        _uiState.update {
+                            it.copy(
+                                isSaving = false,
+                                warning = "Reading saved but could not be written to Health Connect.",
+                            )
+                        }
+                        _navigateHome.emit("$systolic/$diastolic mmHg saved")
+                    }
+                    else -> {
+                        Timber.w(result.foodScannerResult.exceptionOrNull(), "Both writes failed for blood pressure")
+                        _uiState.update {
+                            it.copy(
+                                isSaving = false,
+                                error = "Failed to save reading. Please try again.",
+                            )
+                        }
                     }
                 }
             } catch (e: CancellationException) {

@@ -3,16 +3,18 @@ package com.healthhelper.app.domain.model
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
+import kotlin.math.abs
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 class GlucoseReadingTest {
 
     @Test
-    @DisplayName("valid reading with default metadata creates successfully")
-    fun validReadingWithDefaults() {
-        val reading = GlucoseReading(valueMmolL = 5.6)
-        assertEquals(5.6, reading.valueMmolL)
+    @DisplayName("valid mg/dL value creates successfully")
+    fun validMgDlValueCreates() {
+        val reading = GlucoseReading(valueMgDl = 100)
+        assertEquals(100, reading.valueMgDl)
         assertEquals(RelationToMeal.UNKNOWN, reading.relationToMeal)
         assertEquals(GlucoseMealType.UNKNOWN, reading.glucoseMealType)
         assertEquals(SpecimenSource.UNKNOWN, reading.specimenSource)
@@ -20,39 +22,76 @@ class GlucoseReadingTest {
     }
 
     @Test
-    @DisplayName("value below 1.0 mmol/L throws IllegalArgumentException")
+    @DisplayName("boundary value 18 is accepted")
+    fun boundaryMin18Passes() {
+        val reading = GlucoseReading(valueMgDl = 18)
+        assertEquals(18, reading.valueMgDl)
+    }
+
+    @Test
+    @DisplayName("boundary value 720 is accepted")
+    fun boundaryMax720Passes() {
+        val reading = GlucoseReading(valueMgDl = 720)
+        assertEquals(720, reading.valueMgDl)
+    }
+
+    @Test
+    @DisplayName("value below 18 mg/dL throws IllegalArgumentException")
     fun valueBelowMinThrows() {
         assertThrows<IllegalArgumentException> {
-            GlucoseReading(valueMmolL = 0.9)
+            GlucoseReading(valueMgDl = 17)
         }
     }
 
     @Test
-    @DisplayName("value above 40.0 mmol/L throws IllegalArgumentException")
+    @DisplayName("value above 720 mg/dL throws IllegalArgumentException")
     fun valueAboveMaxThrows() {
         assertThrows<IllegalArgumentException> {
-            GlucoseReading(valueMmolL = 40.1)
+            GlucoseReading(valueMgDl = 721)
         }
     }
 
     @Test
-    @DisplayName("boundary value 1.0 passes validation")
-    fun boundaryMinPasses() {
-        val reading = GlucoseReading(valueMmolL = 1.0)
-        assertEquals(1.0, reading.valueMmolL)
+    @DisplayName("toMmolL converts 100 mg/dL to approximately 5.55 mmol/L")
+    fun toMmolLConverts100() {
+        val reading = GlucoseReading(valueMgDl = 100)
+        val result = reading.toMmolL()
+        assertTrue(abs(result - 5.55) < 0.01, "Expected ~5.55 but was $result")
     }
 
     @Test
-    @DisplayName("boundary value 40.0 passes validation")
-    fun boundaryMaxPasses() {
-        val reading = GlucoseReading(valueMmolL = 40.0)
-        assertEquals(40.0, reading.valueMmolL)
+    @DisplayName("fromMmolL round-trip for 70 mg/dL")
+    fun roundTripFor70() {
+        val original = 70
+        val reading = GlucoseReading(valueMgDl = original)
+        val backToMgDl = GlucoseReading.fromMmolL(reading.toMmolL())
+        assertEquals(original, backToMgDl)
     }
 
     @Test
-    @DisplayName("displayInMgDl converts 5.6 mmol/L to 101 mg/dL")
-    fun displayInMgDlConverts() {
-        val reading = GlucoseReading(valueMmolL = 5.6)
-        assertEquals(101, reading.displayInMgDl())
+    @DisplayName("fromMmolL round-trip for 100 mg/dL")
+    fun roundTripFor100() {
+        val original = 100
+        val reading = GlucoseReading(valueMgDl = original)
+        val backToMgDl = GlucoseReading.fromMmolL(reading.toMmolL())
+        assertEquals(original, backToMgDl)
+    }
+
+    @Test
+    @DisplayName("fromMmolL round-trip for 126 mg/dL")
+    fun roundTripFor126() {
+        val original = 126
+        val reading = GlucoseReading(valueMgDl = original)
+        val backToMgDl = GlucoseReading.fromMmolL(reading.toMmolL())
+        assertEquals(original, backToMgDl)
+    }
+
+    @Test
+    @DisplayName("fromMmolL round-trip for 200 mg/dL")
+    fun roundTripFor200() {
+        val original = 200
+        val reading = GlucoseReading(valueMgDl = original)
+        val backToMgDl = GlucoseReading.fromMmolL(reading.toMmolL())
+        assertEquals(original, backToMgDl)
     }
 }

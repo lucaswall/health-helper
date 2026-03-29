@@ -4,6 +4,7 @@ import app.cash.turbine.test
 import androidx.lifecycle.SavedStateHandle
 import com.healthhelper.app.domain.model.GlucoseDefaults
 import com.healthhelper.app.domain.model.GlucoseUnit
+import com.healthhelper.app.domain.model.HealthDataWriteResult
 import com.healthhelper.app.domain.model.RelationToMeal
 import com.healthhelper.app.domain.model.GlucoseMealType
 import com.healthhelper.app.domain.model.SpecimenSource
@@ -79,50 +80,50 @@ class GlucoseConfirmationViewModelTest {
 
         viewModel.uiState.test {
             val state = awaitItem()
-            assertEquals("5.6", state.valueMmolL)
-            assertEquals("101", state.displayMgDl)
+            assertEquals("101", state.valueMgDl)
+            assertEquals("5.6", state.displayMmolL)
             assertEquals(GlucoseUnit.MMOL_L, state.detectedUnit)
             cancelAndIgnoreRemainingEvents()
         }
     }
 
     @Test
-    fun `initial state converts mg_dL value to mmol_L`() = runTest {
+    fun `initial state with mg_dL input uses value directly`() = runTest {
         viewModel = createViewModel(101f, "mg/dL", "mg/dL")
         advanceTimeBy(1_000)
 
         viewModel.uiState.test {
             val state = awaitItem()
-            assertEquals("5.6", state.valueMmolL)
-            assertEquals("101", state.displayMgDl)
+            assertEquals("101", state.valueMgDl)
+            assertEquals("5.6", state.displayMmolL)
             assertEquals(GlucoseUnit.MG_DL, state.detectedUnit)
             cancelAndIgnoreRemainingEvents()
         }
     }
 
     @Test
-    fun `dual-unit display shows correct mg_dL for 5_6 mmol_L`() = runTest {
+    fun `initial state displays correct mmol_L for 5_6 mmol_L input`() = runTest {
         viewModel = createViewModel(5.6f, "mmol/L", "mmol/L")
         advanceTimeBy(1_000)
 
         viewModel.uiState.test {
             val state = awaitItem()
-            assertEquals("101", state.displayMgDl)
+            assertEquals("5.6", state.displayMmolL)
             cancelAndIgnoreRemainingEvents()
         }
     }
 
     @Test
-    fun `updateValue updates both mmol_L and mg_dL displays`() = runTest {
+    fun `updateValue updates both mg_dL and mmol_L displays`() = runTest {
         viewModel = createViewModel()
         advanceTimeBy(1_000)
 
-        viewModel.updateValue("6.0")
+        viewModel.updateValue("108")
 
         viewModel.uiState.test {
             val state = awaitItem()
-            assertEquals("6.0", state.valueMmolL)
-            assertEquals("108", state.displayMgDl)
+            assertEquals("108", state.valueMgDl)
+            assertEquals("6.0", state.displayMmolL)
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -156,11 +157,11 @@ class GlucoseConfirmationViewModelTest {
     }
 
     @Test
-    fun `validation error when value below 1_0 mmol_L`() = runTest {
+    fun `validation error when value below 18 mg_dL`() = runTest {
         viewModel = createViewModel()
         advanceTimeBy(1_000)
 
-        viewModel.updateValue("0.5")
+        viewModel.updateValue("17")
 
         viewModel.uiState.test {
             val state = awaitItem()
@@ -171,11 +172,11 @@ class GlucoseConfirmationViewModelTest {
     }
 
     @Test
-    fun `validation error when value above 40_0 mmol_L`() = runTest {
+    fun `validation error when value above 720 mg_dL`() = runTest {
         viewModel = createViewModel()
         advanceTimeBy(1_000)
 
-        viewModel.updateValue("41.0")
+        viewModel.updateValue("721")
 
         viewModel.uiState.test {
             val state = awaitItem()
@@ -270,8 +271,11 @@ class GlucoseConfirmationViewModelTest {
     }
 
     @Test
-    fun `save success emits navigateHome event with mmol_L value`() = runTest {
-        coEvery { writeUseCase.invoke(any()) } returns true
+    fun `save success emits navigateHome event with mg_dL value`() = runTest {
+        coEvery { writeUseCase.invoke(any()) } returns HealthDataWriteResult(
+            healthConnectSuccess = true,
+            foodScannerResult = Result.success(Unit),
+        )
         viewModel = createViewModel(5.6f, "mmol/L", "mmol/L")
         advanceTimeBy(1_000)
 
@@ -279,15 +283,110 @@ class GlucoseConfirmationViewModelTest {
             viewModel.save()
             advanceUntilIdle()
             val msg = awaitItem()
-            assertTrue(msg.contains("5.6"))
-            assertTrue(msg.contains("mmol/L"))
+            assertTrue(msg.contains("101"))
+            assertTrue(msg.contains("mg/dL"))
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `save with both succeed clears isSaving and no error`() = runTest {
+        coEvery { writeUseCase.invoke(any()) } returns HealthDataWriteResult(
+            healthConnectSuccess = true,
+            foodScannerResult = Result.success(Unit),
+        )
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.save()
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertFalse(state.isSaving)
+            assertNull(state.error)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `save with HC fail and FS success navigates home with warning`() = runTest {
+        coEvery { writeUseCase.invoke(any()) } returns HealthDataWriteResult(
+            healthConnectSuccess = false,
+            foodScannerResult = Result.success(Unit),
+        )
+        viewModel = createViewModel(5.6f, "mmol/L", "mmol/L")
+        advanceTimeBy(1_000)
+
+        viewModel.navigateHome.test {
+            viewModel.save()
+            advanceUntilIdle()
+            val msg = awaitItem()
+            assertNotNull(msg)
+            cancelAndIgnoreRemainingEvents()
+        }
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertNotNull(state.warning)
+            assertNull(state.error)
+            assertFalse(state.isSaving)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `save with HC success and FS fail navigates home with warning`() = runTest {
+        coEvery { writeUseCase.invoke(any()) } returns HealthDataWriteResult(
+            healthConnectSuccess = true,
+            foodScannerResult = Result.failure(RuntimeException("sync failed")),
+        )
+        viewModel = createViewModel(5.6f, "mmol/L", "mmol/L")
+        advanceTimeBy(1_000)
+
+        viewModel.navigateHome.test {
+            viewModel.save()
+            advanceUntilIdle()
+            val msg = awaitItem()
+            assertNotNull(msg)
+            cancelAndIgnoreRemainingEvents()
+        }
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertNotNull(state.warning)
+            assertNull(state.error)
+            assertFalse(state.isSaving)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `save with both fail sets error and does not navigate`() = runTest {
+        coEvery { writeUseCase.invoke(any()) } returns HealthDataWriteResult(
+            healthConnectSuccess = false,
+            foodScannerResult = Result.failure(RuntimeException("sync failed")),
+        )
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.save()
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertNotNull(state.error)
+            assertFalse(state.isSaving)
             cancelAndIgnoreRemainingEvents()
         }
     }
 
     @Test
     fun `save failure sets error message`() = runTest {
-        coEvery { writeUseCase.invoke(any()) } returns false
+        coEvery { writeUseCase.invoke(any()) } returns HealthDataWriteResult(
+            healthConnectSuccess = false,
+            foodScannerResult = Result.failure(RuntimeException("sync failed")),
+        )
         viewModel = createViewModel()
         advanceTimeBy(1_000)
 
@@ -308,7 +407,10 @@ class GlucoseConfirmationViewModelTest {
         coEvery { writeUseCase.invoke(any()) } coAnswers {
             callCount++
             kotlinx.coroutines.delay(2_000)
-            true
+            HealthDataWriteResult(
+                healthConnectSuccess = true,
+                foodScannerResult = Result.success(Unit),
+            )
         }
         viewModel = createViewModel()
         advanceTimeBy(1_000)
@@ -340,7 +442,10 @@ class GlucoseConfirmationViewModelTest {
 
     @Test
     fun `save calls use case with correct GlucoseReading`() = runTest {
-        coEvery { writeUseCase.invoke(any()) } returns true
+        coEvery { writeUseCase.invoke(any()) } returns HealthDataWriteResult(
+            healthConnectSuccess = true,
+            foodScannerResult = Result.success(Unit),
+        )
         viewModel = createViewModel(5.6f, "mmol/L", "mmol/L")
         advanceTimeBy(1_000)
 
@@ -350,7 +455,7 @@ class GlucoseConfirmationViewModelTest {
         coVerify {
             writeUseCase.invoke(
                 match { reading ->
-                    reading.valueMmolL in 5.59..5.61
+                    reading.valueMgDl == 101
                 },
             )
         }
