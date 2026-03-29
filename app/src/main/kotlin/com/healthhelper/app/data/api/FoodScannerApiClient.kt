@@ -1,7 +1,10 @@
 package com.healthhelper.app.data.api
 
 import com.healthhelper.app.data.api.dto.ApiEnvelope
+import com.healthhelper.app.data.api.dto.BloodPressureReadingRequest
+import com.healthhelper.app.data.api.dto.GlucoseReadingRequest
 import com.healthhelper.app.data.api.dto.NutritionSummaryDto
+import com.healthhelper.app.data.api.dto.UpsertResponse
 import com.healthhelper.app.domain.model.FoodLogEntry
 import com.healthhelper.app.domain.model.MealType
 import io.ktor.client.HttpClient
@@ -10,7 +13,11 @@ import io.ktor.client.request.bearerAuth
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.parameter
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
+import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
+import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.serialization.SerializationException
@@ -98,6 +105,118 @@ class FoodScannerApiClient @Inject constructor(
                 Timber.w(e, "getFoodLog(%s) network error", date)
             } else {
                 Timber.e(e, "getFoodLog(%s) error", date)
+            }
+            Result.failure(e)
+        }
+    }
+
+    suspend fun postGlucoseReadings(
+        baseUrl: String,
+        apiKey: String,
+        request: GlucoseReadingRequest,
+    ): Result<Int> {
+        if (baseUrl.isBlank() || !baseUrl.lowercase().startsWith("https://")) {
+            return Result.failure(Exception("HTTPS required for API connections"))
+        }
+        return try {
+            val startMs = System.currentTimeMillis()
+            val response = httpClient.post("${baseUrl.trimEnd('/')}/api/v1/glucose-readings") {
+                bearerAuth(apiKey)
+                contentType(ContentType.Application.Json)
+                setBody(request)
+            }
+            if (!response.status.isSuccess()) {
+                val status = response.status.value
+                val message = when (status) {
+                    401 -> "Authentication failed"
+                    429 -> "Rate limited"
+                    in 500..599 -> "Server unavailable"
+                    else -> "HTTP error $status"
+                }
+                when (status) {
+                    401, 429, in 500..599 -> Timber.w("postGlucoseReadings HTTP error: %d", status)
+                    else -> Timber.e("postGlucoseReadings HTTP error: %d", status)
+                }
+                return Result.failure(Exception(message))
+            }
+            val elapsed = System.currentTimeMillis() - startMs
+            val envelope: ApiEnvelope<UpsertResponse> = response.body()
+            if (!envelope.success) {
+                val serverMsg = envelope.error?.message
+                if (serverMsg != null) {
+                    Timber.w("postGlucoseReadings server error: %s", serverMsg)
+                }
+                Result.failure(Exception("Server returned an error"))
+            } else {
+                val upserted = envelope.data?.upserted ?: 0
+                Timber.d("postGlucoseReadings: upserted=%d in %dms", upserted, elapsed)
+                Result.success(upserted)
+            }
+        } catch (e: SerializationException) {
+            Timber.e(e, "postGlucoseReadings parse error")
+            Result.failure(Exception("Failed to parse response"))
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            if (e is java.io.IOException || e is java.nio.channels.UnresolvedAddressException) {
+                Timber.w(e, "postGlucoseReadings network error")
+            } else {
+                Timber.e(e, "postGlucoseReadings error")
+            }
+            Result.failure(e)
+        }
+    }
+
+    suspend fun postBloodPressureReadings(
+        baseUrl: String,
+        apiKey: String,
+        request: BloodPressureReadingRequest,
+    ): Result<Int> {
+        if (baseUrl.isBlank() || !baseUrl.lowercase().startsWith("https://")) {
+            return Result.failure(Exception("HTTPS required for API connections"))
+        }
+        return try {
+            val startMs = System.currentTimeMillis()
+            val response = httpClient.post("${baseUrl.trimEnd('/')}/api/v1/blood-pressure-readings") {
+                bearerAuth(apiKey)
+                contentType(ContentType.Application.Json)
+                setBody(request)
+            }
+            if (!response.status.isSuccess()) {
+                val status = response.status.value
+                val message = when (status) {
+                    401 -> "Authentication failed"
+                    429 -> "Rate limited"
+                    in 500..599 -> "Server unavailable"
+                    else -> "HTTP error $status"
+                }
+                when (status) {
+                    401, 429, in 500..599 -> Timber.w("postBloodPressureReadings HTTP error: %d", status)
+                    else -> Timber.e("postBloodPressureReadings HTTP error: %d", status)
+                }
+                return Result.failure(Exception(message))
+            }
+            val elapsed = System.currentTimeMillis() - startMs
+            val envelope: ApiEnvelope<UpsertResponse> = response.body()
+            if (!envelope.success) {
+                val serverMsg = envelope.error?.message
+                if (serverMsg != null) {
+                    Timber.w("postBloodPressureReadings server error: %s", serverMsg)
+                }
+                Result.failure(Exception("Server returned an error"))
+            } else {
+                val upserted = envelope.data?.upserted ?: 0
+                Timber.d("postBloodPressureReadings: upserted=%d in %dms", upserted, elapsed)
+                Result.success(upserted)
+            }
+        } catch (e: SerializationException) {
+            Timber.e(e, "postBloodPressureReadings parse error")
+            Result.failure(Exception("Failed to parse response"))
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            if (e is java.io.IOException || e is java.nio.channels.UnresolvedAddressException) {
+                Timber.w(e, "postBloodPressureReadings network error")
+            } else {
+                Timber.e(e, "postBloodPressureReadings error")
             }
             Result.failure(e)
         }

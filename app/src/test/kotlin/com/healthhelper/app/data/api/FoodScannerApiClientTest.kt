@@ -1,5 +1,9 @@
 package com.healthhelper.app.data.api
 
+import com.healthhelper.app.data.api.dto.BloodPressureReadingDto
+import com.healthhelper.app.data.api.dto.BloodPressureReadingRequest
+import com.healthhelper.app.data.api.dto.GlucoseReadingDto
+import com.healthhelper.app.data.api.dto.GlucoseReadingRequest
 import com.healthhelper.app.domain.model.MealType
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
@@ -9,6 +13,7 @@ import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.content.OutgoingContent
 import io.ktor.http.headersOf
 import io.ktor.serialization.kotlinx.json.json
 import kotlin.coroutines.cancellation.CancellationException
@@ -434,5 +439,307 @@ class FoodScannerApiClientTest {
 
         assertTrue(result.isFailure)
         assertEquals("Server unavailable", result.exceptionOrNull()?.message)
+    }
+
+    // --- postGlucoseReadings tests ---
+
+    private val glucoseUpsertSuccessResponse = """{"success":true,"data":{"upserted":3},"timestamp":123}"""
+
+    private val sampleGlucoseRequest = GlucoseReadingRequest(
+        readings = listOf(
+            GlucoseReadingDto(
+                measuredAt = "2026-03-29T10:00:00Z",
+                valueMgDl = 120,
+                zoneOffset = "+05:30",
+                relationToMeal = "before_meal",
+                mealType = "breakfast",
+                specimenSource = "capillary_blood",
+            )
+        )
+    )
+
+    @Test
+    @DisplayName("postGlucoseReadings successful POST returns upserted count")
+    fun postGlucoseReadingsSuccess() = runTest {
+        val engine = MockEngine { respond(content = glucoseUpsertSuccessResponse, headers = jsonHeaders) }
+        val client = createClient(engine)
+
+        val result = client.postGlucoseReadings("https://food.example.com", "fsk_test", sampleGlucoseRequest)
+
+        assertTrue(result.isSuccess)
+        assertEquals(3, result.getOrThrow())
+    }
+
+    @Test
+    @DisplayName("postGlucoseReadings sends Bearer token in Authorization header")
+    fun postGlucoseReadingsBearerToken() = runTest {
+        var capturedAuth: String? = null
+        val engine = MockEngine { request ->
+            capturedAuth = request.headers[HttpHeaders.Authorization]
+            respond(content = glucoseUpsertSuccessResponse, headers = jsonHeaders)
+        }
+        val client = createClient(engine)
+
+        client.postGlucoseReadings("https://food.example.com", "fsk_mytoken", sampleGlucoseRequest)
+
+        assertEquals("Bearer fsk_mytoken", capturedAuth)
+    }
+
+    @Test
+    @DisplayName("postGlucoseReadings request body contains correct JSON fields")
+    fun postGlucoseReadingsRequestBodyFields() = runTest {
+        var capturedBody: String? = null
+        val engine = MockEngine { request ->
+            capturedBody = (request.body as? OutgoingContent.ByteArrayContent)
+                ?.bytes()
+                ?.decodeToString()
+            respond(content = glucoseUpsertSuccessResponse, headers = jsonHeaders)
+        }
+        val client = createClient(engine)
+
+        client.postGlucoseReadings("https://food.example.com", "fsk_test", sampleGlucoseRequest)
+
+        val body = assertNotNull(capturedBody)
+        val parsed = Json { ignoreUnknownKeys = true }.decodeFromString<GlucoseReadingRequest>(body)
+        assertEquals(1, parsed.readings.size)
+        val dto = parsed.readings[0]
+        assertEquals(120, dto.valueMgDl)
+        assertEquals("2026-03-29T10:00:00Z", dto.measuredAt)
+        assertEquals("+05:30", dto.zoneOffset)
+        assertEquals("before_meal", dto.relationToMeal)
+        assertEquals("breakfast", dto.mealType)
+        assertEquals("capillary_blood", dto.specimenSource)
+    }
+
+    @Test
+    @DisplayName("postGlucoseReadings 401 returns auth error")
+    fun postGlucoseReadings401() = runTest {
+        val engine = MockEngine { respondError(HttpStatusCode.Unauthorized) }
+        val client = createClient(engine)
+
+        val result = client.postGlucoseReadings("https://food.example.com", "fsk_bad", sampleGlucoseRequest)
+
+        assertTrue(result.isFailure)
+        assertEquals("Authentication failed", result.exceptionOrNull()?.message)
+    }
+
+    @Test
+    @DisplayName("postGlucoseReadings 429 returns rate limit error")
+    fun postGlucoseReadings429() = runTest {
+        val engine = MockEngine { respondError(HttpStatusCode.TooManyRequests) }
+        val client = createClient(engine)
+
+        val result = client.postGlucoseReadings("https://food.example.com", "fsk_test", sampleGlucoseRequest)
+
+        assertTrue(result.isFailure)
+        assertEquals("Rate limited", result.exceptionOrNull()?.message)
+    }
+
+    @Test
+    @DisplayName("postGlucoseReadings 5xx returns server unavailable")
+    fun postGlucoseReadings5xx() = runTest {
+        val engine = MockEngine { respondError(HttpStatusCode.ServiceUnavailable) }
+        val client = createClient(engine)
+
+        val result = client.postGlucoseReadings("https://food.example.com", "fsk_test", sampleGlucoseRequest)
+
+        assertTrue(result.isFailure)
+        assertEquals("Server unavailable", result.exceptionOrNull()?.message)
+    }
+
+    @Test
+    @DisplayName("postGlucoseReadings network failure returns failure result")
+    fun postGlucoseReadingsNetworkFailure() = runTest {
+        val engine = MockEngine { throw java.io.IOException("Connection refused") }
+        val client = createClient(engine)
+
+        val result = client.postGlucoseReadings("https://food.example.com", "fsk_test", sampleGlucoseRequest)
+
+        assertTrue(result.isFailure)
+    }
+
+    @Test
+    @DisplayName("postGlucoseReadings CancellationException propagates")
+    fun postGlucoseReadingsCancellationPropagates() = runTest {
+        val engine = MockEngine { throw CancellationException("Cancelled") }
+        val client = createClient(engine)
+
+        assertFailsWith<CancellationException> {
+            client.postGlucoseReadings("https://food.example.com", "fsk_test", sampleGlucoseRequest)
+        }
+    }
+
+    @Test
+    @DisplayName("postGlucoseReadings HTTP URL is rejected")
+    fun postGlucoseReadingsHttpUrlRejected() = runTest {
+        val engine = MockEngine { respond(content = glucoseUpsertSuccessResponse, headers = jsonHeaders) }
+        val client = createClient(engine)
+
+        val result = client.postGlucoseReadings("http://food.example.com", "fsk_test", sampleGlucoseRequest)
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull()?.message?.contains("HTTPS") == true)
+    }
+
+    @Test
+    @DisplayName("postGlucoseReadings blank base URL is rejected")
+    fun postGlucoseReadingsBlankBaseUrl() = runTest {
+        val engine = MockEngine { respond(content = glucoseUpsertSuccessResponse, headers = jsonHeaders) }
+        val client = createClient(engine)
+
+        val result = client.postGlucoseReadings("", "fsk_test", sampleGlucoseRequest)
+
+        assertTrue(result.isFailure)
+    }
+
+    // --- postBloodPressureReadings tests ---
+
+    private val bpUpsertSuccessResponse = """{"success":true,"data":{"upserted":2},"timestamp":123}"""
+
+    private val sampleBpRequest = BloodPressureReadingRequest(
+        readings = listOf(
+            BloodPressureReadingDto(
+                measuredAt = "2026-03-29T10:00:00Z",
+                systolic = 120,
+                diastolic = 80,
+                zoneOffset = "+05:30",
+                bodyPosition = "sitting_down",
+                measurementLocation = "left_upper_arm",
+            )
+        )
+    )
+
+    @Test
+    @DisplayName("postBloodPressureReadings successful POST returns upserted count")
+    fun postBloodPressureReadingsSuccess() = runTest {
+        val engine = MockEngine { respond(content = bpUpsertSuccessResponse, headers = jsonHeaders) }
+        val client = createClient(engine)
+
+        val result = client.postBloodPressureReadings("https://food.example.com", "fsk_test", sampleBpRequest)
+
+        assertTrue(result.isSuccess)
+        assertEquals(2, result.getOrThrow())
+    }
+
+    @Test
+    @DisplayName("postBloodPressureReadings sends Bearer token in Authorization header")
+    fun postBloodPressureReadingsBearerToken() = runTest {
+        var capturedAuth: String? = null
+        val engine = MockEngine { request ->
+            capturedAuth = request.headers[HttpHeaders.Authorization]
+            respond(content = bpUpsertSuccessResponse, headers = jsonHeaders)
+        }
+        val client = createClient(engine)
+
+        client.postBloodPressureReadings("https://food.example.com", "fsk_mytoken", sampleBpRequest)
+
+        assertEquals("Bearer fsk_mytoken", capturedAuth)
+    }
+
+    @Test
+    @DisplayName("postBloodPressureReadings request body contains correct JSON fields")
+    fun postBloodPressureReadingsRequestBodyFields() = runTest {
+        var capturedBody: String? = null
+        val engine = MockEngine { request ->
+            capturedBody = (request.body as? OutgoingContent.ByteArrayContent)
+                ?.bytes()
+                ?.decodeToString()
+            respond(content = bpUpsertSuccessResponse, headers = jsonHeaders)
+        }
+        val client = createClient(engine)
+
+        client.postBloodPressureReadings("https://food.example.com", "fsk_test", sampleBpRequest)
+
+        val body = assertNotNull(capturedBody)
+        val parsed = Json { ignoreUnknownKeys = true }.decodeFromString<BloodPressureReadingRequest>(body)
+        assertEquals(1, parsed.readings.size)
+        val dto = parsed.readings[0]
+        assertEquals(120, dto.systolic)
+        assertEquals(80, dto.diastolic)
+        assertEquals("2026-03-29T10:00:00Z", dto.measuredAt)
+        assertEquals("+05:30", dto.zoneOffset)
+        assertEquals("sitting_down", dto.bodyPosition)
+        assertEquals("left_upper_arm", dto.measurementLocation)
+    }
+
+    @Test
+    @DisplayName("postBloodPressureReadings 401 returns auth error")
+    fun postBloodPressureReadings401() = runTest {
+        val engine = MockEngine { respondError(HttpStatusCode.Unauthorized) }
+        val client = createClient(engine)
+
+        val result = client.postBloodPressureReadings("https://food.example.com", "fsk_bad", sampleBpRequest)
+
+        assertTrue(result.isFailure)
+        assertEquals("Authentication failed", result.exceptionOrNull()?.message)
+    }
+
+    @Test
+    @DisplayName("postBloodPressureReadings 429 returns rate limit error")
+    fun postBloodPressureReadings429() = runTest {
+        val engine = MockEngine { respondError(HttpStatusCode.TooManyRequests) }
+        val client = createClient(engine)
+
+        val result = client.postBloodPressureReadings("https://food.example.com", "fsk_test", sampleBpRequest)
+
+        assertTrue(result.isFailure)
+        assertEquals("Rate limited", result.exceptionOrNull()?.message)
+    }
+
+    @Test
+    @DisplayName("postBloodPressureReadings 5xx returns server unavailable")
+    fun postBloodPressureReadings5xx() = runTest {
+        val engine = MockEngine { respondError(HttpStatusCode.ServiceUnavailable) }
+        val client = createClient(engine)
+
+        val result = client.postBloodPressureReadings("https://food.example.com", "fsk_test", sampleBpRequest)
+
+        assertTrue(result.isFailure)
+        assertEquals("Server unavailable", result.exceptionOrNull()?.message)
+    }
+
+    @Test
+    @DisplayName("postBloodPressureReadings network failure returns failure result")
+    fun postBloodPressureReadingsNetworkFailure() = runTest {
+        val engine = MockEngine { throw java.io.IOException("Connection refused") }
+        val client = createClient(engine)
+
+        val result = client.postBloodPressureReadings("https://food.example.com", "fsk_test", sampleBpRequest)
+
+        assertTrue(result.isFailure)
+    }
+
+    @Test
+    @DisplayName("postBloodPressureReadings CancellationException propagates")
+    fun postBloodPressureReadingsCancellationPropagates() = runTest {
+        val engine = MockEngine { throw CancellationException("Cancelled") }
+        val client = createClient(engine)
+
+        assertFailsWith<CancellationException> {
+            client.postBloodPressureReadings("https://food.example.com", "fsk_test", sampleBpRequest)
+        }
+    }
+
+    @Test
+    @DisplayName("postBloodPressureReadings HTTP URL is rejected")
+    fun postBloodPressureReadingsHttpUrlRejected() = runTest {
+        val engine = MockEngine { respond(content = bpUpsertSuccessResponse, headers = jsonHeaders) }
+        val client = createClient(engine)
+
+        val result = client.postBloodPressureReadings("http://food.example.com", "fsk_test", sampleBpRequest)
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull()?.message?.contains("HTTPS") == true)
+    }
+
+    @Test
+    @DisplayName("postBloodPressureReadings blank base URL is rejected")
+    fun postBloodPressureReadingsBlankBaseUrl() = runTest {
+        val engine = MockEngine { respond(content = bpUpsertSuccessResponse, headers = jsonHeaders) }
+        val client = createClient(engine)
+
+        val result = client.postBloodPressureReadings("", "fsk_test", sampleBpRequest)
+
+        assertTrue(result.isFailure)
     }
 }
