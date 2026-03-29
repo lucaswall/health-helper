@@ -101,6 +101,8 @@ class SyncViewModel @Inject constructor(
                     val hasAll = granted.containsAll(REQUIRED_HC_PERMISSIONS)
                     Timber.d("SyncViewModel: HC permissions granted=%b (have %d/%d)", hasAll, granted.size, REQUIRED_HC_PERMISSIONS.size)
                     _uiState.update { it.copy(permissionGranted = hasAll) }
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     Timber.e(e, "Failed to check Health Connect permissions")
                     // Leave permissionGranted = false
@@ -221,6 +223,8 @@ class SyncViewModel @Inject constructor(
                     lastBpReadingTime = if (reading != null) formatRelativeTime(reading.timestamp.toEpochMilli()) else "",
                 )
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Timber.e(e, "Failed to load last BP reading")
             // Leave lastBpReading = null

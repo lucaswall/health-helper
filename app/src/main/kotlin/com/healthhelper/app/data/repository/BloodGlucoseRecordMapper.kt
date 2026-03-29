@@ -80,7 +80,7 @@ fun mapToGlucoseReading(record: BloodGlucoseRecord): GlucoseReading {
     }
 
     return GlucoseReading(
-        valueMgDl = GlucoseReading.fromMmolL(record.level.inMillimolesPerLiter),
+        valueMgDl = GlucoseReading.fromMmolL(record.level.inMillimolesPerLiter).coerceIn(18, 720),
         relationToMeal = relationToMeal,
         glucoseMealType = glucoseMealType,
         specimenSource = specimenSource,

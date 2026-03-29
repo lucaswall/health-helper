@@ -1,6 +1,7 @@
 # Implementation Plan
 
 **Created:** 2026-03-29
+**Status:** COMPLETE
 **Source:** Inline request: Push glucose and blood pressure readings to food-scanner API, change glucose base unit to mg/dL, BP defaults to SITTING_DOWN + LEFT_UPPER_ARM
 **Linear Issues:** [HEA-165](https://linear.app/lw-claude/issue/HEA-165/change-glucosereading-base-unit-from-mmoll-to-mgdl), [HEA-166](https://linear.app/lw-claude/issue/HEA-166/update-bloodglucoserecordmapper-for-mgdl-base-unit), [HEA-167](https://linear.app/lw-claude/issue/HEA-167/update-glucoseconfirmationviewmodel-for-mgdl-base-unit), [HEA-168](https://linear.app/lw-claude/issue/HEA-168/food-scanner-health-data-dtos-and-api-client-post-methods), [HEA-169](https://linear.app/lw-claude/issue/HEA-169/foodscannerhealthrepository-domain-interface-and-data-implementation), [HEA-170](https://linear.app/lw-claude/issue/HEA-170/healthdatawriteresult-and-dual-write-use-cases), [HEA-171](https://linear.app/lw-claude/issue/HEA-171/update-viewmodels-for-dual-write-error-handling), [HEA-172](https://linear.app/lw-claude/issue/HEA-172/change-bp-confirmation-defaults-to-sitting-down-and-left-upper-arm)
 **Branch:** feat/food-scanner-health-push
@@ -372,5 +373,47 @@
 2. **FS failure blocking navigation after HC success** — Reordered when branches: HC+FS success → navigate; HC success + FS fail → navigate with warning; HC fail + FS success → navigate with warning; both fail → show error
 3. **Misleading test comment** — Fixed conversion comment in FoodScannerHealthRepositoryImplTest
 
+### Review Findings
+
+Summary: 3 issue(s) found, fixed inline (Team: security, reliability, quality reviewers)
+- FIXED INLINE: 3 issue(s) — verified via TDD + bug-hunter
+
+**Issues fixed inline:**
+- [HIGH] BUG: BloodGlucoseRecordMapper crashes on out-of-range Health Connect records (`app/src/main/kotlin/com/healthhelper/app/data/repository/BloodGlucoseRecordMapper.kt:83`) — added .coerceIn(18, 720) + boundary tests
+- [MEDIUM] COROUTINE: SyncViewModel permission check swallows CancellationException (`app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt:104`) — added CancellationException rethrow
+- [MEDIUM] COROUTINE: SyncViewModel loadLastBpReading swallows CancellationException (`app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt:224`) — added CancellationException rethrow
+
+**Discarded findings (not bugs):**
+- [DISCARDED] SECURITY: Server-supplied error messages logged verbatim via Timber.w — Timber logs are debug-only on Android, not user-facing; no app-sensitive data logged
+- [DISCARDED] BUG: Elapsed time logging excludes body deserialization — minor logging inaccuracy, not a functional bug
+- [DISCARDED] CONVENTION: String interpolation in Timber call — style preference, not enforced by CLAUDE.md
+- [DISCARDED] EDGE CASE: TOCTOU on baseUrl/apiKey settings reads — benign; DataStore reads are near-instant, mismatch scenario practically impossible
+- [DISCARDED] CONVENTION: Duplicate ViewModel save-failure tests — redundant but not bugs, no correctness impact
+
+### Linear Updates
+- HEA-165: Review → Merge
+- HEA-166: Review → Merge
+- HEA-167: Review → Merge
+- HEA-168: Review → Merge
+- HEA-169: Review → Merge
+- HEA-170: Review → Merge
+- HEA-171: Review → Merge
+- HEA-172: Review → Merge
+- HEA-173: Created in Merge (Fix: BloodGlucoseRecordMapper out-of-range crash — fixed inline)
+- HEA-174: Created in Merge (Fix: SyncViewModel permission check CancellationException — fixed inline)
+- HEA-175: Created in Merge (Fix: SyncViewModel loadLastBpReading CancellationException — fixed inline)
+
+### Inline Fix Verification
+- Unit tests: all pass
+- Bug-hunter: no new issues
+
+<!-- REVIEW COMPLETE -->
+
 ### Continuation Status
 All tasks completed.
+
+---
+
+## Status: COMPLETE
+
+All tasks implemented and reviewed successfully. All Linear issues moved to Merge.

@@ -280,6 +280,32 @@ class BloodGlucoseRecordMapperTest {
     }
 
     @Test
+    @DisplayName("mapToGlucoseReading clamps value above 720 mg/dL to 720")
+    fun reverseMapClampsHighValue() {
+        val record = BloodGlucoseRecord(
+            time = testTimestamp,
+            zoneOffset = ZoneOffset.UTC,
+            level = BloodGlucose.millimolesPerLiter(40.0), // ~721 mg/dL
+            metadata = Metadata.manualEntry(),
+        )
+        val reading = mapToGlucoseReading(record)
+        assertEquals(720, reading.valueMgDl)
+    }
+
+    @Test
+    @DisplayName("mapToGlucoseReading clamps value below 18 mg/dL to 18")
+    fun reverseMapClampsLowValue() {
+        val record = BloodGlucoseRecord(
+            time = testTimestamp,
+            zoneOffset = ZoneOffset.UTC,
+            level = BloodGlucose.millimolesPerLiter(0.5), // ~9 mg/dL
+            metadata = Metadata.manualEntry(),
+        )
+        val reading = mapToGlucoseReading(record)
+        assertEquals(18, reading.valueMgDl)
+    }
+
+    @Test
     @DisplayName("mapToGlucoseReading maps unknown HC specimen source to UNKNOWN")
     fun reverseMapUnknownSpecimenSource() {
         val record = BloodGlucoseRecord(
