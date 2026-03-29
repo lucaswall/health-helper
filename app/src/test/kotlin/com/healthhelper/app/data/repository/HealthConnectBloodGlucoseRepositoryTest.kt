@@ -28,7 +28,7 @@ import kotlin.test.assertEquals
 class HealthConnectBloodGlucoseRepositoryTest {
 
     private val testReading = GlucoseReading(
-        valueMmolL = 5.6,
+        valueMgDl = 101,
     )
 
     // --- writeBloodGlucoseRecord tests ---
@@ -149,7 +149,7 @@ class HealthConnectBloodGlucoseRepositoryTest {
         val result = repository.getLastReading()
 
         assertNotNull(result)
-        assertEquals(5.6, result.valueMmolL, 0.001)
+        assertEquals(101, result.valueMgDl)
     }
 
     @Test

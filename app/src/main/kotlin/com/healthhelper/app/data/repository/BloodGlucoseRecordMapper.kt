@@ -42,7 +42,7 @@ fun mapToBloodGlucoseRecord(reading: GlucoseReading): BloodGlucoseRecord {
     return BloodGlucoseRecord(
         time = reading.timestamp,
         zoneOffset = zoneOffset,
-        level = BloodGlucose.millimolesPerLiter(reading.valueMmolL),
+        level = BloodGlucose.millimolesPerLiter(reading.toMmolL()),
         relationToMeal = relationToMealInt,
         mealType = mealTypeInt,
         specimenSource = specimenSourceInt,
@@ -80,7 +80,7 @@ fun mapToGlucoseReading(record: BloodGlucoseRecord): GlucoseReading {
     }
 
     return GlucoseReading(
-        valueMmolL = record.level.inMillimolesPerLiter,
+        valueMgDl = GlucoseReading.fromMmolL(record.level.inMillimolesPerLiter),
         relationToMeal = relationToMeal,
         glucoseMealType = glucoseMealType,
         specimenSource = specimenSource,

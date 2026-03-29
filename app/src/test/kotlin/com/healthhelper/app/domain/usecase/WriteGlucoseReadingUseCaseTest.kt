@@ -17,7 +17,7 @@ class WriteGlucoseReadingUseCaseTest {
     private lateinit var repository: BloodGlucoseRepository
     private lateinit var useCase: WriteGlucoseReadingUseCase
 
-    private val testReading = GlucoseReading(valueMmolL = 5.6)
+    private val testReading = GlucoseReading(valueMgDl = 101)
 
     @BeforeEach
     fun setUp() {

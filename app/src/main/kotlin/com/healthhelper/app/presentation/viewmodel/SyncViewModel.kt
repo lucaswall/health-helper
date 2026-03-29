@@ -240,7 +240,7 @@ class SyncViewModel @Inject constructor(
                 it.copy(
                     lastGlucoseReading = reading,
                     lastGlucoseReadingDisplay = if (reading != null) {
-                        "${"%.1f".format(reading.valueMmolL)} mmol/L (${reading.displayInMgDl()} mg/dL)"
+                        "${"%.1f".format(reading.toMmolL())} mmol/L (${reading.valueMgDl} mg/dL)"
                     } else {
                         ""
                     },

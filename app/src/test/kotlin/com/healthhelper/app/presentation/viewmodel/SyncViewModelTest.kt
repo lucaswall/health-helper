@@ -741,7 +741,7 @@ class SyncViewModelTest {
 
     @Test
     fun `lastGlucoseReading populated after init loads from GetLastGlucoseReadingUseCase`() = viewModelTest {
-        val reading = GlucoseReading(valueMmolL = 5.6, timestamp = Instant.now())
+        val reading = GlucoseReading(valueMgDl = 101, timestamp = Instant.now())
         coEvery { getLastGlucoseReadingUseCase.invoke() } returns reading
 
         viewModel = createViewModel()
@@ -756,7 +756,7 @@ class SyncViewModelTest {
 
     @Test
     fun `lastGlucoseReadingDisplay formats as value mmol_L`() = viewModelTest {
-        val reading = GlucoseReading(valueMmolL = 5.6, timestamp = Instant.now())
+        val reading = GlucoseReading(valueMgDl = 101, timestamp = Instant.now())
         coEvery { getLastGlucoseReadingUseCase.invoke() } returns reading
 
         viewModel = createViewModel()
@@ -772,7 +772,7 @@ class SyncViewModelTest {
     @Test
     fun `lastGlucoseReadingTime shows relative time when reading exists`() = viewModelTest {
         val twoHoursAgo = Instant.now().minusSeconds(7200)
-        val reading = GlucoseReading(valueMmolL = 5.6, timestamp = twoHoursAgo)
+        val reading = GlucoseReading(valueMgDl = 101, timestamp = twoHoursAgo)
         coEvery { getLastGlucoseReadingUseCase.invoke() } returns reading
 
         viewModel = createViewModel()
@@ -804,7 +804,7 @@ class SyncViewModelTest {
 
     @Test
     fun `refreshLastGlucoseReading reloads from use case`() = viewModelTest {
-        val reading = GlucoseReading(valueMmolL = 7.2, timestamp = Instant.now())
+        val reading = GlucoseReading(valueMgDl = 130, timestamp = Instant.now())
         coEvery { getLastGlucoseReadingUseCase.invoke() } returns null andThen reading
 
         viewModel = createViewModel()
