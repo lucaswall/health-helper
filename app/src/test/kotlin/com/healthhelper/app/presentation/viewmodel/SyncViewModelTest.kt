@@ -755,7 +755,7 @@ class SyncViewModelTest {
     }
 
     @Test
-    fun `lastGlucoseReadingDisplay formats as value mmol_L`() = viewModelTest {
+    fun `lastGlucoseReadingDisplay formats as mg_dL primary`() = viewModelTest {
         val reading = GlucoseReading(valueMgDl = 101, timestamp = Instant.now())
         coEvery { getLastGlucoseReadingUseCase.invoke() } returns reading
 
@@ -764,7 +764,7 @@ class SyncViewModelTest {
 
         viewModel.uiState.test {
             val state = awaitItem()
-            assertEquals("5.6 mmol/L (101 mg/dL)", state.lastGlucoseReadingDisplay)
+            assertEquals("101 mg/dL (5.6 mmol/L)", state.lastGlucoseReadingDisplay)
             cancelAndIgnoreRemainingEvents()
         }
     }
