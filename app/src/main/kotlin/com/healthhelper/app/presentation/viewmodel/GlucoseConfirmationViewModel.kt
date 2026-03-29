@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.healthhelper.app.domain.model.GlucoseMealType
 import com.healthhelper.app.domain.model.GlucoseReading
 import com.healthhelper.app.domain.model.GlucoseUnit
+import com.healthhelper.app.domain.model.HealthDataWriteResult
 import com.healthhelper.app.domain.model.RelationToMeal
 import com.healthhelper.app.domain.model.SpecimenSource
 import com.healthhelper.app.domain.usecase.InferGlucoseDefaultsUseCase
@@ -38,6 +39,7 @@ data class GlucoseConfirmationUiState(
     val isSaveEnabled: Boolean = false,
     val isSaving: Boolean = false,
     val error: String? = null,
+    val warning: String? = null,
     val validationError: String? = null,
 )
 
@@ -148,13 +150,30 @@ class GlucoseConfirmationViewModel @Inject constructor(
                     glucoseMealType = state.glucoseMealType,
                     specimenSource = state.specimenSource,
                 )
-                val success = writeGlucoseReadingUseCase.invoke(reading)
-                if (success) {
-                    _uiState.update { it.copy(isSaving = false) }
-                    _navigateHome.emit("${state.valueMmolL} mmol/L saved")
-                } else {
-                    _uiState.update {
-                        it.copy(isSaving = false, error = "Failed to save reading. Please try again.")
+                val result = writeGlucoseReadingUseCase.invoke(reading)
+                when {
+                    result.foodScannerFailed -> {
+                        Timber.w(result.foodScannerResult.exceptionOrNull(), "Food-scanner sync failed for glucose")
+                        _uiState.update {
+                            it.copy(
+                                isSaving = false,
+                                error = "Failed to sync reading. Check your connection and try again.",
+                            )
+                        }
+                    }
+                    !result.healthConnectSuccess -> {
+                        Timber.w("Health Connect write failed for glucose (non-blocking)")
+                        _uiState.update {
+                            it.copy(
+                                isSaving = false,
+                                warning = "Reading saved but could not be written to Health Connect.",
+                            )
+                        }
+                        _navigateHome.emit("${state.valueMmolL} mmol/L saved")
+                    }
+                    else -> {
+                        _uiState.update { it.copy(isSaving = false) }
+                        _navigateHome.emit("${state.valueMmolL} mmol/L saved")
                     }
                 }
             } catch (e: CancellationException) {
