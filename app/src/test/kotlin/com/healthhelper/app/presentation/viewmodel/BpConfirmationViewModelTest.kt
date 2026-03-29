@@ -316,7 +316,7 @@ class BpConfirmationViewModelTest {
     }
 
     @Test
-    fun `save with FS fail sets error and does not navigate`() = runTest {
+    fun `save with HC success and FS fail navigates home with warning`() = runTest {
         coEvery { useCase.invoke(any()) } returns HealthDataWriteResult(
             healthConnectSuccess = true,
             foodScannerResult = Result.failure(RuntimeException("sync failed")),
@@ -324,12 +324,18 @@ class BpConfirmationViewModelTest {
         viewModel = createViewModel(120, 80)
         advanceTimeBy(1_000)
 
-        viewModel.save()
-        advanceUntilIdle()
+        viewModel.navigateHome.test {
+            viewModel.save()
+            advanceUntilIdle()
+            val msg = awaitItem()
+            assertNotNull(msg)
+            cancelAndIgnoreRemainingEvents()
+        }
 
         viewModel.uiState.test {
             val state = awaitItem()
-            assertNotNull(state.error)
+            assertNotNull(state.warning)
+            assertNull(state.error)
             assertFalse(state.isSaving)
             cancelAndIgnoreRemainingEvents()
         }

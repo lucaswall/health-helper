@@ -31,6 +31,7 @@ import kotlin.test.assertTrue
 class FoodScannerApiClientTest {
 
     private val jsonHeaders = headersOf(HttpHeaders.ContentType, "application/json")
+    private val testJson = Json { ignoreUnknownKeys = true }
 
     private fun createClient(mockEngine: MockEngine): FoodScannerApiClient {
         val httpClient = HttpClient(mockEngine) {
@@ -500,7 +501,7 @@ class FoodScannerApiClientTest {
         client.postGlucoseReadings("https://food.example.com", "fsk_test", sampleGlucoseRequest)
 
         val body = assertNotNull(capturedBody)
-        val parsed = Json { ignoreUnknownKeys = true }.decodeFromString<GlucoseReadingRequest>(body)
+        val parsed = testJson.decodeFromString<GlucoseReadingRequest>(body)
         assertEquals(1, parsed.readings.size)
         val dto = parsed.readings[0]
         assertEquals(120, dto.valueMgDl)
@@ -651,7 +652,7 @@ class FoodScannerApiClientTest {
         client.postBloodPressureReadings("https://food.example.com", "fsk_test", sampleBpRequest)
 
         val body = assertNotNull(capturedBody)
-        val parsed = Json { ignoreUnknownKeys = true }.decodeFromString<BloodPressureReadingRequest>(body)
+        val parsed = testJson.decodeFromString<BloodPressureReadingRequest>(body)
         assertEquals(1, parsed.readings.size)
         val dto = parsed.readings[0]
         assertEquals(120, dto.systolic)

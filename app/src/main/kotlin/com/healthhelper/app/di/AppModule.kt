@@ -118,11 +118,6 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideFoodScannerHealthRepository(): FoodScannerHealthRepository =
-        FoodScannerHealthRepositoryImpl()
-
-    @Provides
-    @Singleton
     fun provideFoodLogRepository(
         apiClient: FoodScannerApiClient,
         settingsRepository: SettingsRepository,

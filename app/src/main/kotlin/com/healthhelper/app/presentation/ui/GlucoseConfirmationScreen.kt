@@ -135,6 +135,14 @@ fun GlucoseConfirmationScreen(
                 )
             }
 
+            uiState.warning?.let { warning ->
+                Text(
+                    text = warning,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+
             uiState.error?.let { error ->
                 Text(
                     text = error,

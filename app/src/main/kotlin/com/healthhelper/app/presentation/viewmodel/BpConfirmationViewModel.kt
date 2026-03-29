@@ -112,16 +112,21 @@ class BpConfirmationViewModel @Inject constructor(
                 )
                 val result = writeBloodPressureReadingUseCase.invoke(reading)
                 when {
-                    result.foodScannerFailed -> {
+                    result.allSucceeded -> {
+                        _uiState.update { it.copy(isSaving = false) }
+                        _navigateHome.emit("$systolic/$diastolic mmHg saved")
+                    }
+                    result.healthConnectSuccess && result.foodScannerFailed -> {
                         Timber.w(result.foodScannerResult.exceptionOrNull(), "Food-scanner sync failed for blood pressure")
                         _uiState.update {
                             it.copy(
                                 isSaving = false,
-                                error = "Failed to sync reading. Check your connection and try again.",
+                                warning = "Saved to Health Connect but could not sync to food-scanner.",
                             )
                         }
+                        _navigateHome.emit("$systolic/$diastolic mmHg saved")
                     }
-                    !result.healthConnectSuccess -> {
+                    !result.healthConnectSuccess && !result.foodScannerFailed -> {
                         Timber.w("Health Connect write failed for blood pressure (non-blocking)")
                         _uiState.update {
                             it.copy(
@@ -132,8 +137,13 @@ class BpConfirmationViewModel @Inject constructor(
                         _navigateHome.emit("$systolic/$diastolic mmHg saved")
                     }
                     else -> {
-                        _uiState.update { it.copy(isSaving = false) }
-                        _navigateHome.emit("$systolic/$diastolic mmHg saved")
+                        Timber.w(result.foodScannerResult.exceptionOrNull(), "Both writes failed for blood pressure")
+                        _uiState.update {
+                            it.copy(
+                                isSaving = false,
+                                error = "Failed to save reading. Please try again.",
+                            )
+                        }
                     }
                 }
             } catch (e: CancellationException) {

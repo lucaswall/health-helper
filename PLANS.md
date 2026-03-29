@@ -307,3 +307,70 @@
 - mg/dL base unit change ripples through domain, data, and presentation layers — Task 1 changes will cause compilation errors in Tasks 2-3 until they're implemented
 - Int precision for mg/dL means ~0.03 mmol/L maximum rounding error in Health Connect writes (clinically insignificant)
 - Existing tests that create `GlucoseReading(valueMmolL = ...)` will break and need updating across Tasks 1-3
+
+---
+
+## Iteration 1
+
+**Implemented:** 2026-03-29
+**Method:** Agent team (3 workers, worktree-isolated)
+
+### Tasks Completed This Iteration
+- Task 1: Change GlucoseReading base unit from mmol/L to mg/dL — renamed valueMmolL→valueMgDl (Int), validation 18..720, toMmolL(), fromMmolL() (worker-1)
+- Task 2: Update BloodGlucoseRecordMapper for mg/dL base unit — uses reading.toMmolL() and GlucoseReading.fromMmolL() (worker-1)
+- Task 3: Update GlucoseConfirmationViewModel for mg/dL base unit — valueMgDl primary, displayMmolL secondary (worker-1)
+- Task 4: Food-scanner health data DTOs and API client POST methods — HealthReadingsDtos.kt, postGlucoseReadings, postBloodPressureReadings (worker-2)
+- Task 5: FoodScannerHealthRepository domain interface + data implementation — pushGlucoseReading, pushBloodPressureReading, DI binding (worker-2)
+- Task 6: HealthDataWriteResult and dual-write use cases — independent HC + FS writes, CancellationException propagation (worker-3)
+- Task 7: Update ViewModels for dual-write error handling — warning/error states, navigate-on-partial-success (worker-3)
+- Task 8: Change BP confirmation defaults to SITTING_DOWN and LEFT_UPPER_ARM (worker-3)
+
+### Files Modified
+- `app/src/main/kotlin/com/healthhelper/app/domain/model/GlucoseReading.kt` — valueMmolL→valueMgDl, toMmolL(), fromMmolL()
+- `app/src/main/kotlin/com/healthhelper/app/domain/model/HealthDataWriteResult.kt` — new dual-write result model
+- `app/src/main/kotlin/com/healthhelper/app/domain/repository/FoodScannerHealthRepository.kt` — new domain interface
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/BloodGlucoseRecordMapper.kt` — mg/dL conversion
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/FoodScannerHealthRepositoryImpl.kt` — new implementation
+- `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt` — postGlucoseReadings, postBloodPressureReadings
+- `app/src/main/kotlin/com/healthhelper/app/data/api/dto/HealthReadingsDtos.kt` — new DTOs
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/WriteGlucoseReadingUseCase.kt` — dual-write, returns HealthDataWriteResult
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/WriteBloodPressureReadingUseCase.kt` — dual-write, returns HealthDataWriteResult
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/GlucoseConfirmationViewModel.kt` — mg/dL + dual-write error handling
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/BpConfirmationViewModel.kt` — dual-write error handling + BP defaults
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/GlucoseConfirmationScreen.kt` — mg/dL fields + warning display
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/BpConfirmationScreen.kt` — warning display
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` — valueMgDl reference
+- `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt` — FoodScannerHealthRepository binding
+- Plus 10 test files (new and modified)
+
+### Linear Updates
+- HEA-165: Todo → In Progress → Review
+- HEA-166: Todo → Review
+- HEA-167: Todo → Review
+- HEA-168: Todo → Review
+- HEA-169: Todo → Review
+- HEA-170: Todo → In Progress → Review
+- HEA-171: Todo → Review
+- HEA-172: Todo → Review
+
+### Pre-commit Verification
+- bug-hunter: Found 3 bugs (2 HIGH, 1 MEDIUM), all fixed before commit
+- verifier: All tests pass, zero warnings
+
+### Work Partition
+- Worker 1: Tasks 1, 2, 3 (glucose mg/dL domain + mapper + ViewModel)
+- Worker 2: Tasks 4, 5 (API client + repository)
+- Worker 3: Tasks 6, 7, 8 (dual-write use cases + ViewModel error handling + BP defaults)
+
+### Merge Summary
+- Worker 1: fast-forward (no conflicts)
+- Worker 2: clean merge, 1 post-merge fix (displayInMgDl() → valueMgDl)
+- Worker 3: 3 conflicts resolved (FoodScannerHealthRepositoryImpl.kt — kept real impl over stub; GlucoseConfirmationViewModel.kt — took dual-write logic with mg/dL strings; GlucoseConfirmationViewModelTest.kt — merged test name + HealthDataWriteResult mock). Duplicate Hilt binding removed.
+
+### Bug Fixes Applied Post-Merge
+1. **Warning UI state never rendered** — Added warning Text composable to both GlucoseConfirmationScreen and BpConfirmationScreen
+2. **FS failure blocking navigation after HC success** — Reordered when branches: HC+FS success → navigate; HC success + FS fail → navigate with warning; HC fail + FS success → navigate with warning; both fail → show error
+3. **Misleading test comment** — Fixed conversion comment in FoodScannerHealthRepositoryImplTest
+
+### Continuation Status
+All tasks completed.

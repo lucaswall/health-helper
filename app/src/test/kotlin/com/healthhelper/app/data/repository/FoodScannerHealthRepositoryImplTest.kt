@@ -90,7 +90,7 @@ class FoodScannerHealthRepositoryImplTest {
 
         repository.pushGlucoseReading(testGlucoseReading)
 
-        // (5.0 * 18.018).roundToInt() = 90
+        // repository passes valueMgDl directly — no unit conversion should occur
         assertEquals(90, slot.captured.readings[0].valueMgDl)
     }
 
