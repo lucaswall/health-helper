@@ -152,4 +152,18 @@ class FoodLogEntryTest {
         val entry = validEntry().copy(caloriesFromFat = null)
         assertEquals(null, entry.caloriesFromFat)
     }
+
+    @Test
+    @DisplayName("zoneOffset +05:30 is accepted")
+    fun zoneOffsetPositiveIsAccepted() {
+        val entry = validEntry().copy(zoneOffset = "+05:30")
+        assertEquals("+05:30", entry.zoneOffset)
+    }
+
+    @Test
+    @DisplayName("zoneOffset null is accepted")
+    fun zoneOffsetNullIsAccepted() {
+        val entry = validEntry().copy(zoneOffset = null)
+        assertEquals(null, entry.zoneOffset)
+    }
 }

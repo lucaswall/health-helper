@@ -385,6 +385,21 @@ class DataStoreSettingsRepositoryTest {
         }
     }
 
+    // --- lastHealthReadingsSyncTimestamp tests ---
+
+    @Test
+    @DisplayName("lastHealthReadingsSyncTimestampFlow defaults to 0L")
+    fun defaultLastHealthReadingsSyncTimestamp() = testScope.runTest {
+        assertEquals(0L, repository.lastHealthReadingsSyncTimestampFlow.first())
+    }
+
+    @Test
+    @DisplayName("setLastHealthReadingsSyncTimestamp stores value and can be read back")
+    fun storeAndRetrieveLastHealthReadingsSyncTimestamp() = testScope.runTest {
+        repository.setLastHealthReadingsSyncTimestamp(1_711_700_000_000L)
+        assertEquals(1_711_700_000_000L, repository.lastHealthReadingsSyncTimestampFlow.first())
+    }
+
     @Test
     @DisplayName("apiKeyFlow handles migration failure gracefully")
     fun apiKeyFlowHandlesMigrationFailure() = testScope.runTest {

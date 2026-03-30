@@ -86,4 +86,74 @@ class HealthConnectBloodGlucoseRepository @Inject constructor(
             null
         }
     }
+
+    override suspend fun getReadings(start: Instant, end: Instant): List<GlucoseReading> {
+        if (healthConnectClient == null) {
+            Timber.w("getReadings: Health Connect not available")
+            return emptyList()
+        }
+        val allRecords = mutableListOf<BloodGlucoseRecord>()
+        var paginationTruncated = false
+        return try {
+            val startMs = System.currentTimeMillis()
+            var pageToken: String? = null
+            do {
+                val elapsed = System.currentTimeMillis() - startMs
+                if (elapsed > CUMULATIVE_TIMEOUT_MS) {
+                    Timber.w(
+                        "getReadings: cumulative timeout (>%ds), returning %d partial glucose records",
+                        CUMULATIVE_TIMEOUT_MS / 1000,
+                        allRecords.size,
+                    )
+                    paginationTruncated = true
+                    break
+                }
+                val response = withTimeout(10_000L) {
+                    healthConnectClient.readRecords(
+                        ReadRecordsRequest(
+                            recordType = BloodGlucoseRecord::class,
+                            timeRangeFilter = TimeRangeFilter.between(start, end),
+                            pageToken = pageToken,
+                        ),
+                    )
+                }
+                allRecords.addAll(response.records)
+                pageToken = response.pageToken
+            } while (pageToken != null)
+            if (!paginationTruncated) {
+                Timber.d(
+                    "getReadings: read %d glucose records in %dms",
+                    allRecords.size,
+                    System.currentTimeMillis() - startMs,
+                )
+            }
+            allRecords
+                .mapNotNull { record ->
+                    runCatching { mapToGlucoseReading(record) }
+                        .onFailure { Timber.w(it, "getReadings: failed to map glucose record") }
+                        .getOrNull()
+                }
+                .sortedBy { it.timestamp }
+        } catch (e: TimeoutCancellationException) {
+            Timber.w("getReadings: per-page timeout, returning %d partial glucose records", allRecords.size)
+            allRecords
+                .mapNotNull { record ->
+                    runCatching { mapToGlucoseReading(record) }
+                        .onFailure { Timber.w(it, "getReadings: failed to map glucose record") }
+                        .getOrNull()
+                }
+                .sortedBy { it.timestamp }
+        } catch (e: SecurityException) {
+            Timber.e(e, "getReadings: permission denied")
+            emptyList()
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Timber.e(e, "getReadings: failed")
+            emptyList()
+        }
+    }
+
+    companion object {
+        private const val CUMULATIVE_TIMEOUT_MS = 120_000L
+    }
 }
