@@ -342,5 +342,76 @@
 - Worker 4: merged, 5 conflicts in SettingsRepository.kt, DataStoreSettingsRepository.kt, SyncHealthReadingsUseCase.kt, DataStoreSettingsRepositoryTest.kt, SyncHealthReadingsUseCaseTest.kt (worker-4 stubs vs worker-2/3 real implementations — kept real implementations via --ours)
 - Post-merge fix: exception constructor signature mismatch (worker-3 tests used String params, worker-1 used Int params)
 
-### Continuation Status
-All tasks completed.
+### Review Findings
+
+Summary: 14 findings raised by team (security, reliability, quality reviewers), 4 classified as FIX, 10 discarded
+- FIX: 4 issue(s) — Linear issues created in Todo
+- DISCARDED: 10 finding(s) — false positives / not applicable
+
+**Issues requiring fix:**
+- [HIGH] CONVENTION: java.util.logging.Logger instead of Timber (`app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncHealthReadingsUseCase.kt:14-15,131`) — inconsistent logging framework, logs routed differently than rest of app
+- [MEDIUM] CONVENTION: Missing `operator` keyword on invoke() (`app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncHealthReadingsUseCase.kt:28`) — breaks callable-as-function convention
+- [MEDIUM] BUG: Kotlin assert() instead of JUnit assertTrue (`app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncHealthReadingsUseCaseTest.kt:367`) — test is no-op without -ea flag
+- [MEDIUM] BUG: Sync count uses toPublish.size instead of server-reported count (`app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncHealthReadingsUseCase.kt:91`) — inflated count if server deduplicates
+
+**Discarded findings (not bugs):**
+- [DISCARDED] SECURITY: LAST_SYNCED_MEALS in plaintext DataStore (`DataStoreSettingsRepository.kt:60`) — Consistent design: all non-credential data uses DataStore, only secrets use EncryptedSharedPreferences
+- [DISCARDED] SECURITY: READ_HEALTH_DATA_HISTORY raw string permission (`SyncViewModel.kt:78`) — Intentional: this is a real Android permission required for historical data access; the backfill feature needs it
+- [DISCARDED] SECURITY: Server error messages logged via Timber (`FoodScannerApiClient.kt:71,148,205`) — Standard debug practice; Timber production tree can be configured to suppress
+- [DISCARDED] SECURITY: Camera permission requested without rationale (`SyncScreen.kt:83-85`) — UX preference, not a correctness bug
+- [DISCARDED] BUG: getFoodLog uses generic Exception (`FoodScannerApiClient.kt:52-64`) — Intentionally out of scope per plan: "The getFoodLog method also uses generic exceptions but is out of scope"
+- [DISCARDED] RESOURCE: Ledger sets unbounded when watermark stays at 0 (`DataStoreSettingsRepository.kt:336,361`) — Growth bounded by user logging frequency (~1-2/day, ~7KB/year). Plan documents this bound explicitly.
+- [DISCARDED] TIMEOUT: No per-request timeout on HTTP operations (`FoodScannerApiClient.kt:40,124,180`) — False positive: HttpClient has 30s `HttpTimeout` configured in `AppModule.kt:104-105`
+- [DISCARDED] TIMEOUT: No timeout on Health Connect getReadings() (`SyncHealthReadingsUseCase.kt:74`) — WorkManager provides outer timeout; HC reads are sub-second in practice
+- [DISCARDED] RACE: ViewModel var fields written from multiple coroutines (`SyncViewModel.kt:86-92`) — Safe: all coroutines use viewModelScope which runs on Dispatchers.Main (single-threaded)
+- [DISCARDED] BUG: LocalDate.now() in DataStore edit lambda (`DataStoreSettingsRepository.kt:301`) — Negligible: days-level granularity makes retry variance irrelevant for 7-day ETag cutoff
+
+### Linear Updates
+- HEA-185: Review → Merge
+- HEA-186: Review → Merge
+- HEA-187: Review → Merge
+- HEA-188: Review → Merge
+- HEA-189: Review → Merge
+- HEA-190: Review → Merge
+- HEA-191: Created in Todo (Fix: java.util.logging → Timber)
+- HEA-192: Created in Todo (Fix: missing operator keyword)
+- HEA-193: Created in Todo (Fix: Kotlin assert → JUnit assertTrue)
+- HEA-194: Created in Todo (Fix: sync count server-reported)
+
+<!-- REVIEW COMPLETE -->
+
+---
+
+## Fix Plan
+
+**Source:** Review findings from Iteration 1
+**Linear Issues:** [HEA-191](https://linear.app/lw-claude/issue/HEA-191), [HEA-192](https://linear.app/lw-claude/issue/HEA-192), [HEA-193](https://linear.app/lw-claude/issue/HEA-193), [HEA-194](https://linear.app/lw-claude/issue/HEA-194)
+
+### Fix 1: Replace java.util.logging with Timber in SyncHealthReadingsUseCase
+**Linear Issue:** [HEA-191](https://linear.app/lw-claude/issue/HEA-191)
+
+1. Replace `java.util.logging.Logger` and `java.util.logging.Level` imports with `timber.log.Timber`
+2. Replace `logger.log(Level.WARNING, ...)` at line 100 with `Timber.w(e, "syncType failed, keeping watermark at %d", watermark)`
+3. Remove `logger` companion object field at line 131
+4. Run verifier (expect pass — no test changes needed)
+
+### Fix 2: Add operator keyword to SyncHealthReadingsUseCase.invoke()
+**Linear Issue:** [HEA-192](https://linear.app/lw-claude/issue/HEA-192)
+
+1. Change `suspend fun invoke()` to `suspend operator fun invoke()` at line 28
+2. Run verifier (expect pass)
+
+### Fix 3: Replace Kotlin assert() with JUnit assertTrue in retry delay test
+**Linear Issue:** [HEA-193](https://linear.app/lw-claude/issue/HEA-193)
+
+1. Replace `assert(testScheduler.currentTime >= 3500L)` with `assertTrue(testScheduler.currentTime >= 3500L, "Expected at least 3500ms of virtual time, got ${testScheduler.currentTime}ms")` at line 367
+2. Add `import org.junit.jupiter.api.Assertions.assertTrue` if not present
+3. Run verifier (expect pass — assertion should still hold)
+
+### Fix 4: Use server-reported count for sync count increment
+**Linear Issue:** [HEA-194](https://linear.app/lw-claude/issue/HEA-194)
+
+1. Write test in `SyncHealthReadingsUseCaseTest.kt`: when push returns Result.success(95) for 100 records sent, sync count increments by 95 (not 100)
+2. Run verifier (expect fail)
+3. Change line 91 from `setCount(currentCount + toPublish.size)` to `setCount(currentCount + (result.getOrNull() ?: toPublish.size))`
+4. Run verifier (expect pass)
