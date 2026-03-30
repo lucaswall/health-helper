@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-03-30
+
+### Added
+
+- Smart health readings backfill syncs your full glucose and blood pressure history to Food Scanner incrementally, resuming where it left off
+- Sync status on home screen shows pushed count, caught-up state, and last sync time for each reading type
+- Food log entries now use the correct timezone from when you logged the meal
+
+### Changed
+
+- Health sync tracks glucose and blood pressure progress independently so one type doesn't block the other
+- Sync automatically retries on temporary server errors with exponential backoff
+
+### Fixed
+
+- Fixed glucose display showing mg/dL as primary unit on home screen
+
 ## [1.4.0] - 2026-03-29
 
 ### Added
@@ -84,7 +101,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Settings screen for API configuration and sync interval
 - Adaptive launcher icon with health cross design
 
-[Unreleased]: https://github.com/lucaswall/health-helper/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/lucaswall/health-helper/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/lucaswall/health-helper/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/lucaswall/health-helper/compare/v1.3.1...v1.4.0
 [1.3.1]: https://github.com/lucaswall/health-helper/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/lucaswall/health-helper/compare/v1.2.1...v1.3.0
