@@ -17,6 +17,7 @@ import com.healthhelper.app.domain.repository.SettingsRepository
 import com.healthhelper.app.domain.model.GlucoseReading
 import com.healthhelper.app.domain.usecase.GetLastBloodPressureReadingUseCase
 import com.healthhelper.app.domain.usecase.GetLastGlucoseReadingUseCase
+import com.healthhelper.app.domain.usecase.SyncHealthReadingsUseCase
 import com.healthhelper.app.domain.usecase.SyncNutritionUseCase
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -50,6 +51,7 @@ class SyncViewModelTest {
     private lateinit var syncScheduler: SyncScheduler
     private lateinit var getLastBpReadingUseCase: GetLastBloodPressureReadingUseCase
     private lateinit var getLastGlucoseReadingUseCase: GetLastGlucoseReadingUseCase
+    private lateinit var syncHealthReadingsUseCase: SyncHealthReadingsUseCase
     private lateinit var viewModel: SyncViewModel
 
     @BeforeEach
@@ -60,6 +62,7 @@ class SyncViewModelTest {
         syncScheduler = mockk(relaxed = true)
         getLastBpReadingUseCase = mockk()
         getLastGlucoseReadingUseCase = mockk()
+        syncHealthReadingsUseCase = mockk(relaxed = true)
 
         every { settingsRepository.apiKeyFlow } returns flowOf("fsk_test")
         every { settingsRepository.baseUrlFlow } returns flowOf("https://example.com")
@@ -89,7 +92,7 @@ class SyncViewModelTest {
     private val healthConnectClient: HealthConnectClient? = mockk(relaxed = true)
 
     private fun createViewModel(hcClient: HealthConnectClient? = healthConnectClient): SyncViewModel =
-        SyncViewModel(syncNutritionUseCase, settingsRepository, syncScheduler, getLastBpReadingUseCase, getLastGlucoseReadingUseCase, hcClient)
+        SyncViewModel(syncNutritionUseCase, syncHealthReadingsUseCase, settingsRepository, syncScheduler, getLastBpReadingUseCase, getLastGlucoseReadingUseCase, hcClient)
 
     /**
      * Wraps [runTest] to cancel viewModelScope after the test body,

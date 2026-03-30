@@ -16,6 +16,7 @@ import com.healthhelper.app.domain.model.SyncedMealSummary
 import com.healthhelper.app.domain.repository.SettingsRepository
 import com.healthhelper.app.domain.usecase.GetLastBloodPressureReadingUseCase
 import com.healthhelper.app.domain.usecase.GetLastGlucoseReadingUseCase
+import com.healthhelper.app.domain.usecase.SyncHealthReadingsUseCase
 import com.healthhelper.app.domain.usecase.SyncNutritionUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.Instant
@@ -61,6 +62,7 @@ data class SyncUiState(
 @HiltViewModel
 class SyncViewModel @Inject constructor(
     private val syncNutritionUseCase: SyncNutritionUseCase,
+    private val syncHealthReadingsUseCase: SyncHealthReadingsUseCase,
     private val settingsRepository: SettingsRepository,
     private val syncScheduler: SyncScheduler,
     private val getLastBpReadingUseCase: GetLastBloodPressureReadingUseCase,
@@ -373,6 +375,17 @@ class SyncViewModel @Inject constructor(
                     }
                 }
                 _uiState.update { it.copy(lastSyncResult = resultMessage) }
+
+                // Fire-and-forget health readings sync (same as SyncWorker)
+                if (result !is SyncResult.NeedsConfiguration) {
+                    try {
+                        syncHealthReadingsUseCase()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Timber.w(e, "triggerSync: health readings sync failed (non-fatal)")
+                    }
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
