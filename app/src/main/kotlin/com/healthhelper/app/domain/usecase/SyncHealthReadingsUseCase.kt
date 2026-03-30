@@ -11,6 +11,8 @@ import com.healthhelper.app.domain.repository.FoodScannerHealthRepository
 import com.healthhelper.app.domain.repository.SettingsRepository
 import java.io.IOException
 import java.time.Instant
+import java.util.logging.Level
+import java.util.logging.Logger
 import javax.inject.Inject
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.delay
@@ -95,6 +97,7 @@ class SyncHealthReadingsUseCase @Inject constructor(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            logger.log(Level.WARNING, "syncType failed, keeping watermark at $watermark", e)
             watermark
         }
     }
@@ -125,6 +128,7 @@ class SyncHealthReadingsUseCase @Inject constructor(
     }
 
     companion object {
+        private val logger = Logger.getLogger("SyncHealthReadings")
         const val MAX_READINGS_PER_RUN = 100
         const val MAX_RETRIES = 3
         const val INITIAL_RETRY_DELAY_MS = 500L

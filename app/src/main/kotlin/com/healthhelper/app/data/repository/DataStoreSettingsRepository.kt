@@ -373,6 +373,7 @@ class DataStoreSettingsRepository @Inject constructor(
     }
 
     override suspend fun pruneDirectPushedTimestamps(glucoseBeforeMs: Long, bpBeforeMs: Long) {
+        if (glucoseBeforeMs == 0L && bpBeforeMs == 0L) return
         dataStore.edit { prefs ->
             if (glucoseBeforeMs > 0L) {
                 val existing = prefs[DIRECT_PUSHED_GLUCOSE_TIMESTAMPS]?.let {

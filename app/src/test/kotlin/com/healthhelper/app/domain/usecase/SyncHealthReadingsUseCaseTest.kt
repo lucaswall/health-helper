@@ -17,12 +17,14 @@ import java.io.IOException
 import java.time.Instant
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.assertFailsWith
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class SyncHealthReadingsUseCaseTest {
 
     private val bloodGlucoseRepository = mockk<BloodGlucoseRepository>()
@@ -309,7 +311,7 @@ class SyncHealthReadingsUseCaseTest {
     fun retryOnRateLimitException() = runTest {
         coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns glucoseReadings(1)
         coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns
-            Result.failure(RateLimitException("rate limited"))
+            Result.failure(RateLimitException())
 
         createUseCase().invoke()
 
@@ -321,7 +323,7 @@ class SyncHealthReadingsUseCaseTest {
     fun retryOnServerException() = runTest {
         coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns glucoseReadings(1)
         coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns
-            Result.failure(ServerException("server error", 500))
+            Result.failure(ServerException(500))
 
         createUseCase().invoke()
 
@@ -345,7 +347,7 @@ class SyncHealthReadingsUseCaseTest {
     fun after3RetriesWatermarkNotAdvanced() = runTest {
         coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns glucoseReadings(1)
         coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns
-            Result.failure(RateLimitException("rate limited"))
+            Result.failure(RateLimitException())
 
         createUseCase().invoke()
 
@@ -357,7 +359,7 @@ class SyncHealthReadingsUseCaseTest {
     fun retryDelayIncreases() = runTest {
         coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns glucoseReadings(1)
         coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns
-            Result.failure(RateLimitException("rate limited"))
+            Result.failure(RateLimitException())
 
         createUseCase().invoke()
 
@@ -374,7 +376,7 @@ class SyncHealthReadingsUseCaseTest {
     fun noRetryOnAuthenticationException() = runTest {
         coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns glucoseReadings(1)
         coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns
-            Result.failure(AuthenticationException("unauthorized"))
+            Result.failure(AuthenticationException())
 
         createUseCase().invoke()
 

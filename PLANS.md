@@ -284,3 +284,63 @@
 **Risks:**
 - Two readings at the exact same millisecond could cause a false ledger match (extremely unlikely given manual logging)
 - Pre-PR#14 glucose readings pushed via backfill will have ±1 mg/dL drift from the mmol/L round-trip — this is the best available data and acceptable
+
+---
+
+## Iteration 1
+
+**Implemented:** 2026-03-30
+**Method:** Agent team (4 workers, worktree-isolated)
+
+### Tasks Completed This Iteration
+- Task 1: Typed API exceptions for Food Scanner health endpoints — Created FoodScannerApiException sealed hierarchy, updated postGlucoseReadings/postBloodPressureReadings, 14 new tests (worker-1)
+- Task 2: Already-pushed ledger in SettingsRepository — Added per-type timestamp sets with JSON serialization, graceful degradation, 12 new tests (worker-2)
+- Task 3: Record direct pushes in Write use cases — Injected SettingsRepository, fire-and-forget ledger recording, 8 new tests (worker-2)
+- Task 4: Per-type sync timestamps and status metadata — Replaced shared watermark with independent per-type flows/setters, removed old field, 12 new tests (worker-2)
+- Task 5: Rewrite SyncHealthReadingsUseCase with capped incremental backfill — Full rewrite with 100-record cap, ledger filtering, retry with exponential backoff, error isolation, 27 new tests (worker-3)
+- Task 6: Home screen health sync status display — Added glucoseSyncStatus/bpSyncStatus to SyncUiState, combine blocks in ViewModel, status text in SyncScreen cards, 10 new tests (worker-4)
+
+### Files Modified
+- `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiException.kt` — Created sealed exception hierarchy
+- `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt` — Typed exceptions in Result.failure()
+- `app/src/main/kotlin/com/healthhelper/app/domain/repository/SettingsRepository.kt` — Per-type sync flows, ledger methods, removed old shared watermark
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` — Implemented all new settings with DataStore preferences
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/WriteGlucoseReadingUseCase.kt` — Ledger recording after FS push
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/WriteBloodPressureReadingUseCase.kt` — Ledger recording after FS push
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncHealthReadingsUseCase.kt` — Full rewrite with capped sync, retry, ledger filtering
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` — Sync status combine blocks, formatSyncStatus helper
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SyncScreen.kt` — Status text in glucose and BP cards
+- `app/src/test/kotlin/com/healthhelper/app/data/api/FoodScannerApiClientTest.kt` — 14 typed exception tests
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepositoryTest.kt` — 24 new tests (ledger + per-type sync)
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/WriteGlucoseReadingUseCaseTest.kt` — 4 ledger recording tests
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/WriteBloodPressureReadingUseCaseTest.kt` — 4 ledger recording tests
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncHealthReadingsUseCaseTest.kt` — 27 tests (full rewrite)
+- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt` — 10 sync status tests
+
+### Linear Updates
+- HEA-185: Todo → In Progress → Review
+- HEA-186: Todo → In Progress → Review
+- HEA-187: Todo → In Progress → Review
+- HEA-188: Todo → In Progress → Review
+- HEA-189: Todo → In Progress → Review
+- HEA-190: Todo → In Progress → Review
+
+### Pre-commit Verification
+- bug-hunter: Found 1 HIGH (missing logging in syncType), 2 MEDIUM (no-op DataStore transaction, ViewModel var fields). Fixed HIGH and first MEDIUM. Second MEDIUM is a false positive (viewModelScope guarantees Main dispatcher).
+- verifier: All tests pass, zero warnings
+
+### Work Partition
+- Worker 1: Task 1 (data/API — typed exceptions)
+- Worker 2: Tasks 2, 3, 4 (data+domain — settings ledger, write use cases, per-type timestamps)
+- Worker 3: Task 5 (domain — sync use case rewrite)
+- Worker 4: Task 6 (presentation — sync status UI)
+
+### Merge Summary
+- Worker 1: fast-forward (no conflicts)
+- Worker 2: merged cleanly (no conflicts)
+- Worker 3: merged, 3 conflicts in FoodScannerApiException.kt, SettingsRepository.kt, DataStoreSettingsRepository.kt (worker-3 stubs vs worker-1/2 real implementations — kept real implementations)
+- Worker 4: merged, 5 conflicts in SettingsRepository.kt, DataStoreSettingsRepository.kt, SyncHealthReadingsUseCase.kt, DataStoreSettingsRepositoryTest.kt, SyncHealthReadingsUseCaseTest.kt (worker-4 stubs vs worker-2/3 real implementations — kept real implementations via --ours)
+- Post-merge fix: exception constructor signature mismatch (worker-3 tests used String params, worker-1 used Int params)
+
+### Continuation Status
+All tasks completed.
