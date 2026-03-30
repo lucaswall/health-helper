@@ -12,6 +12,7 @@ interface SettingsRepository {
     val lastSyncTimestampFlow: Flow<Long>
     val lastHealthReadingsSyncTimestampFlow: Flow<Long>
     val lastSyncedMealsFlow: Flow<List<SyncedMealSummary>>
+    val lastHealthReadingsSyncTimestampFlow: Flow<Long>
     suspend fun setApiKey(value: String)
     suspend fun setAnthropicApiKey(value: String)
     suspend fun setBaseUrl(value: String)
@@ -22,5 +23,6 @@ interface SettingsRepository {
     suspend fun setLastSyncedMeals(meals: List<SyncedMealSummary>)
     suspend fun getETag(date: String): String?
     suspend fun setETag(date: String, etag: String)
+    suspend fun setLastHealthReadingsSyncTimestamp(value: Long)
     suspend fun isConfigured(): Boolean
 }

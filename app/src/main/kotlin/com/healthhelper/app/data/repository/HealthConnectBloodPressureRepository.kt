@@ -47,6 +47,10 @@ class HealthConnectBloodPressureRepository @Inject constructor(
         }
     }
 
+    override suspend fun getReadings(start: Instant, end: Instant): List<BloodPressureReading> {
+        throw NotImplementedError("getReadings not yet implemented")
+    }
+
     override suspend fun getLastReading(): BloodPressureReading? {
         if (healthConnectClient == null) {
             Timber.w("getLastReading: Health Connect not available")
