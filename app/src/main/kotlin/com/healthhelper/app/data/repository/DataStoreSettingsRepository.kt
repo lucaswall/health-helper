@@ -4,6 +4,7 @@ import android.content.SharedPreferences
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -50,9 +51,16 @@ class DataStoreSettingsRepository @Inject constructor(
         val SYNC_INTERVAL = intPreferencesKey("sync_interval")
         val LAST_SYNCED_DATE = stringPreferencesKey("last_synced_date")
         val LAST_SYNC_TIMESTAMP = longPreferencesKey("last_sync_timestamp")
-        val LAST_HEALTH_READINGS_SYNC_TIMESTAMP = longPreferencesKey("last_health_readings_sync_timestamp")
+        val LAST_GLUCOSE_SYNC_TIMESTAMP = longPreferencesKey("last_glucose_sync_timestamp")
+        val LAST_BP_SYNC_TIMESTAMP = longPreferencesKey("last_bp_sync_timestamp")
+        val GLUCOSE_SYNC_COUNT = intPreferencesKey("glucose_sync_count")
+        val BP_SYNC_COUNT = intPreferencesKey("bp_sync_count")
+        val GLUCOSE_SYNC_CAUGHT_UP = booleanPreferencesKey("glucose_sync_caught_up")
+        val BP_SYNC_CAUGHT_UP = booleanPreferencesKey("bp_sync_caught_up")
         val LAST_SYNCED_MEALS = stringPreferencesKey("last_synced_meals")
         val FOOD_LOG_ETAGS = stringPreferencesKey("food_log_etags")
+        val DIRECT_PUSHED_GLUCOSE_TIMESTAMPS = stringPreferencesKey("direct_pushed_glucose_timestamps")
+        val DIRECT_PUSHED_BP_TIMESTAMPS = stringPreferencesKey("direct_pushed_bp_timestamps")
         const val DEFAULT_SYNC_INTERVAL = 15
         const val ENCRYPTED_API_KEY = "api_key"
         const val ENCRYPTED_ANTHROPIC_KEY = "anthropic_api_key"
@@ -139,8 +147,23 @@ class DataStoreSettingsRepository @Inject constructor(
     override val lastSyncTimestampFlow: Flow<Long> =
         dataStore.data.map { it[LAST_SYNC_TIMESTAMP] ?: 0L }
 
-    override val lastHealthReadingsSyncTimestampFlow: Flow<Long> =
-        dataStore.data.map { it[LAST_HEALTH_READINGS_SYNC_TIMESTAMP] ?: 0L }
+    override val lastGlucoseSyncTimestampFlow: Flow<Long> =
+        dataStore.data.map { it[LAST_GLUCOSE_SYNC_TIMESTAMP] ?: 0L }
+
+    override val lastBpSyncTimestampFlow: Flow<Long> =
+        dataStore.data.map { it[LAST_BP_SYNC_TIMESTAMP] ?: 0L }
+
+    override val glucoseSyncCountFlow: Flow<Int> =
+        dataStore.data.map { it[GLUCOSE_SYNC_COUNT] ?: 0 }
+
+    override val bpSyncCountFlow: Flow<Int> =
+        dataStore.data.map { it[BP_SYNC_COUNT] ?: 0 }
+
+    override val glucoseSyncCaughtUpFlow: Flow<Boolean> =
+        dataStore.data.map { it[GLUCOSE_SYNC_CAUGHT_UP] ?: false }
+
+    override val bpSyncCaughtUpFlow: Flow<Boolean> =
+        dataStore.data.map { it[BP_SYNC_CAUGHT_UP] ?: false }
 
     override val lastSyncedMealsFlow: Flow<List<SyncedMealSummary>> =
         dataStore.data.map { prefs ->
@@ -212,8 +235,28 @@ class DataStoreSettingsRepository @Inject constructor(
         dataStore.edit { it[LAST_SYNC_TIMESTAMP] = value }
     }
 
-    override suspend fun setLastHealthReadingsSyncTimestamp(value: Long) {
-        dataStore.edit { it[LAST_HEALTH_READINGS_SYNC_TIMESTAMP] = value }
+    override suspend fun setLastGlucoseSyncTimestamp(value: Long) {
+        dataStore.edit { it[LAST_GLUCOSE_SYNC_TIMESTAMP] = value }
+    }
+
+    override suspend fun setLastBpSyncTimestamp(value: Long) {
+        dataStore.edit { it[LAST_BP_SYNC_TIMESTAMP] = value }
+    }
+
+    override suspend fun setGlucoseSyncCount(value: Int) {
+        dataStore.edit { it[GLUCOSE_SYNC_COUNT] = value }
+    }
+
+    override suspend fun setBpSyncCount(value: Int) {
+        dataStore.edit { it[BP_SYNC_COUNT] = value }
+    }
+
+    override suspend fun setGlucoseSyncCaughtUp(value: Boolean) {
+        dataStore.edit { it[GLUCOSE_SYNC_CAUGHT_UP] = value }
+    }
+
+    override suspend fun setBpSyncCaughtUp(value: Boolean) {
+        dataStore.edit { it[BP_SYNC_CAUGHT_UP] = value }
     }
 
     override suspend fun setLastSyncedMeals(meals: List<SyncedMealSummary>) {
@@ -276,6 +319,85 @@ class DataStoreSettingsRepository @Inject constructor(
             val prefs = dataStore.data.first()
             val baseUrl = prefs[BASE_URL] ?: ""
             apiKey.isNotEmpty() && baseUrl.isNotEmpty()
+        }
+    }
+
+    override suspend fun getDirectPushedGlucoseTimestamps(): Set<Long> {
+        val prefs = dataStore.data.first()
+        val json = prefs[DIRECT_PUSHED_GLUCOSE_TIMESTAMPS] ?: return emptySet()
+        return try {
+            Json.decodeFromString<Set<Long>>(json)
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to deserialize direct pushed glucose timestamps, returning empty set")
+            emptySet()
+        }
+    }
+
+    override suspend fun addDirectPushedGlucoseTimestamp(timestampMs: Long) {
+        dataStore.edit { prefs ->
+            val existing = prefs[DIRECT_PUSHED_GLUCOSE_TIMESTAMPS]?.let {
+                try {
+                    Json.decodeFromString<Set<Long>>(it)
+                } catch (e: Exception) {
+                    Timber.w(e, "Failed to deserialize direct pushed glucose timestamps, starting fresh")
+                    emptySet()
+                }
+            } ?: emptySet()
+            prefs[DIRECT_PUSHED_GLUCOSE_TIMESTAMPS] = Json.encodeToString(existing + timestampMs)
+        }
+    }
+
+    override suspend fun getDirectPushedBpTimestamps(): Set<Long> {
+        val prefs = dataStore.data.first()
+        val json = prefs[DIRECT_PUSHED_BP_TIMESTAMPS] ?: return emptySet()
+        return try {
+            Json.decodeFromString<Set<Long>>(json)
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to deserialize direct pushed BP timestamps, returning empty set")
+            emptySet()
+        }
+    }
+
+    override suspend fun addDirectPushedBpTimestamp(timestampMs: Long) {
+        dataStore.edit { prefs ->
+            val existing = prefs[DIRECT_PUSHED_BP_TIMESTAMPS]?.let {
+                try {
+                    Json.decodeFromString<Set<Long>>(it)
+                } catch (e: Exception) {
+                    Timber.w(e, "Failed to deserialize direct pushed BP timestamps, starting fresh")
+                    emptySet()
+                }
+            } ?: emptySet()
+            prefs[DIRECT_PUSHED_BP_TIMESTAMPS] = Json.encodeToString(existing + timestampMs)
+        }
+    }
+
+    override suspend fun pruneDirectPushedTimestamps(glucoseBeforeMs: Long, bpBeforeMs: Long) {
+        dataStore.edit { prefs ->
+            if (glucoseBeforeMs > 0L) {
+                val existing = prefs[DIRECT_PUSHED_GLUCOSE_TIMESTAMPS]?.let {
+                    try {
+                        Json.decodeFromString<Set<Long>>(it)
+                    } catch (e: Exception) {
+                        Timber.w(e, "Failed to deserialize direct pushed glucose timestamps during prune")
+                        emptySet()
+                    }
+                } ?: emptySet()
+                val pruned = existing.filter { it >= glucoseBeforeMs }.toSet()
+                prefs[DIRECT_PUSHED_GLUCOSE_TIMESTAMPS] = Json.encodeToString(pruned)
+            }
+            if (bpBeforeMs > 0L) {
+                val existing = prefs[DIRECT_PUSHED_BP_TIMESTAMPS]?.let {
+                    try {
+                        Json.decodeFromString<Set<Long>>(it)
+                    } catch (e: Exception) {
+                        Timber.w(e, "Failed to deserialize direct pushed BP timestamps during prune")
+                        emptySet()
+                    }
+                } ?: emptySet()
+                val pruned = existing.filter { it >= bpBeforeMs }.toSet()
+                prefs[DIRECT_PUSHED_BP_TIMESTAMPS] = Json.encodeToString(pruned)
+            }
         }
     }
 }
