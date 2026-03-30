@@ -10,6 +10,7 @@ import androidx.health.connect.client.units.Pressure
 import com.healthhelper.app.domain.model.BloodPressureReading
 import com.healthhelper.app.domain.model.BodyPosition
 import com.healthhelper.app.domain.model.MeasurementLocation
+import android.content.Context
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
@@ -29,6 +30,10 @@ import java.time.ZoneOffset
 
 class HealthConnectBloodPressureRepositoryTest {
 
+    private val mockContext: Context = mockk {
+        every { packageName } returns "com.healthhelper.app"
+    }
+
     private val testReading = BloodPressureReading(
         systolic = 120,
         diastolic = 80,
@@ -41,7 +46,7 @@ class HealthConnectBloodPressureRepositoryTest {
     @Test
     @DisplayName("writeBloodPressureRecord returns false when HealthConnectClient is null")
     fun writeReturnsFalseWhenClientNull() = runTest {
-        val repository = HealthConnectBloodPressureRepository(healthConnectClient = null)
+        val repository = HealthConnectBloodPressureRepository(healthConnectClient = null, context = mockContext)
         val result = repository.writeBloodPressureRecord(testReading)
         assertFalse(result)
     }
@@ -52,7 +57,7 @@ class HealthConnectBloodPressureRepositoryTest {
         val mockClient = mockk<HealthConnectClient>()
         coEvery { mockClient.insertRecords(any()) } returns mockk<InsertRecordsResponse>()
 
-        val repository = HealthConnectBloodPressureRepository(mockClient)
+        val repository = HealthConnectBloodPressureRepository(mockClient, mockContext)
         val result = repository.writeBloodPressureRecord(testReading)
         assertTrue(result)
     }
@@ -63,7 +68,7 @@ class HealthConnectBloodPressureRepositoryTest {
         val mockClient = mockk<HealthConnectClient>()
         coEvery { mockClient.insertRecords(any()) } throws SecurityException("Permission denied")
 
-        val repository = HealthConnectBloodPressureRepository(mockClient)
+        val repository = HealthConnectBloodPressureRepository(mockClient, mockContext)
         val result = repository.writeBloodPressureRecord(testReading)
         assertFalse(result)
     }
@@ -74,7 +79,7 @@ class HealthConnectBloodPressureRepositoryTest {
         val mockClient = mockk<HealthConnectClient>()
         coEvery { mockClient.insertRecords(any()) } throws RuntimeException("Unexpected error")
 
-        val repository = HealthConnectBloodPressureRepository(mockClient)
+        val repository = HealthConnectBloodPressureRepository(mockClient, mockContext)
         val result = repository.writeBloodPressureRecord(testReading)
         assertFalse(result)
     }
@@ -88,7 +93,7 @@ class HealthConnectBloodPressureRepositoryTest {
             mockk<InsertRecordsResponse>()
         }
 
-        val repository = HealthConnectBloodPressureRepository(mockClient)
+        val repository = HealthConnectBloodPressureRepository(mockClient, mockContext)
         val result = repository.writeBloodPressureRecord(testReading)
         assertFalse(result)
     }
@@ -99,7 +104,7 @@ class HealthConnectBloodPressureRepositoryTest {
         val mockClient = mockk<HealthConnectClient>()
         coEvery { mockClient.insertRecords(any()) } throws CancellationException("Cancelled")
 
-        val repository = HealthConnectBloodPressureRepository(mockClient)
+        val repository = HealthConnectBloodPressureRepository(mockClient, mockContext)
         assertFailsWith<CancellationException> {
             repository.writeBloodPressureRecord(testReading)
         }
@@ -110,7 +115,7 @@ class HealthConnectBloodPressureRepositoryTest {
     @Test
     @DisplayName("getLastReading returns null when HealthConnectClient is null")
     fun getLastReadingReturnsNullWhenClientNull() = runTest {
-        val repository = HealthConnectBloodPressureRepository(healthConnectClient = null)
+        val repository = HealthConnectBloodPressureRepository(healthConnectClient = null, context = mockContext)
         val result = repository.getLastReading()
         assertNull(result)
     }
@@ -123,7 +128,7 @@ class HealthConnectBloodPressureRepositoryTest {
         every { mockResponse.records } returns emptyList()
         coEvery { mockClient.readRecords(any<ReadRecordsRequest<BloodPressureRecord>>()) } returns mockResponse
 
-        val repository = HealthConnectBloodPressureRepository(mockClient)
+        val repository = HealthConnectBloodPressureRepository(mockClient, mockContext)
         val result = repository.getLastReading()
         assertNull(result)
     }
@@ -152,7 +157,7 @@ class HealthConnectBloodPressureRepositoryTest {
         every { mockResponse.records } returns listOf(olderRecord, newerRecord)
         coEvery { mockClient.readRecords(any<ReadRecordsRequest<BloodPressureRecord>>()) } returns mockResponse
 
-        val repository = HealthConnectBloodPressureRepository(mockClient)
+        val repository = HealthConnectBloodPressureRepository(mockClient, mockContext)
         val result = repository.getLastReading()
 
         assertNotNull(result)
@@ -167,7 +172,7 @@ class HealthConnectBloodPressureRepositoryTest {
         val mockClient = mockk<HealthConnectClient>()
         coEvery { mockClient.readRecords(any<ReadRecordsRequest<BloodPressureRecord>>()) } throws RuntimeException("HC error")
 
-        val repository = HealthConnectBloodPressureRepository(mockClient)
+        val repository = HealthConnectBloodPressureRepository(mockClient, mockContext)
         val result = repository.getLastReading()
         assertNull(result)
     }
@@ -181,7 +186,7 @@ class HealthConnectBloodPressureRepositoryTest {
             mockk<ReadRecordsResponse<BloodPressureRecord>>()
         }
 
-        val repository = HealthConnectBloodPressureRepository(mockClient)
+        val repository = HealthConnectBloodPressureRepository(mockClient, mockContext)
         val result = repository.getLastReading()
         assertNull(result)
     }
@@ -192,7 +197,7 @@ class HealthConnectBloodPressureRepositoryTest {
         val mockClient = mockk<HealthConnectClient>()
         coEvery { mockClient.readRecords(any<ReadRecordsRequest<BloodPressureRecord>>()) } throws CancellationException("Cancelled")
 
-        val repository = HealthConnectBloodPressureRepository(mockClient)
+        val repository = HealthConnectBloodPressureRepository(mockClient, mockContext)
         assertFailsWith<CancellationException> {
             repository.getLastReading()
         }
@@ -203,7 +208,7 @@ class HealthConnectBloodPressureRepositoryTest {
     @Test
     @DisplayName("getReadings returns empty list when HealthConnectClient is null")
     fun getReadingsReturnsEmptyListWhenClientNull() = runTest {
-        val repository = HealthConnectBloodPressureRepository(healthConnectClient = null)
+        val repository = HealthConnectBloodPressureRepository(healthConnectClient = null, context = mockContext)
         val result = repository.getReadings(
             start = Instant.parse("2026-01-01T00:00:00Z"),
             end = Instant.parse("2026-01-02T00:00:00Z"),
@@ -238,7 +243,7 @@ class HealthConnectBloodPressureRepositoryTest {
         every { mockResponse.pageToken } returns null
         coEvery { mockClient.readRecords(any<ReadRecordsRequest<BloodPressureRecord>>()) } returns mockResponse
 
-        val repository = HealthConnectBloodPressureRepository(mockClient)
+        val repository = HealthConnectBloodPressureRepository(mockClient, mockContext)
         val result = repository.getReadings(start, end)
 
         assertEquals(2, result.size)
@@ -254,7 +259,7 @@ class HealthConnectBloodPressureRepositoryTest {
         every { mockResponse.pageToken } returns null
         coEvery { mockClient.readRecords(any<ReadRecordsRequest<BloodPressureRecord>>()) } returns mockResponse
 
-        val repository = HealthConnectBloodPressureRepository(mockClient)
+        val repository = HealthConnectBloodPressureRepository(mockClient, mockContext)
         val result = repository.getReadings(
             start = Instant.parse("2026-01-01T00:00:00Z"),
             end = Instant.parse("2026-01-02T00:00:00Z"),
@@ -271,7 +276,7 @@ class HealthConnectBloodPressureRepositoryTest {
             mockk<ReadRecordsResponse<BloodPressureRecord>>()
         }
 
-        val repository = HealthConnectBloodPressureRepository(mockClient)
+        val repository = HealthConnectBloodPressureRepository(mockClient, mockContext)
         val result = repository.getReadings(
             start = Instant.parse("2026-01-01T00:00:00Z"),
             end = Instant.parse("2026-01-02T00:00:00Z"),
@@ -285,7 +290,7 @@ class HealthConnectBloodPressureRepositoryTest {
         val mockClient = mockk<HealthConnectClient>()
         coEvery { mockClient.readRecords(any<ReadRecordsRequest<BloodPressureRecord>>()) } throws SecurityException("Permission denied")
 
-        val repository = HealthConnectBloodPressureRepository(mockClient)
+        val repository = HealthConnectBloodPressureRepository(mockClient, mockContext)
         val result = repository.getReadings(
             start = Instant.parse("2026-01-01T00:00:00Z"),
             end = Instant.parse("2026-01-02T00:00:00Z"),
@@ -315,7 +320,7 @@ class HealthConnectBloodPressureRepositoryTest {
         every { mockResponse.pageToken } returns null
         coEvery { mockClient.readRecords(any<ReadRecordsRequest<BloodPressureRecord>>()) } returns mockResponse
 
-        val repository = HealthConnectBloodPressureRepository(mockClient)
+        val repository = HealthConnectBloodPressureRepository(mockClient, mockContext)
         val result = repository.getReadings(start, end)
 
         assertEquals(1, result.size)
@@ -351,7 +356,7 @@ class HealthConnectBloodPressureRepositoryTest {
             }
         }
 
-        val repository = HealthConnectBloodPressureRepository(mockClient)
+        val repository = HealthConnectBloodPressureRepository(mockClient, mockContext)
         val result = repository.getReadings(start, end)
 
         assertEquals(1, result.size)
@@ -364,7 +369,7 @@ class HealthConnectBloodPressureRepositoryTest {
         val mockClient = mockk<HealthConnectClient>()
         coEvery { mockClient.readRecords(any<ReadRecordsRequest<BloodPressureRecord>>()) } throws CancellationException("Cancelled")
 
-        val repository = HealthConnectBloodPressureRepository(mockClient)
+        val repository = HealthConnectBloodPressureRepository(mockClient, mockContext)
         assertFailsWith<CancellationException> {
             repository.getReadings(
                 start = Instant.parse("2026-01-01T00:00:00Z"),

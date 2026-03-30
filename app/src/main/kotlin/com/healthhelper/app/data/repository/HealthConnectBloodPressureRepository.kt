@@ -1,9 +1,12 @@
 package com.healthhelper.app.data.repository
 
+import android.content.Context
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.records.BloodPressureRecord
+import androidx.health.connect.client.records.metadata.DataOrigin
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
+import dagger.hilt.android.qualifiers.ApplicationContext
 import com.healthhelper.app.domain.model.BloodPressureReading
 import com.healthhelper.app.domain.repository.BloodPressureRepository
 import kotlin.coroutines.cancellation.CancellationException
@@ -16,6 +19,7 @@ import javax.inject.Inject
 
 class HealthConnectBloodPressureRepository @Inject constructor(
     private val healthConnectClient: HealthConnectClient?,
+    @ApplicationContext private val context: Context,
 ) : BloodPressureRepository {
 
     override suspend fun writeBloodPressureRecord(reading: BloodPressureReading): Boolean {
@@ -109,6 +113,7 @@ class HealthConnectBloodPressureRepository @Inject constructor(
                         ReadRecordsRequest(
                             recordType = BloodPressureRecord::class,
                             timeRangeFilter = TimeRangeFilter.between(start, end),
+                            dataOriginFilter = setOf(DataOrigin(context.packageName)),
                             pageToken = pageToken,
                         ),
                     )

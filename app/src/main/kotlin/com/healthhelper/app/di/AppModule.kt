@@ -83,13 +83,15 @@ object AppModule {
     @Singleton
     fun provideBloodPressureRepository(
         healthConnectClient: HealthConnectClient?,
-    ): BloodPressureRepository = HealthConnectBloodPressureRepository(healthConnectClient)
+        @ApplicationContext context: Context,
+    ): BloodPressureRepository = HealthConnectBloodPressureRepository(healthConnectClient, context)
 
     @Provides
     @Singleton
     fun provideBloodGlucoseRepository(
         healthConnectClient: HealthConnectClient?,
-    ): BloodGlucoseRepository = HealthConnectBloodGlucoseRepository(healthConnectClient)
+        @ApplicationContext context: Context,
+    ): BloodGlucoseRepository = HealthConnectBloodGlucoseRepository(healthConnectClient, context)
 
     @Provides
     @Singleton
