@@ -50,6 +50,7 @@ class DataStoreSettingsRepository @Inject constructor(
         val SYNC_INTERVAL = intPreferencesKey("sync_interval")
         val LAST_SYNCED_DATE = stringPreferencesKey("last_synced_date")
         val LAST_SYNC_TIMESTAMP = longPreferencesKey("last_sync_timestamp")
+        val LAST_HEALTH_READINGS_SYNC_TIMESTAMP = longPreferencesKey("last_health_readings_sync_timestamp")
         val LAST_SYNCED_MEALS = stringPreferencesKey("last_synced_meals")
         val FOOD_LOG_ETAGS = stringPreferencesKey("food_log_etags")
         const val DEFAULT_SYNC_INTERVAL = 15
@@ -138,6 +139,9 @@ class DataStoreSettingsRepository @Inject constructor(
     override val lastSyncTimestampFlow: Flow<Long> =
         dataStore.data.map { it[LAST_SYNC_TIMESTAMP] ?: 0L }
 
+    override val lastHealthReadingsSyncTimestampFlow: Flow<Long> =
+        dataStore.data.map { it[LAST_HEALTH_READINGS_SYNC_TIMESTAMP] ?: 0L }
+
     override val lastSyncedMealsFlow: Flow<List<SyncedMealSummary>> =
         dataStore.data.map { prefs ->
             val json = prefs[LAST_SYNCED_MEALS] ?: return@map emptyList()
@@ -206,6 +210,10 @@ class DataStoreSettingsRepository @Inject constructor(
 
     override suspend fun setLastSyncTimestamp(value: Long) {
         dataStore.edit { it[LAST_SYNC_TIMESTAMP] = value }
+    }
+
+    override suspend fun setLastHealthReadingsSyncTimestamp(value: Long) {
+        dataStore.edit { it[LAST_HEALTH_READINGS_SYNC_TIMESTAMP] = value }
     }
 
     override suspend fun setLastSyncedMeals(meals: List<SyncedMealSummary>) {

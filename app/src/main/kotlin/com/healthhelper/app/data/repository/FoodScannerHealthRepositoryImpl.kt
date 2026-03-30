@@ -24,19 +24,10 @@ class FoodScannerHealthRepositoryImpl @Inject constructor(
         if (baseUrl.isBlank() || apiKey.isBlank()) {
             return Result.failure(Exception("Food-scanner settings not configured"))
         }
-        val zoneOffset = zoneOffsetString(reading.timestamp)
-        val dto = GlucoseReadingDto(
-            measuredAt = reading.timestamp.toString(),
-            valueMgDl = reading.valueMgDl,
-            zoneOffset = zoneOffset,
-            relationToMeal = reading.relationToMeal.name.lowercase(),
-            mealType = reading.glucoseMealType.name.lowercase(),
-            specimenSource = reading.specimenSource.name.lowercase(),
-        )
         return apiClient.postGlucoseReadings(
             baseUrl = baseUrl,
             apiKey = apiKey,
-            request = GlucoseReadingRequest(readings = listOf(dto)),
+            request = GlucoseReadingRequest(readings = listOf(toGlucoseReadingDto(reading))),
         ).map { Unit }
     }
 
@@ -46,21 +37,60 @@ class FoodScannerHealthRepositoryImpl @Inject constructor(
         if (baseUrl.isBlank() || apiKey.isBlank()) {
             return Result.failure(Exception("Food-scanner settings not configured"))
         }
-        val zoneOffset = zoneOffsetString(reading.timestamp)
-        val dto = BloodPressureReadingDto(
-            measuredAt = reading.timestamp.toString(),
-            systolic = reading.systolic,
-            diastolic = reading.diastolic,
-            zoneOffset = zoneOffset,
-            bodyPosition = reading.bodyPosition.name.lowercase(),
-            measurementLocation = reading.measurementLocation.name.lowercase(),
-        )
         return apiClient.postBloodPressureReadings(
             baseUrl = baseUrl,
             apiKey = apiKey,
-            request = BloodPressureReadingRequest(readings = listOf(dto)),
+            request = BloodPressureReadingRequest(readings = listOf(toBloodPressureReadingDto(reading))),
         ).map { Unit }
     }
+
+    override suspend fun pushGlucoseReadings(readings: List<GlucoseReading>): Result<Int> {
+        if (readings.isEmpty()) return Result.success(0)
+        val baseUrl = settingsRepository.baseUrlFlow.first()
+        val apiKey = settingsRepository.apiKeyFlow.first()
+        if (baseUrl.isBlank() || apiKey.isBlank()) {
+            return Result.failure(Exception("Food-scanner settings not configured"))
+        }
+        return apiClient.postGlucoseReadings(
+            baseUrl = baseUrl,
+            apiKey = apiKey,
+            request = GlucoseReadingRequest(readings = readings.map { toGlucoseReadingDto(it) }),
+        )
+    }
+
+    override suspend fun pushBloodPressureReadings(readings: List<BloodPressureReading>): Result<Int> {
+        if (readings.isEmpty()) return Result.success(0)
+        val baseUrl = settingsRepository.baseUrlFlow.first()
+        val apiKey = settingsRepository.apiKeyFlow.first()
+        if (baseUrl.isBlank() || apiKey.isBlank()) {
+            return Result.failure(Exception("Food-scanner settings not configured"))
+        }
+        return apiClient.postBloodPressureReadings(
+            baseUrl = baseUrl,
+            apiKey = apiKey,
+            request = BloodPressureReadingRequest(readings = readings.map { toBloodPressureReadingDto(it) }),
+        )
+    }
+
+    private fun toGlucoseReadingDto(reading: GlucoseReading): GlucoseReadingDto =
+        GlucoseReadingDto(
+            measuredAt = reading.timestamp.toString(),
+            valueMgDl = reading.valueMgDl,
+            zoneOffset = zoneOffsetString(reading.timestamp),
+            relationToMeal = reading.relationToMeal.name.lowercase(),
+            mealType = reading.glucoseMealType.name.lowercase(),
+            specimenSource = reading.specimenSource.name.lowercase(),
+        )
+
+    private fun toBloodPressureReadingDto(reading: BloodPressureReading): BloodPressureReadingDto =
+        BloodPressureReadingDto(
+            measuredAt = reading.timestamp.toString(),
+            systolic = reading.systolic,
+            diastolic = reading.diastolic,
+            zoneOffset = zoneOffsetString(reading.timestamp),
+            bodyPosition = reading.bodyPosition.name.lowercase(),
+            measurementLocation = reading.measurementLocation.name.lowercase(),
+        )
 
     private fun zoneOffsetString(timestamp: java.time.Instant): String {
         val raw = ZoneId.systemDefault().rules.getOffset(timestamp).toString()

@@ -303,4 +303,177 @@ class FoodScannerHealthRepositoryImplTest {
 
         coVerify(exactly = 0) { apiClient.postBloodPressureReadings(any(), any(), any()) }
     }
+
+    // --- pushGlucoseReadings (batch) tests ---
+
+    @Test
+    @DisplayName("pushGlucoseReadings empty list returns Result.success(0) without calling API")
+    fun pushGlucoseReadingsEmptyListReturnsSuccessZero() = runTest {
+        val result = repository.pushGlucoseReadings(emptyList())
+
+        assertTrue(result.isSuccess)
+        assertEquals(0, result.getOrThrow())
+        coVerify(exactly = 0) { apiClient.postGlucoseReadings(any(), any(), any()) }
+    }
+
+    @Test
+    @DisplayName("pushGlucoseReadings single reading maps correctly and returns upserted count")
+    fun pushGlucoseReadingsSingleReadingSuccess() = runTest {
+        val slot = slot<GlucoseReadingRequest>()
+        coEvery { apiClient.postGlucoseReadings(any(), any(), capture(slot)) } returns Result.success(1)
+
+        val result = repository.pushGlucoseReadings(listOf(testGlucoseReading))
+
+        assertTrue(result.isSuccess)
+        assertEquals(1, result.getOrThrow())
+        assertEquals(1, slot.captured.readings.size)
+        assertEquals(90, slot.captured.readings[0].valueMgDl)
+        assertEquals("before_meal", slot.captured.readings[0].relationToMeal)
+        assertEquals("breakfast", slot.captured.readings[0].mealType)
+        assertEquals("capillary_blood", slot.captured.readings[0].specimenSource)
+        assertEquals(fixedTimestamp.toString(), slot.captured.readings[0].measuredAt)
+    }
+
+    @Test
+    @DisplayName("pushGlucoseReadings multiple readings: single API call, returns upserted count")
+    fun pushGlucoseReadingsMultipleReadingsSingleApiCall() = runTest {
+        val slot = slot<GlucoseReadingRequest>()
+        coEvery { apiClient.postGlucoseReadings(any(), any(), capture(slot)) } returns Result.success(3)
+
+        val readings = listOf(
+            testGlucoseReading,
+            testGlucoseReading.copy(valueMgDl = 100, timestamp = fixedTimestamp.plusSeconds(60)),
+            testGlucoseReading.copy(valueMgDl = 110, timestamp = fixedTimestamp.plusSeconds(120)),
+        )
+        val result = repository.pushGlucoseReadings(readings)
+
+        assertTrue(result.isSuccess)
+        assertEquals(3, result.getOrThrow())
+        assertEquals(3, slot.captured.readings.size)
+        coVerify(exactly = 1) { apiClient.postGlucoseReadings(any(), any(), any()) }
+    }
+
+    @Test
+    @DisplayName("pushGlucoseReadings returns Result.failure when settings not configured")
+    fun pushGlucoseReadingsSettingsNotConfiguredReturnsFailure() = runTest {
+        every { settingsRepository.baseUrlFlow } returns flowOf("")
+
+        val result = repository.pushGlucoseReadings(listOf(testGlucoseReading))
+
+        assertTrue(result.isFailure)
+        coVerify(exactly = 0) { apiClient.postGlucoseReadings(any(), any(), any()) }
+    }
+
+    @Test
+    @DisplayName("pushGlucoseReadings API failure returns Result.failure with exception")
+    fun pushGlucoseReadingsApiFailureReturnsFailure() = runTest {
+        val exception = RuntimeException("Batch API error")
+        coEvery { apiClient.postGlucoseReadings(any(), any(), any()) } returns Result.failure(exception)
+
+        val result = repository.pushGlucoseReadings(listOf(testGlucoseReading))
+
+        assertTrue(result.isFailure)
+        assertEquals("Batch API error", result.exceptionOrNull()?.message)
+    }
+
+    @Test
+    @DisplayName("pushGlucoseReadings maps zoneOffset in ±HH:MM format")
+    fun pushGlucoseReadingsMapsZoneOffset() = runTest {
+        val slot = slot<GlucoseReadingRequest>()
+        coEvery { apiClient.postGlucoseReadings(any(), any(), capture(slot)) } returns Result.success(1)
+
+        repository.pushGlucoseReadings(listOf(testGlucoseReading))
+
+        val zoneOffset = assertNotNull(slot.captured.readings[0].zoneOffset)
+        assertTrue(
+            zoneOffset.matches(Regex("[+-]\\d{2}:\\d{2}")),
+            "Expected zone offset in ±HH:MM format, got: $zoneOffset",
+        )
+    }
+
+    // --- pushBloodPressureReadings (batch) tests ---
+
+    @Test
+    @DisplayName("pushBloodPressureReadings empty list returns Result.success(0) without calling API")
+    fun pushBloodPressureReadingsEmptyListReturnsSuccessZero() = runTest {
+        val result = repository.pushBloodPressureReadings(emptyList())
+
+        assertTrue(result.isSuccess)
+        assertEquals(0, result.getOrThrow())
+        coVerify(exactly = 0) { apiClient.postBloodPressureReadings(any(), any(), any()) }
+    }
+
+    @Test
+    @DisplayName("pushBloodPressureReadings single reading maps correctly and returns upserted count")
+    fun pushBloodPressureReadingsSingleReadingSuccess() = runTest {
+        val slot = slot<BloodPressureReadingRequest>()
+        coEvery { apiClient.postBloodPressureReadings(any(), any(), capture(slot)) } returns Result.success(1)
+
+        val result = repository.pushBloodPressureReadings(listOf(testBpReading))
+
+        assertTrue(result.isSuccess)
+        assertEquals(1, result.getOrThrow())
+        assertEquals(1, slot.captured.readings.size)
+        assertEquals(120, slot.captured.readings[0].systolic)
+        assertEquals(80, slot.captured.readings[0].diastolic)
+        assertEquals("sitting_down", slot.captured.readings[0].bodyPosition)
+        assertEquals("left_upper_arm", slot.captured.readings[0].measurementLocation)
+        assertEquals(fixedTimestamp.toString(), slot.captured.readings[0].measuredAt)
+    }
+
+    @Test
+    @DisplayName("pushBloodPressureReadings multiple readings: single API call, returns upserted count")
+    fun pushBloodPressureReadingsMultipleReadingsSingleApiCall() = runTest {
+        val slot = slot<BloodPressureReadingRequest>()
+        coEvery { apiClient.postBloodPressureReadings(any(), any(), capture(slot)) } returns Result.success(2)
+
+        val readings = listOf(
+            testBpReading,
+            testBpReading.copy(systolic = 130, timestamp = fixedTimestamp.plusSeconds(60)),
+        )
+        val result = repository.pushBloodPressureReadings(readings)
+
+        assertTrue(result.isSuccess)
+        assertEquals(2, result.getOrThrow())
+        assertEquals(2, slot.captured.readings.size)
+        coVerify(exactly = 1) { apiClient.postBloodPressureReadings(any(), any(), any()) }
+    }
+
+    @Test
+    @DisplayName("pushBloodPressureReadings returns Result.failure when settings not configured")
+    fun pushBloodPressureReadingsSettingsNotConfiguredReturnsFailure() = runTest {
+        every { settingsRepository.apiKeyFlow } returns flowOf("")
+
+        val result = repository.pushBloodPressureReadings(listOf(testBpReading))
+
+        assertTrue(result.isFailure)
+        coVerify(exactly = 0) { apiClient.postBloodPressureReadings(any(), any(), any()) }
+    }
+
+    @Test
+    @DisplayName("pushBloodPressureReadings API failure returns Result.failure with exception")
+    fun pushBloodPressureReadingsApiFailureReturnsFailure() = runTest {
+        val exception = RuntimeException("BP Batch API error")
+        coEvery { apiClient.postBloodPressureReadings(any(), any(), any()) } returns Result.failure(exception)
+
+        val result = repository.pushBloodPressureReadings(listOf(testBpReading))
+
+        assertTrue(result.isFailure)
+        assertEquals("BP Batch API error", result.exceptionOrNull()?.message)
+    }
+
+    @Test
+    @DisplayName("pushBloodPressureReadings maps zoneOffset in ±HH:MM format")
+    fun pushBloodPressureReadingsMapsZoneOffset() = runTest {
+        val slot = slot<BloodPressureReadingRequest>()
+        coEvery { apiClient.postBloodPressureReadings(any(), any(), capture(slot)) } returns Result.success(1)
+
+        repository.pushBloodPressureReadings(listOf(testBpReading))
+
+        val zoneOffset = assertNotNull(slot.captured.readings[0].zoneOffset)
+        assertTrue(
+            zoneOffset.matches(Regex("[+-]\\d{2}:\\d{2}")),
+            "Expected zone offset in ±HH:MM format, got: $zoneOffset",
+        )
+    }
 }

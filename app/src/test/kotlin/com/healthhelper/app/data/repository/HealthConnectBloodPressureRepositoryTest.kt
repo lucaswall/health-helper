@@ -14,6 +14,7 @@ import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
 import kotlin.coroutines.cancellation.CancellationException
+import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -194,6 +195,116 @@ class HealthConnectBloodPressureRepositoryTest {
         val repository = HealthConnectBloodPressureRepository(mockClient)
         assertFailsWith<CancellationException> {
             repository.getLastReading()
+        }
+    }
+
+    // --- getReadings tests ---
+
+    @Test
+    @DisplayName("getReadings returns empty list when HealthConnectClient is null")
+    fun getReadingsReturnsEmptyListWhenClientNull() = runTest {
+        val repository = HealthConnectBloodPressureRepository(healthConnectClient = null)
+        val result = repository.getReadings(
+            start = Instant.parse("2026-01-01T00:00:00Z"),
+            end = Instant.parse("2026-01-02T00:00:00Z"),
+        )
+        assertTrue(result.isEmpty())
+    }
+
+    @Test
+    @DisplayName("getReadings returns all readings in time range, mapped and sorted by timestamp ascending")
+    fun getReadingsReturnsMappedAndSortedReadings() = runTest {
+        val mockClient = mockk<HealthConnectClient>()
+        val start = Instant.parse("2026-01-01T00:00:00Z")
+        val end = Instant.parse("2026-01-02T00:00:00Z")
+
+        val record1 = BloodPressureRecord(
+            time = Instant.parse("2026-01-01T12:00:00Z"),
+            zoneOffset = ZoneOffset.UTC,
+            systolic = Pressure.millimetersOfMercury(130.0),
+            diastolic = Pressure.millimetersOfMercury(85.0),
+            metadata = Metadata.manualEntry(),
+        )
+        val record2 = BloodPressureRecord(
+            time = Instant.parse("2026-01-01T08:00:00Z"),
+            zoneOffset = ZoneOffset.UTC,
+            systolic = Pressure.millimetersOfMercury(120.0),
+            diastolic = Pressure.millimetersOfMercury(80.0),
+            metadata = Metadata.manualEntry(),
+        )
+
+        val mockResponse = mockk<ReadRecordsResponse<BloodPressureRecord>>()
+        every { mockResponse.records } returns listOf(record1, record2)
+        every { mockResponse.pageToken } returns null
+        coEvery { mockClient.readRecords(any<ReadRecordsRequest<BloodPressureRecord>>()) } returns mockResponse
+
+        val repository = HealthConnectBloodPressureRepository(mockClient)
+        val result = repository.getReadings(start, end)
+
+        assertEquals(2, result.size)
+        assertTrue(result[0].timestamp <= result[1].timestamp)
+    }
+
+    @Test
+    @DisplayName("getReadings returns empty list when no records in range")
+    fun getReadingsReturnsEmptyListWhenNoRecords() = runTest {
+        val mockClient = mockk<HealthConnectClient>()
+        val mockResponse = mockk<ReadRecordsResponse<BloodPressureRecord>>()
+        every { mockResponse.records } returns emptyList()
+        every { mockResponse.pageToken } returns null
+        coEvery { mockClient.readRecords(any<ReadRecordsRequest<BloodPressureRecord>>()) } returns mockResponse
+
+        val repository = HealthConnectBloodPressureRepository(mockClient)
+        val result = repository.getReadings(
+            start = Instant.parse("2026-01-01T00:00:00Z"),
+            end = Instant.parse("2026-01-02T00:00:00Z"),
+        )
+        assertTrue(result.isEmpty())
+    }
+
+    @Test
+    @DisplayName("getReadings returns empty list when readRecords exceeds 10s timeout")
+    fun getReadingsReturnsEmptyListOnTimeout() = runTest {
+        val mockClient = mockk<HealthConnectClient>()
+        coEvery { mockClient.readRecords(any<ReadRecordsRequest<BloodPressureRecord>>()) } coAnswers {
+            delay(15_000L)
+            mockk<ReadRecordsResponse<BloodPressureRecord>>()
+        }
+
+        val repository = HealthConnectBloodPressureRepository(mockClient)
+        val result = repository.getReadings(
+            start = Instant.parse("2026-01-01T00:00:00Z"),
+            end = Instant.parse("2026-01-02T00:00:00Z"),
+        )
+        assertTrue(result.isEmpty())
+    }
+
+    @Test
+    @DisplayName("getReadings returns empty list on SecurityException")
+    fun getReadingsReturnsEmptyListOnSecurityException() = runTest {
+        val mockClient = mockk<HealthConnectClient>()
+        coEvery { mockClient.readRecords(any<ReadRecordsRequest<BloodPressureRecord>>()) } throws SecurityException("Permission denied")
+
+        val repository = HealthConnectBloodPressureRepository(mockClient)
+        val result = repository.getReadings(
+            start = Instant.parse("2026-01-01T00:00:00Z"),
+            end = Instant.parse("2026-01-02T00:00:00Z"),
+        )
+        assertTrue(result.isEmpty())
+    }
+
+    @Test
+    @DisplayName("CancellationException propagates through getReadings")
+    fun getReadingsPropagatesCancellationException() = runTest {
+        val mockClient = mockk<HealthConnectClient>()
+        coEvery { mockClient.readRecords(any<ReadRecordsRequest<BloodPressureRecord>>()) } throws CancellationException("Cancelled")
+
+        val repository = HealthConnectBloodPressureRepository(mockClient)
+        assertFailsWith<CancellationException> {
+            repository.getReadings(
+                start = Instant.parse("2026-01-01T00:00:00Z"),
+                end = Instant.parse("2026-01-02T00:00:00Z"),
+            )
         }
     }
 }

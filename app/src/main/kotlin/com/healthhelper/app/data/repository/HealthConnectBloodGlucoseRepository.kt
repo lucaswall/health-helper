@@ -86,4 +86,47 @@ class HealthConnectBloodGlucoseRepository @Inject constructor(
             null
         }
     }
+
+    override suspend fun getReadings(start: Instant, end: Instant): List<GlucoseReading> {
+        if (healthConnectClient == null) {
+            Timber.w("getReadings: Health Connect not available")
+            return emptyList()
+        }
+        return try {
+            val startMs = System.currentTimeMillis()
+            val allRecords = mutableListOf<BloodGlucoseRecord>()
+            withTimeout(10_000L) {
+                var pageToken: String? = null
+                do {
+                    val response = healthConnectClient.readRecords(
+                        ReadRecordsRequest(
+                            recordType = BloodGlucoseRecord::class,
+                            timeRangeFilter = TimeRangeFilter.between(start, end),
+                            pageToken = pageToken,
+                        ),
+                    )
+                    allRecords.addAll(response.records)
+                    pageToken = response.pageToken
+                } while (pageToken != null)
+            }
+            Timber.d(
+                "getReadings: read %d glucose records in %dms",
+                allRecords.size,
+                System.currentTimeMillis() - startMs,
+            )
+            allRecords
+                .mapNotNull { record -> runCatching { mapToGlucoseReading(record) }.getOrNull() }
+                .sortedBy { it.timestamp }
+        } catch (e: TimeoutCancellationException) {
+            Timber.w("getReadings: timed out after 10s")
+            emptyList()
+        } catch (e: SecurityException) {
+            Timber.e(e, "getReadings: permission denied")
+            emptyList()
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Timber.e(e, "getReadings: failed")
+            emptyList()
+        }
+    }
 }
