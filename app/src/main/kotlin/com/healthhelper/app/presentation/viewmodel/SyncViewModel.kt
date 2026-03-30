@@ -31,6 +31,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
@@ -347,7 +348,8 @@ class SyncViewModel @Inject constructor(
             Timber.d("SyncViewModel: triggerSync ignored, already syncing")
             return
         }
-        Timber.d("SyncViewModel: triggerSync started")
+        Timber.d("SyncViewModel: triggerSync started, cancelling background worker")
+        syncScheduler.cancelSync()
         syncJob?.cancel()
         _uiState.update { it.copy(isSyncing = true, syncProgress = null) }
         syncJob = viewModelScope.launch {
@@ -393,6 +395,11 @@ class SyncViewModel @Inject constructor(
                 _uiState.update { it.copy(lastSyncResult = "Sync failed. Please try again.") }
             } finally {
                 _uiState.update { it.copy(isSyncing = false, syncProgress = null) }
+                // Reschedule background worker so the timer resets from now
+                try {
+                    val interval = settingsRepository.syncIntervalFlow.first()
+                    syncScheduler.schedulePeriodic(interval)
+                } catch (_: Exception) { }
             }
         }
     }
