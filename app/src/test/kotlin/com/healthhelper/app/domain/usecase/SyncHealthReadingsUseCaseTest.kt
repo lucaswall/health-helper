@@ -20,6 +20,7 @@ import kotlin.test.assertFailsWith
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
@@ -289,6 +290,18 @@ class SyncHealthReadingsUseCaseTest {
     }
 
     @Test
+    @DisplayName("sync count uses server-reported count, not local list size")
+    fun syncCountUsesServerReportedCount() = runTest {
+        every { settingsRepository.glucoseSyncCountFlow } returns flowOf(10)
+        coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns glucoseReadings(100)
+        coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns Result.success(95)
+
+        createUseCase().invoke()
+
+        coVerify { settingsRepository.setGlucoseSyncCount(105) }
+    }
+
+    @Test
     @DisplayName("glucose and BP sync counts tracked independently")
     fun glucoseBpCountsTrackedIndependently() = runTest {
         every { settingsRepository.glucoseSyncCountFlow } returns flowOf(5)
@@ -364,9 +377,9 @@ class SyncHealthReadingsUseCaseTest {
         createUseCase().invoke()
 
         // Total virtual time elapsed must equal 500 + 1000 + 2000 = 3500ms for glucose retries
-        assert(testScheduler.currentTime >= 3500L) {
-            "Expected at least 3500ms of virtual time, got ${testScheduler.currentTime}ms"
-        }
+        assertTrue(testScheduler.currentTime >= 3500L,
+            "Expected at least 3500ms of virtual time, got ${testScheduler.currentTime}ms",
+        )
     }
 
     // =========== PERMANENT ERRORS (NO RETRY) ===========

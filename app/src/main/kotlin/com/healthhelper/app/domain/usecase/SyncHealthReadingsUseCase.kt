@@ -11,13 +11,12 @@ import com.healthhelper.app.domain.repository.FoodScannerHealthRepository
 import com.healthhelper.app.domain.repository.SettingsRepository
 import java.io.IOException
 import java.time.Instant
-import java.util.logging.Level
-import java.util.logging.Logger
 import javax.inject.Inject
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import timber.log.Timber
 
 class SyncHealthReadingsUseCase @Inject constructor(
     private val bloodGlucoseRepository: BloodGlucoseRepository,
@@ -25,7 +24,7 @@ class SyncHealthReadingsUseCase @Inject constructor(
     private val foodScannerHealthRepository: FoodScannerHealthRepository,
     private val settingsRepository: SettingsRepository,
 ) {
-    suspend fun invoke() {
+    suspend operator fun invoke() {
         if (!settingsRepository.isConfigured()) return
 
         val glucoseWatermark = syncType(
@@ -88,7 +87,7 @@ class SyncHealthReadingsUseCase @Inject constructor(
                 val result = pushWithRetry { pushReadings(toPublish) }
                 if (result.isFailure) return watermark
                 val currentCount = countFlow.first()
-                setCount(currentCount + toPublish.size)
+                setCount(currentCount + (result.getOrNull() ?: toPublish.size))
             }
 
             setWatermark(lastBatchTimestamp)
@@ -97,7 +96,7 @@ class SyncHealthReadingsUseCase @Inject constructor(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            logger.log(Level.WARNING, "syncType failed, keeping watermark at $watermark", e)
+            Timber.w(e, "syncType failed, keeping watermark at %d", watermark)
             watermark
         }
     }
@@ -128,7 +127,6 @@ class SyncHealthReadingsUseCase @Inject constructor(
     }
 
     companion object {
-        private val logger = Logger.getLogger("SyncHealthReadings")
         const val MAX_READINGS_PER_RUN = 100
         const val MAX_RETRIES = 3
         const val INITIAL_RETRY_DELAY_MS = 500L

@@ -415,3 +415,33 @@ Summary: 14 findings raised by team (security, reliability, quality reviewers), 
 2. Run verifier (expect fail)
 3. Change line 91 from `setCount(currentCount + toPublish.size)` to `setCount(currentCount + (result.getOrNull() ?: toPublish.size))`
 4. Run verifier (expect pass)
+
+---
+
+## Iteration 2
+
+**Implemented:** 2026-03-30
+**Method:** Single-agent (effort score 4, 1 work unit)
+
+### Tasks Completed This Iteration
+- Fix 1: Replace java.util.logging with Timber in SyncHealthReadingsUseCase (HEA-191)
+- Fix 2: Add operator keyword to SyncHealthReadingsUseCase.invoke() (HEA-192)
+- Fix 3: Replace Kotlin assert() with JUnit assertTrue in retry delay test (HEA-193)
+- Fix 4: Use server-reported count for sync count increment (HEA-194)
+
+### Files Modified
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncHealthReadingsUseCase.kt` — Replaced java.util.logging with Timber, added operator keyword, use server-reported count
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncHealthReadingsUseCaseTest.kt` — Replaced assert() with assertTrue, added server-reported count test
+
+### Linear Updates
+- HEA-191: Todo → In Progress → Review
+- HEA-192: Todo → In Progress → Review
+- HEA-193: Todo → In Progress → Review
+- HEA-194: Todo → In Progress → Review
+
+### Pre-commit Verification
+- bug-hunter: 0 functional bugs, 1 LOW convention finding (import ordering — fixed)
+- verifier: All 28 tests pass, zero warnings
+
+### Continuation Status
+All fix plan tasks completed.
