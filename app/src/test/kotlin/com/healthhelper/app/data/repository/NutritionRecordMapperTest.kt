@@ -5,6 +5,7 @@ import com.healthhelper.app.domain.model.FoodLogEntry
 import com.healthhelper.app.domain.model.MealType
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import java.time.ZoneOffset
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -16,6 +17,7 @@ class NutritionRecordMapperTest {
         foodName: String = "Test Food",
         mealType: MealType = MealType.BREAKFAST,
         time: String? = "12:30:00",
+        zoneOffset: String? = null,
         calories: Double = 300.0,
         proteinG: Double = 10.0,
         carbsG: Double = 40.0,
@@ -31,6 +33,7 @@ class NutritionRecordMapperTest {
         foodName = foodName,
         mealType = mealType,
         time = time,
+        zoneOffset = zoneOffset,
         calories = calories,
         proteinG = proteinG,
         carbsG = carbsG,
@@ -203,5 +206,55 @@ class NutritionRecordMapperTest {
     fun clientRecordId() {
         val record = mapToNutritionRecord(createEntry(id = 42), "2026-01-15")
         assertEquals("foodscanner-42", record.metadata.clientRecordId)
+    }
+
+    @Test
+    @DisplayName("zoneOffset +05:30 produces startTime at UTC and correct startZoneOffset")
+    fun zoneOffsetPositiveProducesUtcTime() {
+        // 12:30:00 at +05:30 → 07:00:00 UTC
+        val record = mapToNutritionRecord(
+            createEntry(time = "12:30:00", zoneOffset = "+05:30"),
+            "2026-01-15",
+        )
+        val utcTime = record.startTime.atOffset(ZoneOffset.UTC).toLocalTime()
+        assertEquals(java.time.LocalTime.of(7, 0, 0), utcTime)
+        assertEquals(ZoneOffset.of("+05:30"), record.startZoneOffset)
+    }
+
+    @Test
+    @DisplayName("zoneOffset -03:00 produces startTime at UTC and correct startZoneOffset")
+    fun zoneOffsetNegativeProducesUtcTime() {
+        // 08:00:00 at -03:00 → 11:00:00 UTC
+        val record = mapToNutritionRecord(
+            createEntry(time = "08:00:00", zoneOffset = "-03:00"),
+            "2026-01-15",
+        )
+        val utcTime = record.startTime.atOffset(ZoneOffset.UTC).toLocalTime()
+        assertEquals(java.time.LocalTime.of(11, 0, 0), utcTime)
+        assertEquals(ZoneOffset.of("-03:00"), record.startZoneOffset)
+    }
+
+    @Test
+    @DisplayName("zoneOffset null uses system default timezone")
+    fun zoneOffsetNullUsesSystemDefault() {
+        val record = mapToNutritionRecord(
+            createEntry(time = "12:30:00", zoneOffset = null),
+            "2026-01-15",
+        )
+        val expectedOffset = java.time.ZoneId.systemDefault()
+            .rules.getOffset(record.startTime)
+        assertEquals(expectedOffset, record.startZoneOffset)
+    }
+
+    @Test
+    @DisplayName("malformed zoneOffset falls back to system default")
+    fun malformedZoneOffsetFallsBackToSystemDefault() {
+        val record = mapToNutritionRecord(
+            createEntry(time = "12:30:00", zoneOffset = "invalid"),
+            "2026-01-15",
+        )
+        val expectedOffset = java.time.ZoneId.systemDefault()
+            .rules.getOffset(record.startTime)
+        assertEquals(expectedOffset, record.startZoneOffset)
     }
 }

@@ -80,6 +80,7 @@ class FoodScannerApiClient @Inject constructor(
                             foodName = entry.foodName,
                             mealType = MealType.fromFoodScannerId(mealGroup.mealTypeId),
                             time = entry.time,
+                            zoneOffset = entry.zoneOffset,
                             calories = entry.calories,
                             proteinG = entry.proteinG,
                             carbsG = entry.carbsG,
