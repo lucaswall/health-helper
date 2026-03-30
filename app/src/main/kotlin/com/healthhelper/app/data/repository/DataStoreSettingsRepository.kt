@@ -278,4 +278,26 @@ class DataStoreSettingsRepository @Inject constructor(
             apiKey.isNotEmpty() && baseUrl.isNotEmpty()
         }
     }
+
+    // Per-type sync timestamp flows (Task 4 — stubs, implemented by Worker 2)
+    override val lastGlucoseSyncTimestampFlow: Flow<Long> = flowOf(0L)
+    override val lastBpSyncTimestampFlow: Flow<Long> = flowOf(0L)
+    override val glucoseSyncCountFlow: Flow<Int> = flowOf(0)
+    override val bpSyncCountFlow: Flow<Int> = flowOf(0)
+    override val glucoseSyncCaughtUpFlow: Flow<Boolean> = flowOf(false)
+    override val bpSyncCaughtUpFlow: Flow<Boolean> = flowOf(false)
+
+    override suspend fun setLastGlucoseSyncTimestamp(timestampMs: Long) {}
+    override suspend fun setLastBpSyncTimestamp(timestampMs: Long) {}
+    override suspend fun setGlucoseSyncCount(count: Int) {}
+    override suspend fun setBpSyncCount(count: Int) {}
+    override suspend fun setGlucoseSyncCaughtUp(caughtUp: Boolean) {}
+    override suspend fun setBpSyncCaughtUp(caughtUp: Boolean) {}
+
+    // Already-pushed ledger (Task 2 — stubs, implemented by Worker 2)
+    override suspend fun getDirectPushedGlucoseTimestamps(): Set<Long> = emptySet()
+    override suspend fun addDirectPushedGlucoseTimestamp(timestampMs: Long) {}
+    override suspend fun getDirectPushedBpTimestamps(): Set<Long> = emptySet()
+    override suspend fun addDirectPushedBpTimestamp(timestampMs: Long) {}
+    override suspend fun pruneDirectPushedTimestamps(glucoseBeforeMs: Long, bpBeforeMs: Long) {}
 }
