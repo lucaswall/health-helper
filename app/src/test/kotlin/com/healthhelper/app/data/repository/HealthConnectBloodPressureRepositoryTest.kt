@@ -294,6 +294,71 @@ class HealthConnectBloodPressureRepositoryTest {
     }
 
     @Test
+    @DisplayName("getReadings excludes records that fail mapping and returns valid ones")
+    fun getReadingsExcludesFailedMappingsAndReturnsValid() = runTest {
+        val mockClient = mockk<HealthConnectClient>()
+        val start = Instant.parse("2026-01-01T00:00:00Z")
+        val end = Instant.parse("2026-01-02T00:00:00Z")
+
+        val validRecord = BloodPressureRecord(
+            time = Instant.parse("2026-01-01T10:00:00Z"),
+            zoneOffset = ZoneOffset.UTC,
+            systolic = Pressure.millimetersOfMercury(120.0),
+            diastolic = Pressure.millimetersOfMercury(80.0),
+            metadata = Metadata.manualEntry(),
+        )
+        val badRecord = mockk<BloodPressureRecord>()
+        every { badRecord.systolic } throws RuntimeException("corrupt data")
+
+        val mockResponse = mockk<ReadRecordsResponse<BloodPressureRecord>>()
+        every { mockResponse.records } returns listOf(badRecord, validRecord)
+        every { mockResponse.pageToken } returns null
+        coEvery { mockClient.readRecords(any<ReadRecordsRequest<BloodPressureRecord>>()) } returns mockResponse
+
+        val repository = HealthConnectBloodPressureRepository(mockClient)
+        val result = repository.getReadings(start, end)
+
+        assertEquals(1, result.size)
+    }
+
+    @Test
+    @DisplayName("getReadings returns partial results when per-page timeout occurs after accumulating records")
+    fun getReadingsReturnsPartialResultsOnTimeoutAfterAccumulation() = runTest {
+        val mockClient = mockk<HealthConnectClient>()
+        val start = Instant.parse("2026-01-01T00:00:00Z")
+        val end = Instant.parse("2026-01-02T00:00:00Z")
+
+        val record = BloodPressureRecord(
+            time = Instant.parse("2026-01-01T10:00:00Z"),
+            zoneOffset = ZoneOffset.UTC,
+            systolic = Pressure.millimetersOfMercury(120.0),
+            diastolic = Pressure.millimetersOfMercury(80.0),
+            metadata = Metadata.manualEntry(),
+        )
+
+        val page1Response = mockk<ReadRecordsResponse<BloodPressureRecord>>()
+        every { page1Response.records } returns listOf(record)
+        every { page1Response.pageToken } returns "page2"
+
+        var callCount = 0
+        coEvery { mockClient.readRecords(any<ReadRecordsRequest<BloodPressureRecord>>()) } coAnswers {
+            callCount++
+            if (callCount == 1) {
+                page1Response
+            } else {
+                delay(15_000L)
+                mockk()
+            }
+        }
+
+        val repository = HealthConnectBloodPressureRepository(mockClient)
+        val result = repository.getReadings(start, end)
+
+        assertEquals(1, result.size)
+        assertEquals(2, callCount)
+    }
+
+    @Test
     @DisplayName("CancellationException propagates through getReadings")
     fun getReadingsPropagatesCancellationException() = runTest {
         val mockClient = mockk<HealthConnectClient>()

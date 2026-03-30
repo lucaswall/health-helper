@@ -88,11 +88,22 @@ class HealthConnectBloodPressureRepository @Inject constructor(
             Timber.w("getReadings: Health Connect not available")
             return emptyList()
         }
+        val allRecords = mutableListOf<BloodPressureRecord>()
+        var paginationTruncated = false
         return try {
             val startMs = System.currentTimeMillis()
-            val allRecords = mutableListOf<BloodPressureRecord>()
             var pageToken: String? = null
             do {
+                val elapsed = System.currentTimeMillis() - startMs
+                if (elapsed > CUMULATIVE_TIMEOUT_MS) {
+                    Timber.w(
+                        "getReadings: cumulative timeout (>%ds), returning %d partial BP records",
+                        CUMULATIVE_TIMEOUT_MS / 1000,
+                        allRecords.size,
+                    )
+                    paginationTruncated = true
+                    break
+                }
                 val response = withTimeout(10_000L) {
                     healthConnectClient.readRecords(
                         ReadRecordsRequest(
@@ -105,17 +116,29 @@ class HealthConnectBloodPressureRepository @Inject constructor(
                 allRecords.addAll(response.records)
                 pageToken = response.pageToken
             } while (pageToken != null)
-            Timber.d(
-                "getReadings: read %d BP records in %dms",
-                allRecords.size,
-                System.currentTimeMillis() - startMs,
-            )
+            if (!paginationTruncated) {
+                Timber.d(
+                    "getReadings: read %d BP records in %dms",
+                    allRecords.size,
+                    System.currentTimeMillis() - startMs,
+                )
+            }
             allRecords
-                .mapNotNull { record -> runCatching { mapToBloodPressureReading(record) }.getOrNull() }
+                .mapNotNull { record ->
+                    runCatching { mapToBloodPressureReading(record) }
+                        .onFailure { Timber.w(it, "getReadings: failed to map BP record") }
+                        .getOrNull()
+                }
                 .sortedBy { it.timestamp }
         } catch (e: TimeoutCancellationException) {
-            Timber.w("getReadings: timed out after 10s")
-            emptyList()
+            Timber.w("getReadings: per-page timeout, returning %d partial BP records", allRecords.size)
+            allRecords
+                .mapNotNull { record ->
+                    runCatching { mapToBloodPressureReading(record) }
+                        .onFailure { Timber.w(it, "getReadings: failed to map BP record") }
+                        .getOrNull()
+                }
+                .sortedBy { it.timestamp }
         } catch (e: SecurityException) {
             Timber.e(e, "getReadings: permission denied")
             emptyList()
@@ -124,5 +147,9 @@ class HealthConnectBloodPressureRepository @Inject constructor(
             Timber.e(e, "getReadings: failed")
             emptyList()
         }
+    }
+
+    companion object {
+        private const val CUMULATIVE_TIMEOUT_MS = 120_000L
     }
 }

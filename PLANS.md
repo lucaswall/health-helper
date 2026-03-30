@@ -416,3 +416,31 @@ All tasks completed.
 3. Change `TimeoutCancellationException` catch to return partial `allRecords` (mapped and sorted) instead of `emptyList()`
 4. Add `paginationTruncated` flag to suppress the success log on truncated reads
 5. Write tests: mock multi-page responses, verify partial results returned on cumulative timeout and on per-page timeout after accumulation
+
+---
+
+## Iteration 2
+
+**Implemented:** 2026-03-30
+**Method:** Single-agent (effort score 3, 1 work unit)
+
+### Tasks Completed This Iteration
+- Fix 1: Silent mapping failures in getReadings — added `.onFailure { Timber.w(...) }` before `.getOrNull()` in both glucose and BP repositories
+- Fix 2: Cumulative timeout on getReadings pagination — hoisted `allRecords` before `try`, added 120s cumulative timeout guard, changed `TimeoutCancellationException` catch to return partial results, added `paginationTruncated` flag
+
+### Files Modified
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodGlucoseRepository.kt` — mapping failure logging, cumulative timeout, partial results on timeout
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodPressureRepository.kt` — same fixes as glucose
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodGlucoseRepositoryTest.kt` — added mapping exclusion test, partial results on timeout test
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodPressureRepositoryTest.kt` — same tests as glucose
+
+### Linear Updates
+- HEA-183: Todo → In Progress → Review
+- HEA-184: Todo → Review
+
+### Pre-commit Verification
+- bug-hunter: Found 1 MEDIUM bug (dead `callCount` variable in timeout tests), fixed
+- verifier: All tests pass, zero warnings, build successful
+
+### Continuation Status
+All tasks completed.
