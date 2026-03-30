@@ -73,6 +73,7 @@ class SyncViewModel @Inject constructor(
             HealthPermission.getReadPermission(BloodPressureRecord::class),
             HealthPermission.getWritePermission(BloodGlucoseRecord::class),
             HealthPermission.getReadPermission(BloodGlucoseRecord::class),
+            "android.permission.health.READ_HEALTH_DATA_HISTORY",
         )
     }
 

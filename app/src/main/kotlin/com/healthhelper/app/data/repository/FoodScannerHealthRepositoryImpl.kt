@@ -40,6 +40,14 @@ class FoodScannerHealthRepositoryImpl @Inject constructor(
         ).map { Unit }
     }
 
+    override suspend fun pushGlucoseReadings(readings: List<GlucoseReading>): Result<Int> {
+        throw NotImplementedError("pushGlucoseReadings not yet implemented")
+    }
+
+    override suspend fun pushBloodPressureReadings(readings: List<BloodPressureReading>): Result<Int> {
+        throw NotImplementedError("pushBloodPressureReadings not yet implemented")
+    }
+
     override suspend fun pushBloodPressureReading(reading: BloodPressureReading): Result<Unit> {
         val baseUrl = settingsRepository.baseUrlFlow.first()
         val apiKey = settingsRepository.apiKeyFlow.first()

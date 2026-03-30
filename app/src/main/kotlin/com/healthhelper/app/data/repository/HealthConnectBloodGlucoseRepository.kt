@@ -47,6 +47,10 @@ class HealthConnectBloodGlucoseRepository @Inject constructor(
         }
     }
 
+    override suspend fun getReadings(start: Instant, end: Instant): List<GlucoseReading> {
+        throw NotImplementedError("getReadings not yet implemented")
+    }
+
     override suspend fun getLastReading(): GlucoseReading? {
         if (healthConnectClient == null) {
             Timber.w("getLastReading: Health Connect not available")
