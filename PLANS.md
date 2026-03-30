@@ -1,283 +1,263 @@
 # Implementation Plan
 
 **Created:** 2026-03-29
-**Status:** COMPLETE
-**Source:** Inline request: Push glucose and blood pressure readings to food-scanner API, change glucose base unit to mg/dL, BP defaults to SITTING_DOWN + LEFT_UPPER_ARM
-**Linear Issues:** [HEA-165](https://linear.app/lw-claude/issue/HEA-165/change-glucosereading-base-unit-from-mmoll-to-mgdl), [HEA-166](https://linear.app/lw-claude/issue/HEA-166/update-bloodglucoserecordmapper-for-mgdl-base-unit), [HEA-167](https://linear.app/lw-claude/issue/HEA-167/update-glucoseconfirmationviewmodel-for-mgdl-base-unit), [HEA-168](https://linear.app/lw-claude/issue/HEA-168/food-scanner-health-data-dtos-and-api-client-post-methods), [HEA-169](https://linear.app/lw-claude/issue/HEA-169/foodscannerhealthrepository-domain-interface-and-data-implementation), [HEA-170](https://linear.app/lw-claude/issue/HEA-170/healthdatawriteresult-and-dual-write-use-cases), [HEA-171](https://linear.app/lw-claude/issue/HEA-171/update-viewmodels-for-dual-write-error-handling), [HEA-172](https://linear.app/lw-claude/issue/HEA-172/change-bp-confirmation-defaults-to-sitting-down-and-left-upper-arm)
-**Branch:** feat/food-scanner-health-push
+**Source:** Inline request: Improve food log time accuracy (use zoneOffset from API) and backfill Health Connect glucose/BP readings to Food Scanner
+**Linear Issues:** [HEA-176](https://linear.app/lw-claude/issue/HEA-176/add-zoneoffset-to-food-log-dtos-and-domain-model), [HEA-177](https://linear.app/lw-claude/issue/HEA-177/use-zoneoffset-in-nutritionrecordmapper), [HEA-178](https://linear.app/lw-claude/issue/HEA-178/add-range-read-methods-to-health-connect-glucose-and-bp-repositories), [HEA-179](https://linear.app/lw-claude/issue/HEA-179/add-batch-push-methods-to-foodscannerhealthrepository), [HEA-180](https://linear.app/lw-claude/issue/HEA-180/add-health-readings-sync-timestamp-to-settingsrepository), [HEA-181](https://linear.app/lw-claude/issue/HEA-181/create-synchealthreadingsusecase), [HEA-182](https://linear.app/lw-claude/issue/HEA-182/integrate-health-readings-sync-into-syncworker)
+**Branch:** feat/food-log-timezone-and-health-backfill
 
 ## Context Gathered
 
 ### Codebase Analysis
 - **Related files:**
-  - `app/src/main/kotlin/com/healthhelper/app/domain/model/GlucoseReading.kt` — Domain model, currently stores `valueMmolL: Double` with range 1.0..40.0, has `displayInMgDl(): Int`
-  - `app/src/main/kotlin/com/healthhelper/app/domain/model/BloodPressureReading.kt` — Domain model, defaults `bodyPosition = UNKNOWN`, `measurementLocation = UNKNOWN`
-  - `app/src/main/kotlin/com/healthhelper/app/data/repository/BloodGlucoseRecordMapper.kt` — Maps to/from Health Connect `BloodGlucoseRecord`, uses `BloodGlucose.millimolesPerLiter(reading.valueMmolL)`
-  - `app/src/main/kotlin/com/healthhelper/app/data/repository/BloodPressureRecordMapper.kt` — Maps to/from Health Connect `BloodPressureRecord`, already computes zone offset via `ZoneId.systemDefault()`
-  - `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt` — Existing API client with GET `food-log`, uses Ktor + Bearer auth, HTTPS validation, error handling pattern
-  - `app/src/test/kotlin/com/healthhelper/app/data/api/FoodScannerApiClientTest.kt` — MockEngine-based tests, pattern to follow for new POST methods
-  - `app/src/main/kotlin/com/healthhelper/app/data/api/dto/FoodLogResponse.kt` — Existing DTOs with `ApiEnvelope<T>` wrapper pattern
-  - `app/src/main/kotlin/com/healthhelper/app/domain/usecase/WriteGlucoseReadingUseCase.kt` — Currently calls single `BloodGlucoseRepository`, returns Boolean
-  - `app/src/main/kotlin/com/healthhelper/app/domain/usecase/WriteBloodPressureReadingUseCase.kt` — Same pattern, single repository, returns Boolean
-  - `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/GlucoseConfirmationViewModel.kt` — UI state has `valueMmolL: String`, `displayMgDl: String`, converts detected mg/dL → mmol/L in constructor
-  - `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/BpConfirmationViewModel.kt` — UI state defaults `bodyPosition = UNKNOWN`, `measurementLocation = UNKNOWN`
-  - `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt` — Hilt module, binds repositories as singletons
-  - `app/src/main/kotlin/com/healthhelper/app/domain/repository/SettingsRepository.kt` — Has `baseUrlFlow` and `apiKeyFlow` for food-scanner connection
+  - `app/src/main/kotlin/com/healthhelper/app/data/api/dto/FoodLogResponse.kt` — `MealEntryDto` has `time: String?` but NO `zoneOffset` field. Food Scanner API sends `zoneOffset` (±HH:MM) but HealthHelper ignores it.
+  - `app/src/main/kotlin/com/healthhelper/app/domain/model/FoodLogEntry.kt` — Domain model has `time: String?` but NO `zoneOffset` field
+  - `app/src/main/kotlin/com/healthhelper/app/data/repository/NutritionRecordMapper.kt` — `mapToNutritionRecord()` hardcodes `ZoneId.systemDefault()` (line 29). Falls back to `LocalTime.NOON` when time is null. Parses time via `LocalTime.parse()` which handles both HH:mm and HH:mm:ss
+  - `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt` — Maps `MealEntryDto` to `FoodLogEntry` (lines 76-94), does not extract `zoneOffset`
+  - `app/src/main/kotlin/com/healthhelper/app/data/sync/SyncWorker.kt` — Only calls `syncNutritionUseCase.invoke()`. No health readings sync.
+  - `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt` — Full nutrition sync with date tracking, rate limiting, backoff. Pattern to follow for health readings sync.
+  - `app/src/main/kotlin/com/healthhelper/app/domain/repository/SettingsRepository.kt` — Has `lastSyncedDateFlow` for nutrition sync. No health readings sync date.
+  - `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodGlucoseRepository.kt` — Has `getLastReading()` that reads last 30 days, returns most recent. Need range-read method for backfill.
+  - `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodPressureRepository.kt` — Same pattern as glucose, `getLastReading()` returns most recent from 30 days.
+  - `app/src/main/kotlin/com/healthhelper/app/domain/repository/BloodGlucoseRepository.kt` — Interface: `writeBloodGlucoseRecord()`, `getLastReading()`. Needs `getReadings(start, end)`.
+  - `app/src/main/kotlin/com/healthhelper/app/domain/repository/BloodPressureRepository.kt` — Same pattern. Needs `getReadings(start, end)`.
+  - `app/src/main/kotlin/com/healthhelper/app/data/repository/FoodScannerHealthRepositoryImpl.kt` — Pushes single glucose/BP readings to Food Scanner. Currently wraps single reading in a list. Needs batch support for backfill.
+  - `app/src/main/kotlin/com/healthhelper/app/domain/repository/FoodScannerHealthRepository.kt` — Interface: `pushGlucoseReading()`, `pushBloodPressureReading()`. Needs batch push methods.
+  - `app/src/main/kotlin/com/healthhelper/app/data/api/dto/HealthReadingsDtos.kt` — DTOs already support batch (`GlucoseReadingRequest(readings: List<GlucoseReadingDto>)`). API client already supports batch POST.
 - **Existing patterns:**
-  - Repositories: domain interface in `domain/repository/`, implementation in `data/repository/`, bound in `AppModule.kt`
-  - API client: `FoodScannerApiClient` pattern — HTTPS validation, bearer auth, `ApiEnvelope<T>` response, error mapping with Timber levels, CancellationException propagation
-  - Use cases: single-method classes with `@Inject` constructor, `suspend operator fun invoke()`
-  - Mappers: top-level functions in `data/repository/` package
-  - DTOs: `@Serializable` data classes in `data/api/dto/` package
+  - `SyncNutritionUseCase`: date-range sync with `lastSyncedDate` tracking, contiguous date advancement, consecutive failure abort, rate limiting. Pattern to follow for health readings sync.
+  - Health Connect repos: `withTimeout(10_000L)`, SecurityException/TimeoutCancellationException/CancellationException handling
+  - `FoodScannerHealthRepositoryImpl`: reads settings from flows, validates configured, maps domain → DTO with zone offset
+  - `NutritionRecordMapper`: top-level function, tested in dedicated test file
 - **Test conventions:**
-  - Use cases: MockK repositories, `runTest`, verify pass-through and return values
-  - API client: `MockEngine` with JSON responses, test auth headers, error codes, network failures, CancellationException
-  - Repositories: MockK `HealthConnectClient`, test success/failure/timeout/security paths
+  - Mapper tests: direct function calls, assertEquals on mapped fields
+  - Repository tests: MockK `HealthConnectClient`, test null client, success, timeout, security, cancellation
+  - Use case tests: MockK repositories, `runTest`, verify orchestration and return values
+  - API client tests: `MockEngine` with JSON responses
 
 ### MCP Context
 - **MCPs used:** Linear
-- **Findings:**
-  - No open issues in Health Helper team (all previous work released as v1.3.1)
-  - Food-scanner API recently added health endpoints (glucose + BP) in v1.23.0
-  - Food-scanner glucose endpoint expects `valueMgDl: number` (POST `/api/v1/glucose-readings`)
-  - Food-scanner BP endpoint expects `systolic: number`, `diastolic: number` (POST `/api/v1/blood-pressure-readings`)
-  - Both endpoints: Bearer auth, batch upsert (up to 1000), unique on `user_id + measured_at`
-  - Both accept `zoneOffset` as `±HH:MM` string, `bodyPosition`/`measurementLocation` as snake_case strings
+- **Findings:** No open issues in Health Helper team. Clean slate for new work.
 
 ## Tasks
 
-### Task 1: Change GlucoseReading base unit from mmol/L to mg/dL
-**Linear Issue:** [HEA-165](https://linear.app/lw-claude/issue/HEA-165/change-glucosereading-base-unit-from-mmoll-to-mgdl)
+### Task 1: Add zoneOffset to food log DTOs and domain model
+**Linear Issue:** [HEA-176](https://linear.app/lw-claude/issue/HEA-176/add-zoneoffset-to-food-log-dtos-and-domain-model)
 **Files:**
-- `app/src/main/kotlin/com/healthhelper/app/domain/model/GlucoseReading.kt` (modify)
-- `app/src/test/kotlin/com/healthhelper/app/domain/model/GlucoseReadingTest.kt` (create)
-- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/WriteGlucoseReadingUseCaseTest.kt` (modify)
-
-**Steps:**
-1. Write tests in `GlucoseReadingTest.kt`:
-   - Valid mg/dL value (e.g., 100) creates successfully
-   - Boundary values: 18 (min) and 720 (max) are accepted
-   - Below 18 and above 720 throw `IllegalArgumentException`
-   - `toMmolL()` converts correctly: 100 mg/dL → 5.55 mmol/L (100 / 18.018)
-   - `toMmolL()` round-trip: known clinical values (70, 100, 126, 200)
-2. Run verifier (expect fail)
-3. Modify `GlucoseReading.kt`:
-   - Rename `valueMmolL: Double` → `valueMgDl: Int`
-   - Update `init` validation: `require(valueMgDl in 18..720)`
-   - Replace `displayInMgDl(): Int` with `fun toMmolL(): Double` that divides by 18.018
-   - Add companion object factory `fun fromMmolL(value: Double): Int` for converting mmol/L input to mg/dL (multiply by 18.018, roundToInt) — used by callers that receive mmol/L values
-4. Fix compilation errors in `WriteGlucoseReadingUseCaseTest.kt`: change `GlucoseReading(valueMmolL = 5.6)` to `GlucoseReading(valueMgDl = 101)`
-5. Run verifier (expect pass)
-
-**Notes:**
-- Conversion factor: 1 mmol/L = 18.018 mg/dL (standard clinical factor)
-- Int precision is standard for mg/dL in clinical practice
-- The `fromMmolL` factory is needed because the Anthropic API parser may detect values in mmol/L
-
-### Task 2: Update BloodGlucoseRecordMapper for mg/dL base unit
-**Linear Issue:** [HEA-166](https://linear.app/lw-claude/issue/HEA-166/update-bloodglucoserecordmapper-for-mgdl-base-unit)
-**Files:**
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/BloodGlucoseRecordMapper.kt` (modify)
-- `app/src/test/kotlin/com/healthhelper/app/data/repository/BloodGlucoseRecordMapperTest.kt` (create)
-
-**Steps:**
-1. Write tests in `BloodGlucoseRecordMapperTest.kt`:
-   - `mapToBloodGlucoseRecord`: GlucoseReading with `valueMgDl = 100` produces `BloodGlucose.millimolesPerLiter(100 / 18.018)` — verify the level is approximately 5.55 mmol/L
-   - `mapToBloodGlucoseRecord`: verify all enum mappings still work (relationToMeal, mealType, specimenSource)
-   - `mapToGlucoseReading`: BloodGlucoseRecord with 5.55 mmol/L produces GlucoseReading with `valueMgDl = 100` (roundToInt)
-   - Round-trip: create reading → map to HC record → map back → values match
-2. Run verifier (expect fail)
-3. Modify `BloodGlucoseRecordMapper.kt`:
-   - `mapToBloodGlucoseRecord`: use `BloodGlucose.millimolesPerLiter(reading.toMmolL())` instead of `reading.valueMmolL`
-   - `mapToGlucoseReading`: use `GlucoseReading.fromMmolL(record.level.inMillimolesPerLiter)` to compute the mg/dL Int value, pass as `valueMgDl`
-4. Run verifier (expect pass)
-
-**Notes:**
-- Follow existing mapper test patterns (if `HealthConnectBloodGlucoseRepositoryTest` tests mapper indirectly, the new dedicated mapper test is still valuable)
-
-### Task 3: Update GlucoseConfirmationViewModel for mg/dL base unit
-**Linear Issue:** [HEA-167](https://linear.app/lw-claude/issue/HEA-167/update-glucoseconfirmationviewmodel-for-mgdl-base-unit)
-**Files:**
-- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/GlucoseConfirmationViewModel.kt` (modify)
-- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/GlucoseConfirmationViewModelTest.kt` (modify)
-
-**Steps:**
-1. Write/update tests:
-   - When detected unit is mg/dL with value 100: UI state `valueMgDl = "100"`, `displayMmolL = "5.6"`
-   - When detected unit is mmol/L with value 5.6: UI state `valueMgDl = "101"`, `displayMmolL = "5.6"` (converts to mg/dL)
-   - User edits mg/dL value: `displayMmolL` updates accordingly
-2. Run verifier (expect fail)
-3. Modify `GlucoseConfirmationViewModel.kt`:
-   - Rename UI state field `valueMmolL: String` → `valueMgDl: String` (primary editable field)
-   - Rename `displayMgDl: String` → `displayMmolL: String` (secondary read-only display)
-   - In constructor: if detected unit is mmol/L, convert to mg/dL via `GlucoseReading.fromMmolL()`; if mg/dL, use directly
-   - Update `onSave()`: create `GlucoseReading(valueMgDl = valueMgDl.toInt(), ...)` directly
-4. Update the Compose screen file that references the renamed state fields (update field references from `valueMmolL` → `valueMgDl`, `displayMgDl` → `displayMmolL`)
-5. Run verifier (expect pass)
-
-**Notes:**
-- The `originalValue` and `detectedUnit` fields in UI state remain for display context
-- Follow existing ViewModel test patterns with SavedStateHandle and Turbine
-
-### Task 4: Food-scanner health data DTOs and API client POST methods
-**Linear Issue:** [HEA-168](https://linear.app/lw-claude/issue/HEA-168/food-scanner-health-data-dtos-and-api-client-post-methods)
-**Files:**
-- `app/src/main/kotlin/com/healthhelper/app/data/api/dto/HealthReadingsDtos.kt` (create)
+- `app/src/main/kotlin/com/healthhelper/app/data/api/dto/FoodLogResponse.kt` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/domain/model/FoodLogEntry.kt` (modify)
 - `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/domain/model/FoodLogEntryTest.kt` (modify)
 - `app/src/test/kotlin/com/healthhelper/app/data/api/FoodScannerApiClientTest.kt` (modify)
 
 **Steps:**
-1. Write tests in `FoodScannerApiClientTest.kt` for `postGlucoseReadings`:
-   - Successful POST returns `Result.success` with upserted count
-   - Bearer token sent in Authorization header
-   - Request body contains correct JSON structure (valueMgDl, measuredAt, zoneOffset, relationToMeal, mealType, specimenSource)
-   - 401 returns auth error
-   - 429 returns rate limit error
-   - 5xx returns server unavailable
-   - Network failure (IOException) returns failure result
-   - CancellationException propagates
-   - HTTPS validation rejects HTTP URLs
-   - Blank base URL rejected
-2. Write same test suite for `postBloodPressureReadings`:
-   - Request body: systolic, diastolic, measuredAt, zoneOffset, bodyPosition, measurementLocation
-3. Run verifier (expect fail)
-4. Create `HealthReadingsDtos.kt` with `@Serializable` DTOs:
-   - `GlucoseReadingRequest(readings: List<GlucoseReadingDto>)` where `GlucoseReadingDto` has: `measuredAt` (ISO 8601), `valueMgDl` (Int), `zoneOffset` (String?), `relationToMeal` (String?), `mealType` (String?), `specimenSource` (String?)
-   - `BloodPressureReadingRequest(readings: List<BloodPressureReadingDto>)` where `BloodPressureReadingDto` has: `measuredAt` (ISO 8601), `systolic` (Int), `diastolic` (Int), `zoneOffset` (String?), `bodyPosition` (String?), `measurementLocation` (String?)
-   - `UpsertResponse(upserted: Int)` for the response data field
-5. Add `postGlucoseReadings(baseUrl, apiKey, request)` and `postBloodPressureReadings(baseUrl, apiKey, request)` to `FoodScannerApiClient`:
-   - HTTPS + blank URL validation (reuse existing pattern)
-   - POST to `{baseUrl}/api/v1/glucose-readings` or `{baseUrl}/api/v1/blood-pressure-readings`
-   - Bearer auth, JSON body
-   - Parse `ApiEnvelope<UpsertResponse>`, return `Result<Int>` (upserted count)
-   - Error handling: same HTTP status mapping as `getFoodLog` (401, 429, 5xx → Timber.w; others → Timber.e)
-   - Network exception handling: IOException/UnresolvedAddressException → Timber.w; CancellationException → rethrow
-   - 30s timeout from existing HttpClient config
-6. Run verifier (expect pass)
-
-**Notes:**
-- Zone offset: format `java.time.ZoneOffset` as `±HH:MM` — use `ZoneOffset.toString()` but handle "Z" → "+00:00"
-- Enum values serialized as snake_case strings matching food-scanner API (e.g., `"before_meal"`, `"sitting_down"`, `"left_upper_arm"`)
-- Follow `getFoodLog` error handling pattern exactly
-
-### Task 5: FoodScannerHealthRepository (domain interface + data implementation)
-**Linear Issue:** [HEA-169](https://linear.app/lw-claude/issue/HEA-169/foodscannerhealthrepository-domain-interface-and-data-implementation)
-**Files:**
-- `app/src/main/kotlin/com/healthhelper/app/domain/repository/FoodScannerHealthRepository.kt` (create)
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/FoodScannerHealthRepositoryImpl.kt` (create)
-- `app/src/test/kotlin/com/healthhelper/app/data/repository/FoodScannerHealthRepositoryImplTest.kt` (create)
-- `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt` (modify)
-
-**Steps:**
-1. Write tests in `FoodScannerHealthRepositoryImplTest.kt`:
-   - `pushGlucoseReading` success: mocked API client returns `Result.success(1)` → repo returns `Result.success(Unit)`
-   - `pushGlucoseReading` failure: API client returns `Result.failure` → repo returns `Result.failure` with same exception
-   - `pushGlucoseReading` maps domain `GlucoseReading` fields correctly to DTO (valueMgDl, relationToMeal as snake_case, mealType as snake_case, specimenSource as snake_case, timestamp as ISO 8601, zone offset as ±HH:MM)
-   - Same suite for `pushBloodPressureReading` (systolic, diastolic, bodyPosition, measurementLocation)
-   - Settings not configured (blank URL or key): returns `Result.failure` with descriptive message
-   - Verify zone offset is captured from `ZoneId.systemDefault()` at call time
+1. Write tests:
+   - `FoodLogEntryTest`: FoodLogEntry accepts `zoneOffset = "+05:30"` and `zoneOffset = null`
+   - `FoodScannerApiClientTest`: when API response contains `zoneOffset` in a meal entry, the mapped `FoodLogEntry` has the value. When `zoneOffset` is absent/null in JSON, the mapped `FoodLogEntry` has `zoneOffset = null`
 2. Run verifier (expect fail)
-3. Create domain interface `FoodScannerHealthRepository`:
-   - `suspend fun pushGlucoseReading(reading: GlucoseReading): Result<Unit>`
-   - `suspend fun pushBloodPressureReading(reading: BloodPressureReading): Result<Unit>`
-4. Create `FoodScannerHealthRepositoryImpl`:
-   - `@Inject constructor(apiClient: FoodScannerApiClient, settingsRepository: SettingsRepository)`
-   - Reads `baseUrl` and `apiKey` from settings (first emission from flows)
-   - Validates settings are configured before calling API
-   - Maps domain models to DTOs with zone offset from `ZoneId.systemDefault().rules.getOffset(reading.timestamp)`
-   - Zone offset "Z" → "+00:00" conversion
-   - Enum to snake_case string mapping (e.g., `BEFORE_MEAL` → `"before_meal"`, `SITTING_DOWN` → `"sitting_down"`)
-5. Add DI binding in `AppModule.kt`: `FoodScannerHealthRepository` → `FoodScannerHealthRepositoryImpl`
+3. Add `val zoneOffset: String? = null` to `MealEntryDto` (after `time` field)
+4. Add `val zoneOffset: String? = null` to `FoodLogEntry` (after `time` field)
+5. Update `FoodScannerApiClient.getFoodLog()` mapping (line 82 area): pass `zoneOffset = entry.zoneOffset` when constructing `FoodLogEntry`
 6. Run verifier (expect pass)
 
 **Notes:**
-- Domain interface uses `Result<Unit>` (not Boolean) so callers can inspect failure reason
-- Follow `FoodScannerFoodLogRepository` pattern for reading settings from flows
-- Enum → snake_case: use `name.lowercase()` (Kotlin enum names already match when lowercased)
+- `zoneOffset` format from Food Scanner API: `±HH:MM` (e.g., `"+03:00"`, `"-05:00"`) or null
+- Default `null` preserves backward compatibility — no breaking changes to existing code
 
-### Task 6: HealthDataWriteResult and dual-write use cases
-**Linear Issue:** [HEA-170](https://linear.app/lw-claude/issue/HEA-170/healthdatawriteresult-and-dual-write-use-cases)
+### Task 2: Use zoneOffset in NutritionRecordMapper
+**Linear Issue:** [HEA-177](https://linear.app/lw-claude/issue/HEA-177/use-zoneoffset-in-nutritionrecordmapper)
 **Files:**
-- `app/src/main/kotlin/com/healthhelper/app/domain/model/HealthDataWriteResult.kt` (create)
-- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/WriteGlucoseReadingUseCase.kt` (modify)
-- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/WriteBloodPressureReadingUseCase.kt` (modify)
-- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/WriteGlucoseReadingUseCaseTest.kt` (modify)
-- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/WriteBloodPressureReadingUseCaseTest.kt` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/NutritionRecordMapper.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/NutritionRecordMapperTest.kt` (modify)
 
 **Steps:**
-1. Write tests for `WriteGlucoseReadingUseCase`:
-   - Both succeed: returns `HealthDataWriteResult(healthConnectSuccess = true, foodScannerResult = Result.success(Unit))`
-   - Health Connect fails, food-scanner succeeds: `healthConnectSuccess = false`, `foodScannerResult = success`
-   - Health Connect succeeds, food-scanner fails: `healthConnectSuccess = true`, `foodScannerResult = failure(exception)`
-   - Both fail: both fields reflect failure
-   - Health Connect exception does not prevent food-scanner attempt (independent calls)
-   - Food-scanner exception does not prevent Health Connect attempt
-2. Write same test suite for `WriteBloodPressureReadingUseCase`
-3. Run verifier (expect fail)
-4. Create `HealthDataWriteResult`:
-   - `data class HealthDataWriteResult(val healthConnectSuccess: Boolean, val foodScannerResult: Result<Unit>)`
-   - Convenience properties: `val allSucceeded: Boolean`, `val foodScannerFailed: Boolean`
-5. Update `WriteGlucoseReadingUseCase`:
-   - Constructor takes both `BloodGlucoseRepository` and `FoodScannerHealthRepository`
-   - `invoke()` calls both independently (neither failure blocks the other)
-   - Returns `HealthDataWriteResult`
-6. Update `WriteBloodPressureReadingUseCase` with same pattern
-7. Run verifier (expect pass)
-
-**Notes:**
-- Use `try-catch` around each repository call independently — a crash in one must not prevent the other
-- CancellationException must still propagate (check before catching)
-- The use case does NOT retry — that's the caller's responsibility
-
-### Task 7: Update ViewModels for dual-write error handling
-**Linear Issue:** [HEA-171](https://linear.app/lw-claude/issue/HEA-171/update-viewmodels-for-dual-write-error-handling)
-**Files:**
-- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/GlucoseConfirmationViewModel.kt` (modify)
-- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/BpConfirmationViewModel.kt` (modify)
-- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/GlucoseConfirmationViewModelTest.kt` (modify)
-- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/BpConfirmationViewModelTest.kt` (modify)
-
-**Steps:**
-1. Write/update tests for glucose ViewModel:
-   - Both writes succeed: navigates to success/done state
-   - Health Connect fails but food-scanner succeeds: show warning but allow proceed (HC failure is degraded, not blocking)
-   - Food-scanner fails: show error message to user, do NOT navigate away — food-scanner push is critical
-   - Both fail: show error message
-2. Write same test suite for BP ViewModel
-3. Run verifier (expect fail)
-4. Update ViewModels:
-   - `onSave()` now receives `HealthDataWriteResult` from use case
-   - If `foodScannerResult.isFailure`: set `error` state with user-visible message (e.g., "Failed to sync reading. Check your connection and try again.")
-   - If `healthConnectSuccess = false` but food-scanner succeeded: set a warning (non-blocking)
-   - If `allSucceeded`: proceed to success state
-   - `isSaving = false` after result in all cases
+1. Write tests in `NutritionRecordMapperTest`:
+   - Entry with `zoneOffset = "+05:30"` and `time = "12:30:00"`: startTime corresponds to 12:30 at +05:30 (i.e., 07:00 UTC), and `startZoneOffset` is `ZoneOffset.of("+05:30")`
+   - Entry with `zoneOffset = "-03:00"` and `time = "08:00:00"`: startTime is 11:00 UTC, zone offset is -03:00
+   - Entry with `zoneOffset = null`: uses system default timezone (current behavior preserved)
+   - Entry with malformed `zoneOffset` (e.g., `"invalid"`): falls back to system default, logs warning
+   - Existing test `nullTimeFallsBackToNoon` still passes with zoneOffset null
+2. Run verifier (expect fail)
+3. Update `mapToNutritionRecord()` signature: add `entry` already has `zoneOffset` via domain model (no signature change needed — `FoodLogEntry` already passed)
+4. Update mapper logic:
+   - If `entry.zoneOffset` is non-null, try `ZoneOffset.parse(entry.zoneOffset)`. On success, use it to construct `OffsetDateTime` (or `ZonedDateTime` with fixed offset). On `DateTimeParseException`, log warning via Timber, fall back to `ZoneId.systemDefault()`
+   - If `entry.zoneOffset` is null, use `ZoneId.systemDefault()` (current behavior)
+   - The `startZoneOffset` and `endZoneOffset` on the NutritionRecord should use the parsed offset
 5. Run verifier (expect pass)
 
 **Notes:**
-- Food-scanner failure is CRITICAL — never silent. The user must see the error and have the opportunity to retry.
-- Health Connect failure is degraded — warn but don't block (HC may be unavailable on some devices)
-- Error messages: generic user-facing text, raw error logged via Timber only
+- `ZoneOffset.parse()` handles `±HH:MM` format natively
+- The `createEntry()` helper in test file needs a new `zoneOffset` parameter with default `null` to avoid breaking existing tests
+- `SyncNutritionUseCase` passes `FoodLogEntry` objects to `NutritionRepository.writeNutritionRecords()` — the zoneOffset flows through automatically since it's on the domain model
 
-### Task 8: Change BP confirmation defaults to SITTING_DOWN and LEFT_UPPER_ARM
-**Linear Issue:** [HEA-172](https://linear.app/lw-claude/issue/HEA-172/change-bp-confirmation-defaults-to-sitting-down-and-left-upper-arm)
+### Task 3: Add range-read methods to Health Connect glucose and BP repositories
+**Linear Issue:** [HEA-178](https://linear.app/lw-claude/issue/HEA-178/add-range-read-methods-to-health-connect-glucose-and-bp-repositories)
 **Files:**
-- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/BpConfirmationViewModel.kt` (modify)
-- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/BpConfirmationViewModelTest.kt` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/domain/repository/BloodGlucoseRepository.kt` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/domain/repository/BloodPressureRepository.kt` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodGlucoseRepository.kt` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodPressureRepository.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodGlucoseRepositoryTest.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodPressureRepositoryTest.kt` (modify)
 
 **Steps:**
-1. Write test:
-   - Initial UI state has `bodyPosition = BodyPosition.SITTING_DOWN`
-   - Initial UI state has `measurementLocation = MeasurementLocation.LEFT_UPPER_ARM`
+1. Write tests for glucose repository `getReadings(start: Instant, end: Instant)`:
+   - Returns empty list when Health Connect client is null
+   - Returns all readings in time range, mapped to domain models, sorted by timestamp ascending
+   - Returns empty list when no records in range
+   - Handles timeout (10s) — returns empty list, logs warning
+   - Handles SecurityException — returns empty list, logs error
+   - CancellationException propagates
+2. Write same test suite for BP repository `getReadings(start: Instant, end: Instant)`
+3. Run verifier (expect fail)
+4. Add `suspend fun getReadings(start: Instant, end: Instant): List<GlucoseReading>` to `BloodGlucoseRepository` interface
+5. Add `suspend fun getReadings(start: Instant, end: Instant): List<BloodPressureReading>` to `BloodPressureRepository` interface
+6. Implement in `HealthConnectBloodGlucoseRepository`:
+   - Follow existing `getLastReading()` pattern (null client check, withTimeout, SecurityException, CancellationException)
+   - Use `TimeRangeFilter.between(start, end)` instead of `TimeRangeFilter.after()`
+   - Map all records via `mapToGlucoseReading()`, wrapping each in `runCatching` (same as `getLastReading`)
+   - Sort by timestamp ascending
+   - No pagination needed — 30 days of manual readings is well under the page size limit
+7. Implement same pattern in `HealthConnectBloodPressureRepository`
+8. Run verifier (expect pass)
+
+**Notes:**
+- `getLastReading()` already uses `runCatching` per-record to skip records that fail mapping (e.g., out-of-range values). Follow same pattern.
+- Ascending sort is natural for push-to-server (oldest first)
+- CGM data (e.g., Dexcom every 5 min) could produce ~8640 records in 30 days. Health Connect pagination may be needed if reading large windows. For now, single read is acceptable — the sync window is typically 1-2 days after initial backfill.
+
+### Task 4: Add batch push methods to FoodScannerHealthRepository
+**Linear Issue:** [HEA-179](https://linear.app/lw-claude/issue/HEA-179/add-batch-push-methods-to-foodscannerhealthrepository)
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/domain/repository/FoodScannerHealthRepository.kt` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/FoodScannerHealthRepositoryImpl.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/FoodScannerHealthRepositoryImplTest.kt` (modify)
+
+**Steps:**
+1. Write tests for `pushGlucoseReadings(readings: List<GlucoseReading>)`:
+   - Empty list: returns `Result.success(0)` without calling API
+   - Single reading: maps correctly to DTO and calls API, returns upserted count
+   - Multiple readings: all mapped correctly, single API call, returns upserted count
+   - Settings not configured: returns `Result.failure`
+   - API failure: returns `Result.failure` with exception
+   - Verifies DTO field mapping: valueMgDl, measuredAt (ISO-8601), zoneOffset (±HH:MM), relationToMeal/mealType/specimenSource as lowercase strings
+2. Write same test suite for `pushBloodPressureReadings(readings: List<BloodPressureReading>)`
+3. Run verifier (expect fail)
+4. Add to `FoodScannerHealthRepository` interface:
+   - `suspend fun pushGlucoseReadings(readings: List<GlucoseReading>): Result<Int>`
+   - `suspend fun pushBloodPressureReadings(readings: List<BloodPressureReading>): Result<Int>`
+5. Implement in `FoodScannerHealthRepositoryImpl`:
+   - Early return `Result.success(0)` for empty lists
+   - Same settings validation as existing single-push methods
+   - Map each reading to DTO (reuse existing mapping logic from `pushGlucoseReading`)
+   - Extract DTO mapping into private helper functions to avoid duplication with existing single-push methods
+   - Call `apiClient.postGlucoseReadings()` / `apiClient.postBloodPressureReadings()` with full batch
+   - Return `Result<Int>` (upserted count from API)
+6. Run verifier (expect pass)
+
+**Notes:**
+- Food Scanner API supports up to 1000 readings per batch. Chunking (if needed for CGM data) belongs in the use case, not the repository.
+- Existing single-push methods (`pushGlucoseReading`, `pushBloodPressureReading`) remain unchanged — they're used by the manual entry flow.
+
+### Task 5: Add health readings sync date to SettingsRepository
+**Linear Issue:** [HEA-180](https://linear.app/lw-claude/issue/HEA-180/add-health-readings-sync-timestamp-to-settingsrepository)
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/domain/repository/SettingsRepository.kt` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` (modify — or wherever the implementation lives)
+- Test file for DataStoreSettingsRepository (modify if exists)
+
+**Steps:**
+1. Write test: `lastHealthReadingsSyncTimestampFlow` defaults to `0L`, can be set and read back
 2. Run verifier (expect fail)
-3. Modify `BpConfirmationUiState` defaults:
-   - `bodyPosition: BodyPosition = BodyPosition.SITTING_DOWN`
-   - `measurementLocation: MeasurementLocation = MeasurementLocation.LEFT_UPPER_ARM`
+3. Add to `SettingsRepository` interface:
+   - `val lastHealthReadingsSyncTimestampFlow: Flow<Long>`
+   - `suspend fun setLastHealthReadingsSyncTimestamp(value: Long)`
+4. Implement in the DataStore-backed implementation:
+   - New DataStore key `last_health_readings_sync_timestamp` (Long, default 0L)
+   - Follow existing `lastSyncTimestampFlow` / `setLastSyncTimestamp` pattern exactly
+5. Run verifier (expect pass)
+
+**Notes:**
+- Using a timestamp (epoch millis) instead of a date string because health readings are instant-based, not date-based. The sync reads records since this timestamp.
+- Default `0L` means first sync will read last 30 days (capped by Health Connect's default read limit).
+
+**Defensive Requirements:**
+- DataStore write uses `.edit{}` (not `.updateData{}`) following existing pattern
+
+### Task 6: Create SyncHealthReadingsUseCase
+**Linear Issue:** [HEA-181](https://linear.app/lw-claude/issue/HEA-181/create-synchealthreadingsusecase)
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncHealthReadingsUseCase.kt` (create)
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncHealthReadingsUseCaseTest.kt` (create)
+
+**Steps:**
+1. Write tests:
+   - Settings not configured: returns early without error (health readings sync is best-effort)
+   - First sync (timestamp = 0): reads from 30 days ago to now, pushes all to Food Scanner
+   - Subsequent sync: reads from last sync timestamp minus 1 day (overlap buffer) to now
+   - Glucose readings found and pushed successfully: updates sync timestamp
+   - BP readings found and pushed successfully: updates sync timestamp
+   - Mixed: some glucose, some BP, both pushed
+   - No readings found in range: updates sync timestamp (no-op is still progress)
+   - Glucose push fails but BP push succeeds: logs warning, does NOT update sync timestamp
+   - BP push fails but glucose push succeeds: logs warning, does NOT update sync timestamp
+   - Health Connect read throws SecurityException: caught, logs warning, skips that type
+   - Health Connect read returns empty list: no API call made for that type
+   - CancellationException propagates from any operation
+   - Large batch (>1000 readings): chunked into batches of 1000 for API calls
+2. Run verifier (expect fail)
+3. Create `SyncHealthReadingsUseCase`:
+   - `@Inject constructor(bloodGlucoseRepository: BloodGlucoseRepository, bloodPressureRepository: BloodPressureRepository, foodScannerHealthRepository: FoodScannerHealthRepository, settingsRepository: SettingsRepository)`
+   - `suspend fun invoke()`:
+     1. Check `settingsRepository.isConfigured()` — return early if not
+     2. Read `lastHealthReadingsSyncTimestamp` from settings
+     3. Calculate `start`: if timestamp is 0, use `Instant.now().minus(30, ChronoUnit.DAYS)`; otherwise `Instant.ofEpochMilli(timestamp).minus(1, ChronoUnit.DAYS)` (1-day overlap to catch late-arriving records)
+     4. Calculate `end`: `Instant.now()`
+     5. Read glucose readings from Health Connect via `bloodGlucoseRepository.getReadings(start, end)` — wrap in try-catch for SecurityException
+     6. Read BP readings from Health Connect via `bloodPressureRepository.getReadings(start, end)` — wrap in try-catch for SecurityException
+     7. If glucose readings non-empty: push via `foodScannerHealthRepository.pushGlucoseReadings()` in chunks of 1000. If any chunk fails, log warning and set `glucoseFailed = true`
+     8. If BP readings non-empty: push via `foodScannerHealthRepository.pushBloodPressureReadings()` in chunks of 1000. Same failure tracking.
+     9. If neither failed: update `lastHealthReadingsSyncTimestamp` to `end.toEpochMilli()`
+     10. Log summary: counts of glucose/BP read and pushed
 4. Run verifier (expect pass)
 
 **Notes:**
-- These defaults align with both Health Connect and food-scanner API field values
-- `SITTING_DOWN` → `BloodPressureRecord.BODY_POSITION_SITTING_DOWN` (Health Connect) / `"sitting_down"` (food-scanner)
-- `LEFT_UPPER_ARM` → `BloodPressureRecord.MEASUREMENT_LOCATION_LEFT_UPPER_ARM` (Health Connect) / `"left_upper_arm"` (food-scanner)
+- This is best-effort: failures log warnings but don't fail the overall SyncWorker
+- The 1-day overlap on subsequent syncs handles late-arriving records (e.g., CGM data syncing from phone). Food Scanner's upsert on `measuredAt` deduplicates.
+- CancellationException must propagate — check before catching generic Exception
+- Chunking at 1000 matches Food Scanner API batch limit
+
+**Defensive Requirements:**
+- CancellationException rethrown before any generic catch
+- SecurityException from Health Connect reads caught independently per type (glucose failure doesn't skip BP)
+- 10s timeout inherited from repository layer — no additional timeout needed here
+
+### Task 7: Integrate health readings sync into SyncWorker
+**Linear Issue:** [HEA-182](https://linear.app/lw-claude/issue/HEA-182/integrate-health-readings-sync-into-syncworker)
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/data/sync/SyncWorker.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/data/sync/SyncWorkerTest.kt` (create or modify)
+
+**Steps:**
+1. Write tests:
+   - SyncWorker calls `syncHealthReadingsUseCase.invoke()` after nutrition sync completes
+   - Health readings sync failure does not affect SyncWorker result (nutrition sync result determines worker outcome)
+   - Health readings sync is skipped if nutrition sync returns `NeedsConfiguration`
+   - CancellationException from health readings sync propagates
+2. Run verifier (expect fail)
+3. Modify `SyncWorker`:
+   - Add `SyncHealthReadingsUseCase` to constructor injection
+   - After nutrition sync completes (regardless of Success/Error), call `syncHealthReadingsUseCase.invoke()` wrapped in try-catch
+   - If health readings sync throws (non-cancellation), log warning and continue — the nutrition sync result determines the worker's return value
+   - If nutrition sync returns `NeedsConfiguration`, skip health readings sync entirely
+4. Run verifier (expect pass)
+
+**Notes:**
+- Health readings sync is fire-and-forget from the worker's perspective. It runs on the same cadence as nutrition sync but its failure is non-fatal.
+- The worker's Result (success/retry/failure) is determined solely by nutrition sync. Health readings sync piggybacks on the same schedule.
+
+**Defensive Requirements:**
+- CancellationException from `syncHealthReadingsUseCase` must propagate (worker is being cancelled)
+- Generic exceptions caught and logged — never crash the worker
 
 ## Post-Implementation Checklist
 1. Run `bug-hunter` agent — Review changes for bugs
@@ -287,133 +267,25 @@
 
 ## Plan Summary
 
-**Objective:** Push glucose and blood pressure readings to the food-scanner API alongside Health Connect, change glucose base unit to mg/dL, and default BP readings to sitting/left upper arm
+**Objective:** Improve food log time accuracy by using the Food Scanner API's zoneOffset field, and backfill Health Connect glucose/blood pressure readings to Food Scanner
 
-**Approach:** Change `GlucoseReading` from mmol/L to mg/dL as the internal representation, converting to mmol/L only for Health Connect writes. Add POST methods to `FoodScannerApiClient` for both reading types. Create a `FoodScannerHealthRepository` for the push logic. Update write use cases to dual-write (Health Connect + food-scanner) with independent error handling, returning `HealthDataWriteResult`. Food-scanner failures are surfaced as critical errors in the UI. BP confirmation defaults changed to SITTING_DOWN + LEFT_UPPER_ARM.
+**Approach:** Feature 1 threads `zoneOffset` from the API response through DTO → domain model → NutritionRecordMapper, replacing the hardcoded system timezone with the actual offset from when the meal was logged. Feature 2 adds range-read methods to the Health Connect repositories, batch-push methods to the Food Scanner repository, a new `SyncHealthReadingsUseCase` that reads all glucose/BP from Health Connect and pushes to Food Scanner, and integrates it into the existing `SyncWorker` on the same cadence as nutrition sync.
 
 **Scope:**
-- Tasks: 8
-- Files affected: ~20 (8 modified, ~6 created, plus tests)
-- New tests: ~50+ test cases across 6 new/modified test files
+- Tasks: 7
+- Files affected: ~18 (12 modified, ~2 created, plus tests)
+- New tests: ~40+ test cases across 7 new/modified test files
 
 **Key Decisions:**
-- mg/dL stored as `Int` (standard clinical precision, avoids floating point display issues)
-- Conversion factor: 1 mmol/L = 18.018 mg/dL
-- Dual-write is independent: neither repository failure blocks the other
-- Food-scanner failure = critical (user must see error); Health Connect failure = warning (non-blocking)
-- Zone offset from `ZoneId.systemDefault()` at measurement time, formatted as `±HH:MM`
-- `HealthDataWriteResult` data class replaces Boolean return from write use cases
+- `zoneOffset` null → system default (backward compatible, handles API responses without the field)
+- Malformed `zoneOffset` → log warning, fall back to system default
+- Health readings sync uses epoch timestamp (not date string) for tracking — instant-based records
+- 1-day overlap on subsequent syncs to catch late-arriving records (CGM backfill)
+- Batch chunking at 1000 (Food Scanner API limit)
+- Health readings sync is best-effort — failure doesn't affect SyncWorker result
+- Push ALL Health Connect readings regardless of source app — Food Scanner deduplicates on `measuredAt`
 
 **Risks/Considerations:**
-- mg/dL base unit change ripples through domain, data, and presentation layers — Task 1 changes will cause compilation errors in Tasks 2-3 until they're implemented
-- Int precision for mg/dL means ~0.03 mmol/L maximum rounding error in Health Connect writes (clinically insignificant)
-- Existing tests that create `GlucoseReading(valueMmolL = ...)` will break and need updating across Tasks 1-3
-
----
-
-## Iteration 1
-
-**Implemented:** 2026-03-29
-**Method:** Agent team (3 workers, worktree-isolated)
-
-### Tasks Completed This Iteration
-- Task 1: Change GlucoseReading base unit from mmol/L to mg/dL — renamed valueMmolL→valueMgDl (Int), validation 18..720, toMmolL(), fromMmolL() (worker-1)
-- Task 2: Update BloodGlucoseRecordMapper for mg/dL base unit — uses reading.toMmolL() and GlucoseReading.fromMmolL() (worker-1)
-- Task 3: Update GlucoseConfirmationViewModel for mg/dL base unit — valueMgDl primary, displayMmolL secondary (worker-1)
-- Task 4: Food-scanner health data DTOs and API client POST methods — HealthReadingsDtos.kt, postGlucoseReadings, postBloodPressureReadings (worker-2)
-- Task 5: FoodScannerHealthRepository domain interface + data implementation — pushGlucoseReading, pushBloodPressureReading, DI binding (worker-2)
-- Task 6: HealthDataWriteResult and dual-write use cases — independent HC + FS writes, CancellationException propagation (worker-3)
-- Task 7: Update ViewModels for dual-write error handling — warning/error states, navigate-on-partial-success (worker-3)
-- Task 8: Change BP confirmation defaults to SITTING_DOWN and LEFT_UPPER_ARM (worker-3)
-
-### Files Modified
-- `app/src/main/kotlin/com/healthhelper/app/domain/model/GlucoseReading.kt` — valueMmolL→valueMgDl, toMmolL(), fromMmolL()
-- `app/src/main/kotlin/com/healthhelper/app/domain/model/HealthDataWriteResult.kt` — new dual-write result model
-- `app/src/main/kotlin/com/healthhelper/app/domain/repository/FoodScannerHealthRepository.kt` — new domain interface
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/BloodGlucoseRecordMapper.kt` — mg/dL conversion
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/FoodScannerHealthRepositoryImpl.kt` — new implementation
-- `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt` — postGlucoseReadings, postBloodPressureReadings
-- `app/src/main/kotlin/com/healthhelper/app/data/api/dto/HealthReadingsDtos.kt` — new DTOs
-- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/WriteGlucoseReadingUseCase.kt` — dual-write, returns HealthDataWriteResult
-- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/WriteBloodPressureReadingUseCase.kt` — dual-write, returns HealthDataWriteResult
-- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/GlucoseConfirmationViewModel.kt` — mg/dL + dual-write error handling
-- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/BpConfirmationViewModel.kt` — dual-write error handling + BP defaults
-- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/GlucoseConfirmationScreen.kt` — mg/dL fields + warning display
-- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/BpConfirmationScreen.kt` — warning display
-- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` — valueMgDl reference
-- `app/src/main/kotlin/com/healthhelper/app/di/AppModule.kt` — FoodScannerHealthRepository binding
-- Plus 10 test files (new and modified)
-
-### Linear Updates
-- HEA-165: Todo → In Progress → Review
-- HEA-166: Todo → Review
-- HEA-167: Todo → Review
-- HEA-168: Todo → Review
-- HEA-169: Todo → Review
-- HEA-170: Todo → In Progress → Review
-- HEA-171: Todo → Review
-- HEA-172: Todo → Review
-
-### Pre-commit Verification
-- bug-hunter: Found 3 bugs (2 HIGH, 1 MEDIUM), all fixed before commit
-- verifier: All tests pass, zero warnings
-
-### Work Partition
-- Worker 1: Tasks 1, 2, 3 (glucose mg/dL domain + mapper + ViewModel)
-- Worker 2: Tasks 4, 5 (API client + repository)
-- Worker 3: Tasks 6, 7, 8 (dual-write use cases + ViewModel error handling + BP defaults)
-
-### Merge Summary
-- Worker 1: fast-forward (no conflicts)
-- Worker 2: clean merge, 1 post-merge fix (displayInMgDl() → valueMgDl)
-- Worker 3: 3 conflicts resolved (FoodScannerHealthRepositoryImpl.kt — kept real impl over stub; GlucoseConfirmationViewModel.kt — took dual-write logic with mg/dL strings; GlucoseConfirmationViewModelTest.kt — merged test name + HealthDataWriteResult mock). Duplicate Hilt binding removed.
-
-### Bug Fixes Applied Post-Merge
-1. **Warning UI state never rendered** — Added warning Text composable to both GlucoseConfirmationScreen and BpConfirmationScreen
-2. **FS failure blocking navigation after HC success** — Reordered when branches: HC+FS success → navigate; HC success + FS fail → navigate with warning; HC fail + FS success → navigate with warning; both fail → show error
-3. **Misleading test comment** — Fixed conversion comment in FoodScannerHealthRepositoryImplTest
-
-### Review Findings
-
-Summary: 3 issue(s) found, fixed inline (Team: security, reliability, quality reviewers)
-- FIXED INLINE: 3 issue(s) — verified via TDD + bug-hunter
-
-**Issues fixed inline:**
-- [HIGH] BUG: BloodGlucoseRecordMapper crashes on out-of-range Health Connect records (`app/src/main/kotlin/com/healthhelper/app/data/repository/BloodGlucoseRecordMapper.kt:83`) — added .coerceIn(18, 720) + boundary tests
-- [MEDIUM] COROUTINE: SyncViewModel permission check swallows CancellationException (`app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt:104`) — added CancellationException rethrow
-- [MEDIUM] COROUTINE: SyncViewModel loadLastBpReading swallows CancellationException (`app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt:224`) — added CancellationException rethrow
-
-**Discarded findings (not bugs):**
-- [DISCARDED] SECURITY: Server-supplied error messages logged verbatim via Timber.w — Timber logs are debug-only on Android, not user-facing; no app-sensitive data logged
-- [DISCARDED] BUG: Elapsed time logging excludes body deserialization — minor logging inaccuracy, not a functional bug
-- [DISCARDED] CONVENTION: String interpolation in Timber call — style preference, not enforced by CLAUDE.md
-- [DISCARDED] EDGE CASE: TOCTOU on baseUrl/apiKey settings reads — benign; DataStore reads are near-instant, mismatch scenario practically impossible
-- [DISCARDED] CONVENTION: Duplicate ViewModel save-failure tests — redundant but not bugs, no correctness impact
-
-### Linear Updates
-- HEA-165: Review → Merge
-- HEA-166: Review → Merge
-- HEA-167: Review → Merge
-- HEA-168: Review → Merge
-- HEA-169: Review → Merge
-- HEA-170: Review → Merge
-- HEA-171: Review → Merge
-- HEA-172: Review → Merge
-- HEA-173: Created in Merge (Fix: BloodGlucoseRecordMapper out-of-range crash — fixed inline)
-- HEA-174: Created in Merge (Fix: SyncViewModel permission check CancellationException — fixed inline)
-- HEA-175: Created in Merge (Fix: SyncViewModel loadLastBpReading CancellationException — fixed inline)
-
-### Inline Fix Verification
-- Unit tests: all pass
-- Bug-hunter: no new issues
-
-<!-- REVIEW COMPLETE -->
-
-### Continuation Status
-All tasks completed.
-
----
-
-## Status: COMPLETE
-
-All tasks implemented and reviewed successfully. All Linear issues moved to Merge.
+- CGM devices (Dexcom) can produce ~288 readings/day (every 5 min). First 30-day backfill could be ~8640 records — well within batch limits but worth monitoring API response time
+- Health Connect's 30-day default read limit caps initial backfill. `READ_HEALTH_DATA_HISTORY` permission could extend this later if needed
+- `zoneOffset` may be null for older Food Scanner entries logged before the field was added — fallback to system default is correct for these
