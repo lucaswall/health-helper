@@ -1,17 +1,21 @@
 package com.healthhelper.app.domain.usecase
 
+import com.healthhelper.app.data.api.AuthenticationException
+import com.healthhelper.app.data.api.RateLimitException
+import com.healthhelper.app.data.api.ServerException
 import com.healthhelper.app.domain.model.BloodPressureReading
 import com.healthhelper.app.domain.model.GlucoseReading
 import com.healthhelper.app.domain.repository.BloodGlucoseRepository
 import com.healthhelper.app.domain.repository.BloodPressureRepository
 import com.healthhelper.app.domain.repository.FoodScannerHealthRepository
 import com.healthhelper.app.domain.repository.SettingsRepository
+import java.io.IOException
 import java.time.Instant
-import java.time.temporal.ChronoUnit
 import javax.inject.Inject
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
-import timber.log.Timber
 
 class SyncHealthReadingsUseCase @Inject constructor(
     private val bloodGlucoseRepository: BloodGlucoseRepository,
@@ -20,130 +24,109 @@ class SyncHealthReadingsUseCase @Inject constructor(
     private val settingsRepository: SettingsRepository,
 ) {
     suspend fun invoke() {
-        if (!settingsRepository.isConfigured()) {
-            Timber.d("SyncHealthReadings: settings not configured, skipping")
-            return
-        }
+        if (!settingsRepository.isConfigured()) return
 
-        val lastTimestamp = settingsRepository.lastHealthReadingsSyncTimestampFlow.first()
-        val end = Instant.now()
-        val start = if (lastTimestamp == 0L) {
-            Instant.EPOCH
-        } else {
-            Instant.ofEpochMilli(lastTimestamp).minus(1, ChronoUnit.DAYS)
-        }
-
-        Timber.d(
-            "SyncHealthReadings: reading from %s to %s (lastTimestamp=%d)",
-            start,
-            end,
-            lastTimestamp,
+        val glucoseWatermark = syncType(
+            getReadings = bloodGlucoseRepository::getReadings,
+            pushReadings = foodScannerHealthRepository::pushGlucoseReadings,
+            watermarkFlow = settingsRepository.lastGlucoseSyncTimestampFlow,
+            setWatermark = settingsRepository::setLastGlucoseSyncTimestamp,
+            countFlow = settingsRepository.glucoseSyncCountFlow,
+            setCount = settingsRepository::setGlucoseSyncCount,
+            setCaughtUp = settingsRepository::setGlucoseSyncCaughtUp,
+            getLedger = settingsRepository::getDirectPushedGlucoseTimestamps,
+            getTimestamp = { it.timestamp.toEpochMilli() },
         )
 
-        val glucoseReadings = tryReadGlucose(start, end)
-        val bpReadings = tryReadBloodPressure(start, end)
-
-        Timber.d(
-            "SyncHealthReadings: read %d glucose, %d BP readings",
-            glucoseReadings.size,
-            bpReadings.size,
+        val bpWatermark = syncType(
+            getReadings = bloodPressureRepository::getReadings,
+            pushReadings = foodScannerHealthRepository::pushBloodPressureReadings,
+            watermarkFlow = settingsRepository.lastBpSyncTimestampFlow,
+            setWatermark = settingsRepository::setLastBpSyncTimestamp,
+            countFlow = settingsRepository.bpSyncCountFlow,
+            setCount = settingsRepository::setBpSyncCount,
+            setCaughtUp = settingsRepository::setBpSyncCaughtUp,
+            getLedger = settingsRepository::getDirectPushedBpTimestamps,
+            getTimestamp = { it.timestamp.toEpochMilli() },
         )
 
-        val glucosePushed = if (glucoseReadings.isNotEmpty()) {
-            pushInChunks(
-                items = glucoseReadings,
-                label = "glucose",
-                push = { chunk -> foodScannerHealthRepository.pushGlucoseReadings(chunk) },
-            )
-        } else {
-            glucoseReadings.size
-        }
-
-        val bpPushed = if (bpReadings.isNotEmpty()) {
-            pushInChunks(
-                items = bpReadings,
-                label = "BP",
-                push = { chunk -> foodScannerHealthRepository.pushBloodPressureReadings(chunk) },
-            )
-        } else {
-            bpReadings.size
-        }
-
-        val glucoseFailed = glucoseReadings.isNotEmpty() && glucosePushed < glucoseReadings.size
-        val bpFailed = bpReadings.isNotEmpty() && bpPushed < bpReadings.size
-
-        if (!glucoseFailed && !bpFailed) {
-            settingsRepository.setLastHealthReadingsSyncTimestamp(end.toEpochMilli())
-            Timber.d(
-                "SyncHealthReadings: done — pushed %d glucose, %d BP; updated timestamp to %d",
-                glucoseReadings.size,
-                bpReadings.size,
-                end.toEpochMilli(),
-            )
-        } else {
-            Timber.w(
-                "SyncHealthReadings: partial failure — pushed %d/%d glucose, %d/%d BP; timestamp NOT updated",
-                glucosePushed,
-                glucoseReadings.size,
-                bpPushed,
-                bpReadings.size,
-            )
-        }
+        settingsRepository.pruneDirectPushedTimestamps(glucoseWatermark, bpWatermark)
     }
 
-    private suspend fun tryReadGlucose(start: Instant, end: Instant): List<GlucoseReading> {
+    private suspend fun <T> syncType(
+        getReadings: suspend (Instant, Instant) -> List<T>,
+        pushReadings: suspend (List<T>) -> Result<Int>,
+        watermarkFlow: Flow<Long>,
+        setWatermark: suspend (Long) -> Unit,
+        countFlow: Flow<Int>,
+        setCount: suspend (Int) -> Unit,
+        setCaughtUp: suspend (Boolean) -> Unit,
+        getLedger: suspend () -> Set<Long>,
+        getTimestamp: (T) -> Long,
+    ): Long {
+        val watermark = watermarkFlow.first()
         return try {
-            bloodGlucoseRepository.getReadings(start, end)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: SecurityException) {
-            Timber.w(e, "SyncHealthReadings: SecurityException reading glucose — skipping")
-            emptyList()
-        } catch (e: Exception) {
-            Timber.w(e, "SyncHealthReadings: failed to read glucose readings — skipping")
-            emptyList()
-        }
-    }
+            val start = if (watermark == 0L) Instant.EPOCH else Instant.ofEpochMilli(watermark)
+            val end = Instant.now()
 
-    private suspend fun tryReadBloodPressure(start: Instant, end: Instant): List<BloodPressureReading> {
-        return try {
-            bloodPressureRepository.getReadings(start, end)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: SecurityException) {
-            Timber.w(e, "SyncHealthReadings: SecurityException reading BP — skipping")
-            emptyList()
-        } catch (e: Exception) {
-            Timber.w(e, "SyncHealthReadings: failed to read BP readings — skipping")
-            emptyList()
-        }
-    }
+            val readings = getReadings(start, end)
+            val batch = readings.take(MAX_READINGS_PER_RUN)
 
-    private suspend fun <T> pushInChunks(
-        items: List<T>,
-        label: String,
-        push: suspend (List<T>) -> Result<Int>,
-    ): Int {
-        var totalPushed = 0
-        val chunks = items.chunked(CHUNK_SIZE)
-        for ((index, chunk) in chunks.withIndex()) {
-            val result = push(chunk)
-            if (result.isFailure) {
-                Timber.w(
-                    "SyncHealthReadings: failed to push %s chunk %d/%d — %s",
-                    label,
-                    index + 1,
-                    chunks.size,
-                    result.exceptionOrNull()?.message,
-                )
-                return totalPushed
+            if (batch.isEmpty()) {
+                setCaughtUp(true)
+                return watermark
             }
-            totalPushed += chunk.size
+
+            val ledger = getLedger()
+            val toPublish = batch.filter { getTimestamp(it) !in ledger }
+            val lastBatchTimestamp = getTimestamp(batch.last())
+            val caughtUp = readings.size < MAX_READINGS_PER_RUN
+
+            if (toPublish.isNotEmpty()) {
+                val result = pushWithRetry { pushReadings(toPublish) }
+                if (result.isFailure) return watermark
+                val currentCount = countFlow.first()
+                setCount(currentCount + toPublish.size)
+            }
+
+            setWatermark(lastBatchTimestamp)
+            setCaughtUp(caughtUp)
+            lastBatchTimestamp
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            watermark
         }
-        return totalPushed
+    }
+
+    private suspend fun pushWithRetry(push: suspend () -> Result<Int>): Result<Int> {
+        var delayMs = INITIAL_RETRY_DELAY_MS
+        var attempt = 0
+        while (true) {
+            val result = try {
+                push()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+
+            if (result.isSuccess) return result
+
+            val ex = result.exceptionOrNull()
+            val retryable = ex is RateLimitException || ex is ServerException || ex is IOException
+
+            if (!retryable || attempt >= MAX_RETRIES) return result
+
+            delay(delayMs)
+            delayMs *= 2
+            attempt++
+        }
     }
 
     companion object {
-        private const val CHUNK_SIZE = 1000
+        const val MAX_READINGS_PER_RUN = 100
+        const val MAX_RETRIES = 3
+        const val INITIAL_RETRY_DELAY_MS = 500L
     }
 }

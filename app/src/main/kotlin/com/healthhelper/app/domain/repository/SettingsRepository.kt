@@ -17,6 +17,7 @@ interface SettingsRepository {
     val glucoseSyncCaughtUpFlow: Flow<Boolean>
     val bpSyncCaughtUpFlow: Flow<Boolean>
     val lastSyncedMealsFlow: Flow<List<SyncedMealSummary>>
+
     suspend fun setApiKey(value: String)
     suspend fun setAnthropicApiKey(value: String)
     suspend fun setBaseUrl(value: String)
