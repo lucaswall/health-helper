@@ -222,7 +222,7 @@ class SyncViewModelTest {
 
         viewModel.uiState.test {
             val state = awaitItem()
-            assertEquals("Sync failed. Please try again.", state.lastSyncResult)
+            assertEquals("Network failure", state.lastSyncResult)
             cancelAndIgnoreRemainingEvents()
         }
     }

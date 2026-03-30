@@ -34,7 +34,7 @@ class FoodScannerApiClient @Inject constructor(
         etag: String? = null,
     ): Result<FoodLogApiResponse> {
         if (baseUrl.isBlank() || !baseUrl.lowercase().startsWith("https://")) {
-            return Result.failure(Exception("HTTPS required for API connections"))
+            return Result.failure(Exception("API URL not configured. Set a valid HTTPS URL in Settings."))
         }
         return try {
             val response = httpClient.get("${baseUrl.trimEnd('/')}/api/v1/food-log") {
@@ -117,7 +117,7 @@ class FoodScannerApiClient @Inject constructor(
         request: GlucoseReadingRequest,
     ): Result<Int> {
         if (baseUrl.isBlank() || !baseUrl.lowercase().startsWith("https://")) {
-            return Result.failure(Exception("HTTPS required for API connections"))
+            return Result.failure(Exception("API URL not configured. Set a valid HTTPS URL in Settings."))
         }
         return try {
             val startMs = System.currentTimeMillis()
@@ -173,7 +173,7 @@ class FoodScannerApiClient @Inject constructor(
         request: BloodPressureReadingRequest,
     ): Result<Int> {
         if (baseUrl.isBlank() || !baseUrl.lowercase().startsWith("https://")) {
-            return Result.failure(Exception("HTTPS required for API connections"))
+            return Result.failure(Exception("API URL not configured. Set a valid HTTPS URL in Settings."))
         }
         return try {
             val startMs = System.currentTimeMillis()

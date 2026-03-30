@@ -75,6 +75,7 @@ class SyncNutritionUseCase @Inject constructor(
         // Consecutive failure tracking for abort/backoff
         var consecutiveFailures = 0
         var currentDelay = 500L
+        var lastErrorMessage: String? = null
 
         for (date in dates) {
             val dateStr = date.format(DateTimeFormatter.ISO_LOCAL_DATE)
@@ -110,7 +111,8 @@ class SyncNutritionUseCase @Inject constructor(
                     pastDateResults[date] = true
                 }
             } else {
-                Timber.w("SyncNutrition: %s → API error: %s", dateStr, result.exceptionOrNull()?.message)
+                lastErrorMessage = result.exceptionOrNull()?.message
+                Timber.w("SyncNutrition: %s → API error: %s", dateStr, lastErrorMessage)
                 consecutiveFailures++
                 if (date != today) {
                     pastDateResults[date] = false
@@ -203,7 +205,7 @@ class SyncNutritionUseCase @Inject constructor(
         }
 
         val syncResult = when {
-            successfulDays == 0 -> SyncResult.Error("All sync attempts failed")
+            successfulDays == 0 -> SyncResult.Error(lastErrorMessage ?: "Sync failed")
             totalEntriesFetched > 0 && totalRecordsSynced == 0 ->
                 SyncResult.Error("Failed to write records to Health Connect")
             else -> SyncResult.Success(totalRecordsSynced, successfulDays)

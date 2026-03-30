@@ -367,7 +367,7 @@ class SyncViewModel @Inject constructor(
                     }
                     is SyncResult.Error -> {
                         Timber.e("SyncViewModel: sync error — %s", result.message)
-                        "Sync failed. Please try again."
+                        result.message
                     }
                     is SyncResult.NeedsConfiguration -> {
                         Timber.w("SyncViewModel: sync skipped — needs configuration")
