@@ -128,17 +128,17 @@ class FoodScannerApiClient @Inject constructor(
             }
             if (!response.status.isSuccess()) {
                 val status = response.status.value
-                val message = when (status) {
-                    401 -> "Authentication failed"
-                    429 -> "Rate limited"
-                    in 500..599 -> "Server unavailable"
-                    else -> "HTTP error $status"
+                val exception: FoodScannerApiException = when (status) {
+                    401 -> AuthenticationException(status)
+                    429 -> RateLimitException(status)
+                    in 500..599 -> ServerException(status)
+                    else -> FoodScannerApiException("HTTP error $status", status)
                 }
                 when (status) {
                     401, 429, in 500..599 -> Timber.w("postGlucoseReadings HTTP error: %d", status)
                     else -> Timber.e("postGlucoseReadings HTTP error: %d", status)
                 }
-                return Result.failure(Exception(message))
+                return Result.failure(exception)
             }
             val elapsed = System.currentTimeMillis() - startMs
             val envelope: ApiEnvelope<UpsertResponse> = response.body()
@@ -184,17 +184,17 @@ class FoodScannerApiClient @Inject constructor(
             }
             if (!response.status.isSuccess()) {
                 val status = response.status.value
-                val message = when (status) {
-                    401 -> "Authentication failed"
-                    429 -> "Rate limited"
-                    in 500..599 -> "Server unavailable"
-                    else -> "HTTP error $status"
+                val exception: FoodScannerApiException = when (status) {
+                    401 -> AuthenticationException(status)
+                    429 -> RateLimitException(status)
+                    in 500..599 -> ServerException(status)
+                    else -> FoodScannerApiException("HTTP error $status", status)
                 }
                 when (status) {
                     401, 429, in 500..599 -> Timber.w("postBloodPressureReadings HTTP error: %d", status)
                     else -> Timber.e("postBloodPressureReadings HTTP error: %d", status)
                 }
-                return Result.failure(Exception(message))
+                return Result.failure(exception)
             }
             val elapsed = System.currentTimeMillis() - startMs
             val envelope: ApiEnvelope<UpsertResponse> = response.body()

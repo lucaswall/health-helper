@@ -248,6 +248,14 @@ fun SyncScreen(
                         )
                     }
 
+                    if (uiState.bpSyncStatus.isNotEmpty()) {
+                        Text(
+                            text = uiState.bpSyncStatus,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+
                     Button(
                         onClick = {
                             onBpScanErrorShown()
@@ -301,6 +309,14 @@ fun SyncScreen(
                         Text(
                             text = "No readings yet",
                             style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+
+                    if (uiState.glucoseSyncStatus.isNotEmpty()) {
+                        Text(
+                            text = uiState.glucoseSyncStatus,
+                            style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }

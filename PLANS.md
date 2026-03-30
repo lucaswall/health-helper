@@ -1,268 +1,269 @@
 # Implementation Plan
 
+**Created:** 2026-03-30
 **Status:** COMPLETE
-**Created:** 2026-03-29
-**Source:** Inline request: Improve food log time accuracy (use zoneOffset from API) and backfill Health Connect glucose/BP readings to Food Scanner
-**Linear Issues:** [HEA-176](https://linear.app/lw-claude/issue/HEA-176/add-zoneoffset-to-food-log-dtos-and-domain-model), [HEA-177](https://linear.app/lw-claude/issue/HEA-177/use-zoneoffset-in-nutritionrecordmapper), [HEA-178](https://linear.app/lw-claude/issue/HEA-178/add-range-read-methods-to-health-connect-glucose-and-bp-repositories), [HEA-179](https://linear.app/lw-claude/issue/HEA-179/add-batch-push-methods-to-foodscannerhealthrepository), [HEA-180](https://linear.app/lw-claude/issue/HEA-180/add-health-readings-sync-timestamp-to-settingsrepository), [HEA-181](https://linear.app/lw-claude/issue/HEA-181/create-synchealthreadingsusecase), [HEA-182](https://linear.app/lw-claude/issue/HEA-182/integrate-health-readings-sync-into-syncworker)
-**Branch:** feat/food-log-timezone-and-health-backfill
+**Source:** Inline request: Robust health readings backfill with capped incremental sync, dedup ledger, retry, and home screen status
+**Linear Issues:** [HEA-185](https://linear.app/lw-claude/issue/HEA-185), [HEA-186](https://linear.app/lw-claude/issue/HEA-186), [HEA-187](https://linear.app/lw-claude/issue/HEA-187), [HEA-188](https://linear.app/lw-claude/issue/HEA-188), [HEA-189](https://linear.app/lw-claude/issue/HEA-189), [HEA-190](https://linear.app/lw-claude/issue/HEA-190)
+**Branch:** feat/robust-health-backfill
 
 ## Context Gathered
 
 ### Codebase Analysis
-- **Related files:**
-  - `app/src/main/kotlin/com/healthhelper/app/data/api/dto/FoodLogResponse.kt` — `MealEntryDto` has `time: String?` but NO `zoneOffset` field. Food Scanner API sends `zoneOffset` (±HH:MM) but HealthHelper ignores it.
-  - `app/src/main/kotlin/com/healthhelper/app/domain/model/FoodLogEntry.kt` — Domain model has `time: String?` but NO `zoneOffset` field
-  - `app/src/main/kotlin/com/healthhelper/app/data/repository/NutritionRecordMapper.kt` — `mapToNutritionRecord()` hardcodes `ZoneId.systemDefault()` (line 29). Falls back to `LocalTime.NOON` when time is null. Parses time via `LocalTime.parse()` which handles both HH:mm and HH:mm:ss
-  - `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt` — Maps `MealEntryDto` to `FoodLogEntry` (lines 76-94), does not extract `zoneOffset`
-  - `app/src/main/kotlin/com/healthhelper/app/data/sync/SyncWorker.kt` — Only calls `syncNutritionUseCase.invoke()`. No health readings sync.
-  - `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncNutritionUseCase.kt` — Full nutrition sync with date tracking, rate limiting, backoff. Pattern to follow for health readings sync.
-  - `app/src/main/kotlin/com/healthhelper/app/domain/repository/SettingsRepository.kt` — Has `lastSyncedDateFlow` for nutrition sync. No health readings sync date.
-  - `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodGlucoseRepository.kt` — Has `getLastReading()` that reads last 30 days, returns most recent. Need range-read method for backfill.
-  - `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodPressureRepository.kt` — Same pattern as glucose, `getLastReading()` returns most recent from 30 days.
-  - `app/src/main/kotlin/com/healthhelper/app/domain/repository/BloodGlucoseRepository.kt` — Interface: `writeBloodGlucoseRecord()`, `getLastReading()`. Needs `getReadings(start, end)`.
-  - `app/src/main/kotlin/com/healthhelper/app/domain/repository/BloodPressureRepository.kt` — Same pattern. Needs `getReadings(start, end)`.
-  - `app/src/main/kotlin/com/healthhelper/app/data/repository/FoodScannerHealthRepositoryImpl.kt` — Pushes single glucose/BP readings to Food Scanner. Currently wraps single reading in a list. Needs batch support for backfill.
-  - `app/src/main/kotlin/com/healthhelper/app/domain/repository/FoodScannerHealthRepository.kt` — Interface: `pushGlucoseReading()`, `pushBloodPressureReading()`. Needs batch push methods.
-  - `app/src/main/kotlin/com/healthhelper/app/data/api/dto/HealthReadingsDtos.kt` — DTOs already support batch (`GlucoseReadingRequest(readings: List<GlucoseReadingDto>)`). API client already supports batch POST.
-- **Existing patterns:**
-  - `SyncNutritionUseCase`: date-range sync with `lastSyncedDate` tracking, contiguous date advancement, consecutive failure abort, rate limiting. Pattern to follow for health readings sync.
-  - Health Connect repos: `withTimeout(10_000L)`, SecurityException/TimeoutCancellationException/CancellationException handling
-  - `FoodScannerHealthRepositoryImpl`: reads settings from flows, validates configured, maps domain → DTO with zone offset
-  - `NutritionRecordMapper`: top-level function, tested in dedicated test file
-- **Test conventions:**
-  - Mapper tests: direct function calls, assertEquals on mapped fields
-  - Repository tests: MockK `HealthConnectClient`, test null client, success, timeout, security, cancellation
-  - Use case tests: MockK repositories, `runTest`, verify orchestration and return values
-  - API client tests: `MockEngine` with JSON responses
+
+- **Current backfill flow:** `SyncWorker` → `SyncHealthReadingsUseCase` reads glucose+BP from Health Connect in a single bulk read (paginated, 120s cumulative timeout), pushes to Food Scanner API in chunks of 1000, uses a single shared `lastHealthReadingsSyncTimestamp` watermark. Non-fatal — failures don't affect the nutrition sync worker result.
+- **Write flow:** `WriteGlucoseReadingUseCase` / `WriteBloodPressureReadingUseCase` push to both Health Connect and Food Scanner simultaneously. HC stores glucose in mmol/L internally; domain model uses mg/dL. Round-trip conversion (`mg/dL → mmol/L → mg/dL`) via `GlucoseReading.toMmolL()` / `GlucoseReading.fromMmolL()` can produce ±1 mg/dL drift due to `roundToInt()` on `value * 18.018`.
+- **HC metadata:** Records written by this app carry `clientRecordId` prefixes: `"bloodglucose-{epochMillis}"` for glucose, `"bloodpressure-{epochMillis}"` for BP (set in `BloodGlucoseRecordMapper.kt:50` and `BloodPressureRecordMapper.kt:38`). Third-party records have different or null client record IDs.
+- **Dedup challenge:** Pre-PR#14 records exist only in HC (Food Scanner push didn't exist). Post-PR#14 records exist in both HC and Food Scanner. The backfill must include pre-PR#14 self-written records but skip post-PR#14 ones to avoid overwriting correct values with mmol/L-roundtrip-corrupted values.
+- **API error handling:** `FoodScannerApiClient` detects 401/429/5xx but wraps all as generic `Exception(message)`. No typed exceptions — callers cannot distinguish retryable from permanent failures.
+- **Settings storage:** `DataStoreSettingsRepository` uses DataStore Preferences + EncryptedSharedPreferences. JSON serialization via kotlinx.serialization for complex types (meals, ETags).
+- **Test conventions:** JUnit 5 + MockK + `runTest`. `@DisplayName` annotations. `coEvery`/`coVerify` for suspend mocks. Turbine for Flow testing in ViewModel tests. `StandardTestDispatcher` for ViewModel tests.
+- **UI conventions:** Compose Material3 Cards with `titleMedium` headers. Status text uses `bodySmall` + `onSurfaceVariant` color. `collectAsStateWithLifecycle` for state observation.
 
 ### MCP Context
-- **MCPs used:** Linear
-- **Findings:** No open issues in Health Helper team. Clean slate for new work.
+
+- **MCPs used:** Linear (issue creation)
+- **Findings:** Team "Health Helper" (ID: 7b911426), prefix HEA-xxx. Issues HEA-185 through HEA-190 created in Todo state.
 
 ## Tasks
 
-### Task 1: Add zoneOffset to food log DTOs and domain model
-**Linear Issue:** [HEA-176](https://linear.app/lw-claude/issue/HEA-176/add-zoneoffset-to-food-log-dtos-and-domain-model)
+### Task 1: Typed API exceptions for Food Scanner health endpoints
+**Linear Issue:** [HEA-185](https://linear.app/lw-claude/issue/HEA-185)
 **Files:**
-- `app/src/main/kotlin/com/healthhelper/app/data/api/dto/FoodLogResponse.kt` (modify)
-- `app/src/main/kotlin/com/healthhelper/app/domain/model/FoodLogEntry.kt` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiException.kt` (create)
 - `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt` (modify)
-- `app/src/test/kotlin/com/healthhelper/app/domain/model/FoodLogEntryTest.kt` (modify)
 - `app/src/test/kotlin/com/healthhelper/app/data/api/FoodScannerApiClientTest.kt` (modify)
 
 **Steps:**
-1. Write tests:
-   - `FoodLogEntryTest`: FoodLogEntry accepts `zoneOffset = "+05:30"` and `zoneOffset = null`
-   - `FoodScannerApiClientTest`: when API response contains `zoneOffset` in a meal entry, the mapped `FoodLogEntry` has the value. When `zoneOffset` is absent/null in JSON, the mapped `FoodLogEntry` has `zoneOffset = null`
+1. Write tests in `FoodScannerApiClientTest.kt`:
+   - Test 429 response throws `RateLimitException` (subclass of `FoodScannerApiException`)
+   - Test 401 response throws `AuthenticationException`
+   - Test 500/502/503 response throws `ServerException`
+   - Test network error (IOException) still throws IOException (not wrapped)
+   - Test 400/other 4xx throws generic `FoodScannerApiException`
+   - Apply to both `postGlucoseReadings` and `postBloodPressureReadings`
 2. Run verifier (expect fail)
-3. Add `val zoneOffset: String? = null` to `MealEntryDto` (after `time` field)
-4. Add `val zoneOffset: String? = null` to `FoodLogEntry` (after `time` field)
-5. Update `FoodScannerApiClient.getFoodLog()` mapping (line 82 area): pass `zoneOffset = entry.zoneOffset` when constructing `FoodLogEntry`
-6. Run verifier (expect pass)
-
-**Notes:**
-- `zoneOffset` format from Food Scanner API: `±HH:MM` (e.g., `"+03:00"`, `"-05:00"`) or null
-- Default `null` preserves backward compatibility — no breaking changes to existing code
-
-### Task 2: Use zoneOffset in NutritionRecordMapper
-**Linear Issue:** [HEA-177](https://linear.app/lw-claude/issue/HEA-177/use-zoneoffset-in-nutritionrecordmapper)
-**Files:**
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/NutritionRecordMapper.kt` (modify)
-- `app/src/test/kotlin/com/healthhelper/app/data/repository/NutritionRecordMapperTest.kt` (modify)
-
-**Steps:**
-1. Write tests in `NutritionRecordMapperTest`:
-   - Entry with `zoneOffset = "+05:30"` and `time = "12:30:00"`: startTime corresponds to 12:30 at +05:30 (i.e., 07:00 UTC), and `startZoneOffset` is `ZoneOffset.of("+05:30")`
-   - Entry with `zoneOffset = "-03:00"` and `time = "08:00:00"`: startTime is 11:00 UTC, zone offset is -03:00
-   - Entry with `zoneOffset = null`: uses system default timezone (current behavior preserved)
-   - Entry with malformed `zoneOffset` (e.g., `"invalid"`): falls back to system default, logs warning
-   - Existing test `nullTimeFallsBackToNoon` still passes with zoneOffset null
-2. Run verifier (expect fail)
-3. Update `mapToNutritionRecord()` signature: add `entry` already has `zoneOffset` via domain model (no signature change needed — `FoodLogEntry` already passed)
-4. Update mapper logic:
-   - If `entry.zoneOffset` is non-null, try `ZoneOffset.parse(entry.zoneOffset)`. On success, use it to construct `OffsetDateTime` (or `ZonedDateTime` with fixed offset). On `DateTimeParseException`, log warning via Timber, fall back to `ZoneId.systemDefault()`
-   - If `entry.zoneOffset` is null, use `ZoneId.systemDefault()` (current behavior)
-   - The `startZoneOffset` and `endZoneOffset` on the NutritionRecord should use the parsed offset
+3. Create `FoodScannerApiException.kt` with sealed class hierarchy:
+   - `FoodScannerApiException(message, httpStatus)` — open base
+   - `RateLimitException` — 429
+   - `AuthenticationException` — 401
+   - `ServerException` — 5xx
+4. Update `postGlucoseReadings` and `postBloodPressureReadings` in `FoodScannerApiClient.kt` to throw typed exceptions instead of `Result.failure(Exception(message))` for HTTP errors. Keep the `Result` return type — the typed exception goes inside `Result.failure()`.
 5. Run verifier (expect pass)
 
 **Notes:**
-- `ZoneOffset.parse()` handles `±HH:MM` format natively
-- The `createEntry()` helper in test file needs a new `zoneOffset` parameter with default `null` to avoid breaking existing tests
-- `SyncNutritionUseCase` passes `FoodLogEntry` objects to `NutritionRepository.writeNutritionRecords()` — the zoneOffset flows through automatically since it's on the domain model
+- The `getFoodLog` method also uses generic exceptions but is out of scope — only health push endpoints need typed errors for the retry logic.
+- Existing tests for success/parse-error paths should remain unchanged.
 
-### Task 3: Add range-read methods to Health Connect glucose and BP repositories
-**Linear Issue:** [HEA-178](https://linear.app/lw-claude/issue/HEA-178/add-range-read-methods-to-health-connect-glucose-and-bp-repositories)
-**Files:**
-- `app/src/main/kotlin/com/healthhelper/app/domain/repository/BloodGlucoseRepository.kt` (modify)
-- `app/src/main/kotlin/com/healthhelper/app/domain/repository/BloodPressureRepository.kt` (modify)
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodGlucoseRepository.kt` (modify)
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodPressureRepository.kt` (modify)
-- `app/src/test/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodGlucoseRepositoryTest.kt` (modify)
-- `app/src/test/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodPressureRepositoryTest.kt` (modify)
-
-**Steps:**
-1. Write tests for glucose repository `getReadings(start: Instant, end: Instant)`:
-   - Returns empty list when Health Connect client is null
-   - Returns all readings in time range, mapped to domain models, sorted by timestamp ascending
-   - Returns empty list when no records in range
-   - Handles timeout (10s) — returns empty list, logs warning
-   - Handles SecurityException — returns empty list, logs error
-   - CancellationException propagates
-2. Write same test suite for BP repository `getReadings(start: Instant, end: Instant)`
-3. Run verifier (expect fail)
-4. Add `suspend fun getReadings(start: Instant, end: Instant): List<GlucoseReading>` to `BloodGlucoseRepository` interface
-5. Add `suspend fun getReadings(start: Instant, end: Instant): List<BloodPressureReading>` to `BloodPressureRepository` interface
-6. Implement in `HealthConnectBloodGlucoseRepository`:
-   - Follow existing `getLastReading()` pattern (null client check, withTimeout, SecurityException, CancellationException)
-   - Use `TimeRangeFilter.between(start, end)` instead of `TimeRangeFilter.after()`
-   - Map all records via `mapToGlucoseReading()`, wrapping each in `runCatching` (same as `getLastReading`)
-   - Sort by timestamp ascending
-   - Pagination needed for large time windows (CGM data). Use `pageToken` loop to read all records.
-7. Implement same pattern in `HealthConnectBloodPressureRepository`
-8. Run verifier (expect pass)
-
-**Notes:**
-- `getLastReading()` already uses `runCatching` per-record to skip records that fail mapping (e.g., out-of-range values). Follow same pattern.
-- Ascending sort is natural for push-to-server (oldest first)
-- CGM data (e.g., Dexcom every 5 min) could produce thousands of records. Use Health Connect `pageToken` pagination to read all records in the window. Sort all pages combined by timestamp ascending before returning.
-
-### Task 4: Add batch push methods to FoodScannerHealthRepository
-**Linear Issue:** [HEA-179](https://linear.app/lw-claude/issue/HEA-179/add-batch-push-methods-to-foodscannerhealthrepository)
-**Files:**
-- `app/src/main/kotlin/com/healthhelper/app/domain/repository/FoodScannerHealthRepository.kt` (modify)
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/FoodScannerHealthRepositoryImpl.kt` (modify)
-- `app/src/test/kotlin/com/healthhelper/app/data/repository/FoodScannerHealthRepositoryImplTest.kt` (modify)
-
-**Steps:**
-1. Write tests for `pushGlucoseReadings(readings: List<GlucoseReading>)`:
-   - Empty list: returns `Result.success(0)` without calling API
-   - Single reading: maps correctly to DTO and calls API, returns upserted count
-   - Multiple readings: all mapped correctly, single API call, returns upserted count
-   - Settings not configured: returns `Result.failure`
-   - API failure: returns `Result.failure` with exception
-   - Verifies DTO field mapping: valueMgDl, measuredAt (ISO-8601), zoneOffset (±HH:MM), relationToMeal/mealType/specimenSource as lowercase strings
-2. Write same test suite for `pushBloodPressureReadings(readings: List<BloodPressureReading>)`
-3. Run verifier (expect fail)
-4. Add to `FoodScannerHealthRepository` interface:
-   - `suspend fun pushGlucoseReadings(readings: List<GlucoseReading>): Result<Int>`
-   - `suspend fun pushBloodPressureReadings(readings: List<BloodPressureReading>): Result<Int>`
-5. Implement in `FoodScannerHealthRepositoryImpl`:
-   - Early return `Result.success(0)` for empty lists
-   - Same settings validation as existing single-push methods
-   - Map each reading to DTO (reuse existing mapping logic from `pushGlucoseReading`)
-   - Extract DTO mapping into private helper functions to avoid duplication with existing single-push methods
-   - Call `apiClient.postGlucoseReadings()` / `apiClient.postBloodPressureReadings()` with full batch
-   - Return `Result<Int>` (upserted count from API)
-6. Run verifier (expect pass)
-
-**Notes:**
-- Food Scanner API supports up to 1000 readings per batch. Chunking (if needed for CGM data) belongs in the use case, not the repository.
-- Existing single-push methods (`pushGlucoseReading`, `pushBloodPressureReading`) remain unchanged — they're used by the manual entry flow.
-
-### Task 5: Add health readings sync date to SettingsRepository
-**Linear Issue:** [HEA-180](https://linear.app/lw-claude/issue/HEA-180/add-health-readings-sync-timestamp-to-settingsrepository)
+### Task 2: Already-pushed ledger in SettingsRepository
+**Linear Issue:** [HEA-186](https://linear.app/lw-claude/issue/HEA-186)
 **Files:**
 - `app/src/main/kotlin/com/healthhelper/app/domain/repository/SettingsRepository.kt` (modify)
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` (modify — or wherever the implementation lives)
-- Test file for DataStoreSettingsRepository (modify if exists)
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepositoryTest.kt` (modify)
 
 **Steps:**
-1. Write test: `lastHealthReadingsSyncTimestampFlow` defaults to `0L`, can be set and read back
+1. Write tests in `DataStoreSettingsRepositoryTest.kt`:
+   - Test `getDirectPushedGlucoseTimestamps()` returns empty set initially
+   - Test `addDirectPushedGlucoseTimestamp(ts)` then `get` returns set containing `ts`
+   - Test multiple adds accumulate in the set
+   - Test `pruneDirectPushedTimestamps(beforeMs)` removes entries older than threshold, keeps newer ones
+   - Test prune on empty set is a no-op
+   - Same five tests for BP variant
+   - Test corrupted JSON in DataStore returns empty set (graceful degradation)
 2. Run verifier (expect fail)
 3. Add to `SettingsRepository` interface:
-   - `val lastHealthReadingsSyncTimestampFlow: Flow<Long>`
-   - `suspend fun setLastHealthReadingsSyncTimestamp(value: Long)`
-4. Implement in the DataStore-backed implementation:
-   - New DataStore key `last_health_readings_sync_timestamp` (Long, default 0L)
-   - Follow existing `lastSyncTimestampFlow` / `setLastSyncTimestamp` pattern exactly
+   - `suspend fun getDirectPushedGlucoseTimestamps(): Set<Long>`
+   - `suspend fun addDirectPushedGlucoseTimestamp(timestampMs: Long)`
+   - `suspend fun getDirectPushedBpTimestamps(): Set<Long>`
+   - `suspend fun addDirectPushedBpTimestamp(timestampMs: Long)`
+   - `suspend fun pruneDirectPushedTimestamps(glucoseBeforeMs: Long, bpBeforeMs: Long)`
+4. Implement in `DataStoreSettingsRepository`:
+   - Two new `stringPreferencesKey` entries: `DIRECT_PUSHED_GLUCOSE_TIMESTAMPS`, `DIRECT_PUSHED_BP_TIMESTAMPS`
+   - Stored as JSON-encoded `Set<Long>` via kotlinx.serialization
+   - `add` reads existing set, adds new entry, writes back
+   - `prune` filters out entries < threshold, writes back
+   - Corrupted JSON → log warning, return empty set
 5. Run verifier (expect pass)
 
 **Notes:**
-- Using a timestamp (epoch millis) instead of a date string because health readings are instant-based, not date-based. The sync reads records since this timestamp.
-- Default `0L` means first sync will read last 30 days (capped by Health Connect's default read limit).
+- Follow existing DataStore JSON patterns (see `setETag`/`getETag` and `setLastSyncedMeals`/`lastSyncedMealsFlow` for serialization approach).
+- The set is bounded: entries are pruned as the backfill watermark advances. Between prunes, growth is limited to ~1-2 entries per day (user logging frequency).
 
-**Defensive Requirements:**
-- DataStore write uses `.edit{}` (not `.updateData{}`) following existing pattern
-
-### Task 6: Create SyncHealthReadingsUseCase
-**Linear Issue:** [HEA-181](https://linear.app/lw-claude/issue/HEA-181/create-synchealthreadingsusecase)
+### Task 3: Record direct pushes in Write use cases
+**Linear Issue:** [HEA-187](https://linear.app/lw-claude/issue/HEA-187)
 **Files:**
-- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncHealthReadingsUseCase.kt` (create)
-- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncHealthReadingsUseCaseTest.kt` (create)
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/WriteGlucoseReadingUseCase.kt` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/WriteBloodPressureReadingUseCase.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/WriteGlucoseReadingUseCaseTest.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/WriteBloodPressureReadingUseCaseTest.kt` (modify)
 
 **Steps:**
-1. Write tests:
-   - Settings not configured: returns early without error (health readings sync is best-effort)
-   - First sync (timestamp = 0): reads from `Instant.EPOCH` to now (all available history), pushes all to Food Scanner
-   - Subsequent sync: reads from last sync timestamp minus 1 day (overlap buffer) to now
-   - Glucose readings found and pushed successfully: updates sync timestamp
-   - BP readings found and pushed successfully: updates sync timestamp
-   - Mixed: some glucose, some BP, both pushed
-   - No readings found in range: updates sync timestamp (no-op is still progress)
-   - Glucose push fails but BP push succeeds: logs warning, does NOT update sync timestamp
-   - BP push fails but glucose push succeeds: logs warning, does NOT update sync timestamp
-   - Health Connect read throws SecurityException: caught, logs warning, skips that type
-   - Health Connect read returns empty list: no API call made for that type
-   - CancellationException propagates from any operation
-   - Large batch (>1000 readings): chunked into batches of 1000 for API calls
-2. Run verifier (expect fail)
-3. Create `SyncHealthReadingsUseCase`:
-   - `@Inject constructor(bloodGlucoseRepository: BloodGlucoseRepository, bloodPressureRepository: BloodPressureRepository, foodScannerHealthRepository: FoodScannerHealthRepository, settingsRepository: SettingsRepository)`
-   - `suspend fun invoke()`:
-     1. Check `settingsRepository.isConfigured()` — return early if not
-     2. Read `lastHealthReadingsSyncTimestamp` from settings
-     3. Calculate `start`: if timestamp is 0, use `Instant.EPOCH` (read all available history); otherwise `Instant.ofEpochMilli(timestamp).minus(1, ChronoUnit.DAYS)` (1-day overlap to catch late-arriving records)
-     4. Calculate `end`: `Instant.now()`
-     5. Read glucose readings from Health Connect via `bloodGlucoseRepository.getReadings(start, end)` — wrap in try-catch for SecurityException
-     6. Read BP readings from Health Connect via `bloodPressureRepository.getReadings(start, end)` — wrap in try-catch for SecurityException
-     7. If glucose readings non-empty: push via `foodScannerHealthRepository.pushGlucoseReadings()` in chunks of 1000. If any chunk fails, log warning and set `glucoseFailed = true`
-     8. If BP readings non-empty: push via `foodScannerHealthRepository.pushBloodPressureReadings()` in chunks of 1000. Same failure tracking.
-     9. If neither failed: update `lastHealthReadingsSyncTimestamp` to `end.toEpochMilli()`
-     10. Log summary: counts of glucose/BP read and pushed
-4. Run verifier (expect pass)
+1. Write tests in `WriteGlucoseReadingUseCaseTest.kt`:
+   - Test: when FS push succeeds, `addDirectPushedGlucoseTimestamp` is called with `reading.timestamp.toEpochMilli()`
+   - Test: when FS push fails (Result.failure), `addDirectPushedGlucoseTimestamp` is NOT called
+   - Test: when FS push throws exception, `addDirectPushedGlucoseTimestamp` is NOT called
+   - Test: ledger write failure (exception from `addDirectPushedGlucoseTimestamp`) does not affect the returned `HealthDataWriteResult` — it's fire-and-forget with a log warning
+2. Write same four tests in `WriteBloodPressureReadingUseCaseTest.kt` for BP variant
+3. Run verifier (expect fail)
+4. Inject `SettingsRepository` into both use cases. After successful FS push (`result.isSuccess`), call `settingsRepository.addDirectPushedGlucoseTimestamp(reading.timestamp.toEpochMilli())` (or BP variant). Wrap in try-catch to make it non-fatal.
+5. Run verifier (expect pass)
 
 **Notes:**
-- This is best-effort: failures log warnings but don't fail the overall SyncWorker
-- The 1-day overlap on subsequent syncs handles late-arriving records (e.g., CGM data syncing from phone). Food Scanner's upsert on `measuredAt` deduplicates.
-- CancellationException must propagate — check before catching generic Exception
-- Chunking at 1000 matches Food Scanner API batch limit
-- First sync uses `Instant.EPOCH` as start — Health Connect will return all records it has. The `READ_HEALTH_DATA_HISTORY` permission (added in this task) removes the 30-day read limit.
-- Add `<uses-permission android:name="android.permission.health.READ_HEALTH_DATA_HISTORY" />` to `AndroidManifest.xml` (after existing Health Connect permissions). This permission must also be requested at runtime alongside existing HC permissions.
-- Update the permission request flow (wherever existing HC permissions are requested) to include `READ_HEALTH_DATA_HISTORY`
+- The `SettingsRepository` is already available via Hilt in these use cases' scope — just add it to the constructor.
+- Ledger write is best-effort: if it fails, the worst case is that a future backfill re-pushes a reading with ±1 mg/dL drift. This is acceptable vs. failing the whole write operation.
 
-**Defensive Requirements:**
-- CancellationException rethrown before any generic catch
-- SecurityException from Health Connect reads caught independently per type (glucose failure doesn't skip BP)
-- 10s timeout inherited from repository layer — no additional timeout needed here
-- If `READ_HEALTH_DATA_HISTORY` is not granted, Health Connect silently limits to 30 days — no crash, just reduced backfill scope
-
-### Task 7: Integrate health readings sync into SyncWorker
-**Linear Issue:** [HEA-182](https://linear.app/lw-claude/issue/HEA-182/integrate-health-readings-sync-into-syncworker)
+### Task 4: Per-type sync timestamps and status metadata
+**Linear Issue:** [HEA-188](https://linear.app/lw-claude/issue/HEA-188)
 **Files:**
+- `app/src/main/kotlin/com/healthhelper/app/domain/repository/SettingsRepository.kt` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepositoryTest.kt` (modify)
+
+**Steps:**
+1. Write tests in `DataStoreSettingsRepositoryTest.kt`:
+   - Test `lastGlucoseSyncTimestampFlow` emits 0L initially
+   - Test `setLastGlucoseSyncTimestamp(ts)` then flow emits `ts`
+   - Test `lastBpSyncTimestampFlow` emits 0L initially
+   - Test `setLastBpSyncTimestamp(ts)` then flow emits `ts`
+   - Test `glucoseSyncCountFlow` emits 0 initially
+   - Test `setGlucoseSyncCount(n)` then flow emits `n`
+   - Test `bpSyncCountFlow` emits 0 initially
+   - Test `setBpSyncCount(n)` then flow emits `n`
+   - Test `glucoseSyncCaughtUpFlow` emits false initially
+   - Test `setGlucoseSyncCaughtUp(true)` then flow emits true
+   - Same for BP caught-up
+2. Run verifier (expect fail)
+3. Add to `SettingsRepository` interface:
+   - `val lastGlucoseSyncTimestampFlow: Flow<Long>` + setter
+   - `val lastBpSyncTimestampFlow: Flow<Long>` + setter
+   - `val glucoseSyncCountFlow: Flow<Int>` + setter
+   - `val bpSyncCountFlow: Flow<Int>` + setter
+   - `val glucoseSyncCaughtUpFlow: Flow<Boolean>` + setter
+   - `val bpSyncCaughtUpFlow: Flow<Boolean>` + setter
+4. Implement in `DataStoreSettingsRepository` with new preferences keys. Follow existing `longPreferencesKey`/`intPreferencesKey` patterns. For boolean, use `booleanPreferencesKey`.
+5. Remove `lastHealthReadingsSyncTimestampFlow` and `setLastHealthReadingsSyncTimestamp` from the interface and implementation.
+6. Run verifier (expect fail — `SyncHealthReadingsUseCase` and its tests still reference removed field)
+
+**Notes:**
+- **Migration note:** The old `LAST_HEALTH_READINGS_SYNC_TIMESTAMP` DataStore key is being removed. Users upgrading will restart backfill from EPOCH, which is the desired behavior since the old backfill was not robust. No data migration needed.
+- The removal of the old field will cause compile errors in `SyncHealthReadingsUseCase`, `SyncHealthReadingsUseCaseTest`, and `SyncViewModelTest`. These are resolved in Task 5.
+- Step 6 intentionally expects failure to confirm the old field is fully removed and dependent code needs updating.
+
+### Task 5: Rewrite SyncHealthReadingsUseCase with capped incremental backfill
+**Linear Issue:** [HEA-189](https://linear.app/lw-claude/issue/HEA-189)
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncHealthReadingsUseCase.kt` (modify — major rewrite)
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncHealthReadingsUseCaseTest.kt` (modify — major rewrite)
 - `app/src/main/kotlin/com/healthhelper/app/data/sync/SyncWorker.kt` (modify)
-- `app/src/test/kotlin/com/healthhelper/app/data/sync/SyncWorkerTest.kt` (create or modify)
+- `app/src/test/kotlin/com/healthhelper/app/data/sync/SyncWorkerTest.kt` (modify)
 
 **Steps:**
-1. Write tests:
-   - SyncWorker calls `syncHealthReadingsUseCase.invoke()` after nutrition sync completes
-   - Health readings sync failure does not affect SyncWorker result (nutrition sync result determines worker outcome)
-   - Health readings sync is skipped if nutrition sync returns `NeedsConfiguration`
-   - CancellationException from health readings sync propagates
+1. Rewrite tests in `SyncHealthReadingsUseCaseTest.kt` (replace all existing tests):
+
+   **Watermark behavior:**
+   - Test: first run (timestamp=0) reads glucose from `Instant.EPOCH` to `~now`
+   - Test: subsequent run reads from exact saved timestamp to `~now` (no 1-day overlap)
+   - Test: glucose and BP use independent watermarks — glucose at epoch, BP at a past timestamp
+
+   **100-record cap:**
+   - Test: when HC returns 150 glucose readings (sorted by timestamp), only the first 100 are pushed
+   - Test: when HC returns 50 readings (< 100), all 50 are pushed and `caughtUp` is set to true
+   - Test: when HC returns exactly 100, `caughtUp` is NOT set to true (might be more)
+   - Test: when HC returns 0, no push is made, `caughtUp` is set to true, watermark is NOT advanced
+
+   **Ledger filtering:**
+   - Test: readings whose `timestamp.toEpochMilli()` is in the already-pushed ledger are excluded before pushing
+   - Test: if all 100 readings are in the ledger, no push is made but watermark advances to last record's timestamp
+   - Test: ledger is pruned after watermark advances (call `pruneDirectPushedTimestamps` with new watermark values)
+
+   **Watermark advancement:**
+   - Test: on successful push, watermark is set to `lastPushedRecord.timestamp.toEpochMilli()` (not `Instant.now()`)
+   - Test: glucose watermark advances independently of BP success/failure
+   - Test: BP watermark advances independently of glucose success/failure
+
+   **Sync count tracking:**
+   - Test: on successful push of N records, sync count is incremented by N (read existing count, add N, write)
+   - Test: glucose and BP counts are tracked independently
+
+   **Retry with backoff (retryable errors):**
+   - Test: when push fails with `RateLimitException`, retry up to 3 times
+   - Test: when push fails with `ServerException`, retry up to 3 times
+   - Test: when push fails with `IOException` (network), retry up to 3 times
+   - Test: after 3 retries exhausted, watermark is NOT advanced for that type
+   - Test: on retry, delay increases (500ms, 1s, 2s) — verify with `advanceTimeBy` in `runTest`
+
+   **Permanent errors (no retry):**
+   - Test: when push fails with `AuthenticationException`, no retry, watermark NOT advanced
+   - Test: when push fails with generic non-retryable exception, no retry, watermark NOT advanced
+
+   **Inter-chunk delay:**
+   - Test: 200ms delay between successful chunks (if > 100 records after filtering somehow — edge case, but verify the delay mechanism exists)
+
+   **Error isolation:**
+   - Test: glucose read throws SecurityException → caught, BP still processed normally
+   - Test: glucose read throws generic Exception → caught, BP still processed normally
+   - Test: CancellationException propagates from any operation
+
 2. Run verifier (expect fail)
-3. Modify `SyncWorker`:
-   - Add `SyncHealthReadingsUseCase` to constructor injection
-   - After nutrition sync completes (regardless of Success/Error), call `syncHealthReadingsUseCase.invoke()` wrapped in try-catch
-   - If health readings sync throws (non-cancellation), log warning and continue — the nutrition sync result determines the worker's return value
-   - If nutrition sync returns `NeedsConfiguration`, skip health readings sync entirely
-4. Run verifier (expect pass)
+
+3. Rewrite `SyncHealthReadingsUseCase`:
+   - Constructor: inject `BloodGlucoseRepository`, `BloodPressureRepository`, `FoodScannerHealthRepository`, `SettingsRepository` (same as current)
+   - `invoke()` method:
+     a. Check `isConfigured()` — return early if not
+     b. Process glucose: `syncType(glucoseRepo::getReadings, fsRepo::pushGlucoseReadings, glucoseTimestampFlow, setGlucoseTimestamp, getGlucoseLedger, setGlucoseCount, setGlucoseCaughtUp)`
+     c. Process BP: same pattern with BP variants
+     d. Prune ledger entries older than the new watermarks
+   - Extract private `syncType()` function that encapsulates: read from watermark, take 100, filter ledger, push with retry, advance watermark, update count/caughtUp
+   - Private `pushWithRetry()` function: attempt push, on `RateLimitException`/`ServerException`/`IOException` retry up to 3 times with 500ms/1s/2s delays. On `AuthenticationException` or other exceptions, fail immediately.
+   - `MAX_READINGS_PER_RUN = 100`, `MAX_RETRIES = 3`, `INITIAL_RETRY_DELAY_MS = 500L`
+   - `caughtUp` = true when HC returns fewer than `MAX_READINGS_PER_RUN` records
+
+4. Update `SyncWorker.kt`: no functional change needed — it already calls `syncHealthReadingsUseCase.invoke()` in a try-catch. But update `SyncWorkerTest.kt` to use the new per-type timestamp mocks instead of the removed `lastHealthReadingsSyncTimestampFlow`.
+
+5. Run verifier (expect pass)
 
 **Notes:**
-- Health readings sync is fire-and-forget from the worker's perspective. It runs on the same cadence as nutrition sync but its failure is non-fatal.
-- The worker's Result (success/retry/failure) is determined solely by nutrition sync. Health readings sync piggybacks on the same schedule.
+- The current `pushInChunks` with `CHUNK_SIZE = 1000` is removed. With the 100-record cap, a single push per type per run is sufficient. If after ledger filtering the list is ≤100, it's one API call.
+- The `getReadings(start, end)` methods in the HC repos already return results sorted by timestamp ascending — the `.take(100)` naturally gives the oldest unsynced records.
+- Both types are processed sequentially within `invoke()`. If glucose fails, BP still runs (existing pattern, preserved).
 
 **Defensive Requirements:**
-- CancellationException from `syncHealthReadingsUseCase` must propagate (worker is being cancelled)
-- Generic exceptions caught and logged — never crash the worker
+- Retry delays must use `kotlinx.coroutines.delay()` (not `Thread.sleep`) for coroutine-friendly waiting
+- CancellationException must propagate from all operations including retry delays
+- `syncType` must catch all non-cancellation exceptions per type so one type's failure doesn't block the other
+
+### Task 6: Home screen health sync status display
+**Linear Issue:** [HEA-190](https://linear.app/lw-claude/issue/HEA-190)
+**Files:**
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` (modify)
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SyncScreen.kt` (modify)
+- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt` (modify)
+
+**Steps:**
+1. Write tests in `SyncViewModelTest.kt`:
+   - Test: when `glucoseSyncCaughtUp=true` and `glucoseSyncCount=342`, status string is `"342 synced to food-scanner"`
+   - Test: when `glucoseSyncCaughtUp=false` and `glucoseSyncCount=100` and `lastGlucoseSyncTimestamp` maps to "Mar 15", status is `"Syncing to food-scanner: up to Mar 15 (100 pushed)"`
+   - Test: when `glucoseSyncCount=0` and `glucoseSyncCaughtUp=false`, status is `"Not synced to food-scanner"`
+   - Test: when `glucoseSyncCaughtUp=true` and `glucoseSyncCount=0`, status is `"No readings to sync"`
+   - Same four tests for BP variant
+   - Test: `lastGlucoseSyncTimestamp` of 0 produces no "last sync" text
+   - Test: `lastGlucoseSyncTimestamp` > 0 produces a relative time string (reuses `formatRelativeTime`)
+2. Run verifier (expect fail)
+3. Add to `SyncUiState`:
+   - `glucoseSyncStatus: String = ""`
+   - `bpSyncStatus: String = ""`
+4. In `SyncViewModel.init`, add a `combine` on the three glucose sync flows (`glucoseSyncCountFlow`, `glucoseSyncCaughtUpFlow`, `lastGlucoseSyncTimestampFlow`) → format status string → update `_uiState`. Same for BP.
+5. Format logic:
+   - `count=0, caughtUp=false` → `"Not synced to food-scanner"`
+   - `count=0, caughtUp=true` → `"No readings to sync"`
+   - `count>0, caughtUp=true` → `"$count synced to food-scanner"`
+   - `count>0, caughtUp=false` → `"Syncing to food-scanner: up to $date ($count pushed)"` where `$date` is `formatRelativeTime(lastTimestamp)` or the formatted date from the timestamp
+6. In `SyncScreen.kt`, add the status text inside the Blood Pressure card (below the last reading display, above the button) and the Blood Glucose card (same position). Use `MaterialTheme.typography.bodySmall` + `MaterialTheme.colorScheme.onSurfaceVariant`, matching the existing `nextSyncTime` style.
+7. Run verifier (expect pass)
+
+**Notes:**
+- The periodic refresh loop (every 30s) in the ViewModel should also refresh relative time in these status strings if they contain a timestamp. Follow the existing `lastSyncTime` refresh pattern.
+- Status strings should be concise — they sit inside already-dense cards.
 
 ## Post-Implementation Checklist
 1. Run `bug-hunter` agent — Review changes for bugs
@@ -272,193 +273,195 @@
 
 ## Plan Summary
 
-**Objective:** Improve food log time accuracy by using the Food Scanner API's zoneOffset field, and backfill Health Connect glucose/blood pressure readings to Food Scanner
-
-**Approach:** Feature 1 threads `zoneOffset` from the API response through DTO → domain model → NutritionRecordMapper, replacing the hardcoded system timezone with the actual offset from when the meal was logged. Feature 2 adds range-read methods to the Health Connect repositories, batch-push methods to the Food Scanner repository, a new `SyncHealthReadingsUseCase` that reads all glucose/BP from Health Connect and pushes to Food Scanner, and integrates it into the existing `SyncWorker` on the same cadence as nutrition sync.
-
-**Scope:**
-- Tasks: 7
-- Files affected: ~18 (12 modified, ~2 created, plus tests)
-- New tests: ~40+ test cases across 7 new/modified test files
-
+**Objective:** Make the health readings backfill to Food Scanner robust with incremental capped syncing, dedup to prevent glucose value corruption from mmol/L roundtrip, retry with backoff, and visible sync status on the home screen.
+**Linear Issues:** HEA-185, HEA-186, HEA-187, HEA-188, HEA-189, HEA-190
+**Approach:** Introduce a local "already-pushed" ledger to prevent re-pushing readings that were directly sent to Food Scanner (avoiding ±1 mg/dL glucose drift from the mmol/L round-trip), while still including all historical self-written records from before the Food Scanner push feature existed. Split the single shared watermark into per-type independent timestamps, cap each run at 100 records for predictable incremental progress, add typed API exceptions to enable smart retry (retryable 429/5xx vs permanent 401), and surface sync progress on the home screen.
+**Scope:** 6 tasks, 14 files, ~40 tests
 **Key Decisions:**
-- `zoneOffset` null → system default (backward compatible, handles API responses without the field)
-- Malformed `zoneOffset` → log warning, fall back to system default
-- Health readings sync uses epoch timestamp (not date string) for tracking — instant-based records
-- 1-day overlap on subsequent syncs to catch late-arriving records (CGM backfill)
-- Batch chunking at 1000 (Food Scanner API limit)
-- Health readings sync is best-effort — failure doesn't affect SyncWorker result
-- Push ALL Health Connect readings regardless of source app — Food Scanner deduplicates on `measuredAt`
-
-**Risks/Considerations:**
-- CGM devices (Dexcom) can produce ~288 readings/day (every 5 min). First 30-day backfill could be ~8640 records — well within batch limits but worth monitoring API response time
-- `READ_HEALTH_DATA_HISTORY` permission added to read all available history. If user denies, Health Connect silently limits to 30 days — no crash, reduced scope
-- `zoneOffset` may be null for older Food Scanner entries logged before the field was added — fallback to system default is correct for these
+- Ledger-based dedup instead of clientRecordId filtering — includes pre-PR#14 historical self-written records while skipping post-PR#14 duplicates
+- 100-record cap per type per run — predictable, bounded work per sync cycle
+- Watermark saves last-pushed-record timestamp (not `now`) — no gaps, no overlap
+- Ledger is best-effort — failure to record a direct push is non-fatal (worst case: ±1 mg/dL on one reading)
+**Risks:**
+- Two readings at the exact same millisecond could cause a false ledger match (extremely unlikely given manual logging)
+- Pre-PR#14 glucose readings pushed via backfill will have ±1 mg/dL drift from the mmol/L round-trip — this is the best available data and acceptable
 
 ---
 
 ## Iteration 1
 
 **Implemented:** 2026-03-30
-**Method:** Agent team (3 workers, worktree-isolated)
+**Method:** Agent team (4 workers, worktree-isolated)
 
 ### Tasks Completed This Iteration
-- Task 1: Add zoneOffset to food log DTOs and domain model — added `zoneOffset: String? = null` to MealEntryDto, FoodLogEntry, and FoodScannerApiClient mapping (worker-1)
-- Task 2: Use zoneOffset in NutritionRecordMapper — parse via `ZoneId.of()`, fallback to system default on null/malformed (worker-1)
-- Task 3: Add range-read methods to Health Connect glucose and BP repositories — `getReadings(start, end)` with per-page timeout, pagination, per-record runCatching (worker-2)
-- Task 4: Add batch push methods to FoodScannerHealthRepository — `pushGlucoseReadings`/`pushBloodPressureReadings` with extracted DTO mapping helpers (worker-2)
-- Task 5: Add health readings sync timestamp to SettingsRepository — `lastHealthReadingsSyncTimestampFlow` + setter, DataStore key (worker-2)
-- Task 6: Create SyncHealthReadingsUseCase — reads HC glucose/BP, pushes in 1000-item chunks, updates timestamp on full success, best-effort (worker-3)
-- Task 7: Integrate health readings sync into SyncWorker — called after nutrition sync, fire-and-forget, skip on NeedsConfiguration (worker-3)
+- Task 1: Typed API exceptions for Food Scanner health endpoints — Created FoodScannerApiException sealed hierarchy, updated postGlucoseReadings/postBloodPressureReadings, 14 new tests (worker-1)
+- Task 2: Already-pushed ledger in SettingsRepository — Added per-type timestamp sets with JSON serialization, graceful degradation, 12 new tests (worker-2)
+- Task 3: Record direct pushes in Write use cases — Injected SettingsRepository, fire-and-forget ledger recording, 8 new tests (worker-2)
+- Task 4: Per-type sync timestamps and status metadata — Replaced shared watermark with independent per-type flows/setters, removed old field, 12 new tests (worker-2)
+- Task 5: Rewrite SyncHealthReadingsUseCase with capped incremental backfill — Full rewrite with 100-record cap, ledger filtering, retry with exponential backoff, error isolation, 27 new tests (worker-3)
+- Task 6: Home screen health sync status display — Added glucoseSyncStatus/bpSyncStatus to SyncUiState, combine blocks in ViewModel, status text in SyncScreen cards, 10 new tests (worker-4)
 
 ### Files Modified
-- `app/src/main/kotlin/com/healthhelper/app/data/api/dto/FoodLogResponse.kt` — added zoneOffset to MealEntryDto
-- `app/src/main/kotlin/com/healthhelper/app/domain/model/FoodLogEntry.kt` — added zoneOffset field
-- `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt` — pass zoneOffset in mapping
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/NutritionRecordMapper.kt` — use ZoneId.of() for zoneOffset parsing
-- `app/src/main/kotlin/com/healthhelper/app/domain/repository/BloodGlucoseRepository.kt` — added getReadings interface
-- `app/src/main/kotlin/com/healthhelper/app/domain/repository/BloodPressureRepository.kt` — added getReadings interface
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodGlucoseRepository.kt` — getReadings with per-page timeout and pagination
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodPressureRepository.kt` — getReadings with per-page timeout and pagination
-- `app/src/main/kotlin/com/healthhelper/app/domain/repository/FoodScannerHealthRepository.kt` — added batch push interfaces
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/FoodScannerHealthRepositoryImpl.kt` — batch push implementations with extracted DTO helpers
-- `app/src/main/kotlin/com/healthhelper/app/domain/repository/SettingsRepository.kt` — added health readings sync timestamp
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` — DataStore implementation
-- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncHealthReadingsUseCase.kt` — new use case
-- `app/src/main/kotlin/com/healthhelper/app/data/sync/SyncWorker.kt` — integrated health readings sync
-- `app/src/main/AndroidManifest.xml` — added READ_HEALTH_DATA_HISTORY permission
-- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` — added READ_HEALTH_DATA_HISTORY to runtime permissions
-- 7 test files (new and modified)
+- `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiException.kt` — Created sealed exception hierarchy
+- `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt` — Typed exceptions in Result.failure()
+- `app/src/main/kotlin/com/healthhelper/app/domain/repository/SettingsRepository.kt` — Per-type sync flows, ledger methods, removed old shared watermark
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` — Implemented all new settings with DataStore preferences
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/WriteGlucoseReadingUseCase.kt` — Ledger recording after FS push
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/WriteBloodPressureReadingUseCase.kt` — Ledger recording after FS push
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncHealthReadingsUseCase.kt` — Full rewrite with capped sync, retry, ledger filtering
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` — Sync status combine blocks, formatSyncStatus helper
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SyncScreen.kt` — Status text in glucose and BP cards
+- `app/src/test/kotlin/com/healthhelper/app/data/api/FoodScannerApiClientTest.kt` — 14 typed exception tests
+- `app/src/test/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepositoryTest.kt` — 24 new tests (ledger + per-type sync)
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/WriteGlucoseReadingUseCaseTest.kt` — 4 ledger recording tests
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/WriteBloodPressureReadingUseCaseTest.kt` — 4 ledger recording tests
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncHealthReadingsUseCaseTest.kt` — 27 tests (full rewrite)
+- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt` — 10 sync status tests
 
 ### Linear Updates
-- HEA-176: Todo → In Progress → Review
-- HEA-177: Todo → In Progress → Review
-- HEA-178: Todo → In Progress → Review
-- HEA-179: Todo → In Progress → Review
-- HEA-180: Todo → In Progress → Review
-- HEA-181: Todo → In Progress → Review
-- HEA-182: Todo → In Progress → Review
+- HEA-185: Todo → In Progress → Review
+- HEA-186: Todo → In Progress → Review
+- HEA-187: Todo → In Progress → Review
+- HEA-188: Todo → In Progress → Review
+- HEA-189: Todo → In Progress → Review
+- HEA-190: Todo → In Progress → Review
 
 ### Pre-commit Verification
-- bug-hunter: Found 3 bugs (1 HIGH, 2 MEDIUM), all fixed before proceeding
-  - HIGH: withTimeout wrapping entire pagination loop → moved to per-page timeout
-  - MEDIUM: pushInChunks all-or-nothing with no recovery → returns pushed count, stops on first failure
-  - MEDIUM: ZoneOffset.of() rejects "Z" and zone IDs → changed to ZoneId.of()
-- verifier: All tests pass, zero warnings, build successful
+- bug-hunter: Found 1 HIGH (missing logging in syncType), 2 MEDIUM (no-op DataStore transaction, ViewModel var fields). Fixed HIGH and first MEDIUM. Second MEDIUM is a false positive (viewModelScope guarantees Main dispatcher).
+- verifier: All tests pass, zero warnings
 
 ### Work Partition
-- Worker 1: Tasks 1, 2 (food log timezone — DTOs + mapper)
-- Worker 2: Tasks 3, 4, 5 (health data infrastructure — HC repos + batch push + settings)
-- Worker 3: Tasks 6, 7 (sync orchestration — use case + worker integration + manifest)
+- Worker 1: Task 1 (data/API — typed exceptions)
+- Worker 2: Tasks 2, 3, 4 (data+domain — settings ledger, write use cases, per-type timestamps)
+- Worker 3: Task 5 (domain — sync use case rewrite)
+- Worker 4: Task 6 (presentation — sync status UI)
 
 ### Merge Summary
-- Worker 2: fast-forward (no conflicts)
-- Worker 3: auto-merged, duplicate declarations from overlapping interface edits (resolved: removed worker-3 stubs, kept worker-2 real implementations)
-- Worker 1: auto-merged (no conflicts)
+- Worker 1: fast-forward (no conflicts)
+- Worker 2: merged cleanly (no conflicts)
+- Worker 3: merged, 3 conflicts in FoodScannerApiException.kt, SettingsRepository.kt, DataStoreSettingsRepository.kt (worker-3 stubs vs worker-1/2 real implementations — kept real implementations)
+- Worker 4: merged, 5 conflicts in SettingsRepository.kt, DataStoreSettingsRepository.kt, SyncHealthReadingsUseCase.kt, DataStoreSettingsRepositoryTest.kt, SyncHealthReadingsUseCaseTest.kt (worker-4 stubs vs worker-2/3 real implementations — kept real implementations via --ours)
+- Post-merge fix: exception constructor signature mismatch (worker-3 tests used String params, worker-1 used Int params)
 
 ### Review Findings
 
-Summary: 2 issue(s) found (Team: security, reliability, quality reviewers)
-- FIX: 2 issue(s) — Linear issues created
-- DISCARDED: 11 finding(s) — false positives / not applicable
+Summary: 14 findings raised by team (security, reliability, quality reviewers), 4 classified as FIX, 10 discarded
+- FIX: 4 issue(s) — Linear issues created in Todo
+- DISCARDED: 10 finding(s) — false positives / not applicable
 
 **Issues requiring fix:**
-- [MEDIUM] LOGGING: Silent mapping failures in getReadings pagination (`app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodGlucoseRepository.kt:118`, `HealthConnectBloodPressureRepository.kt:114`) — `runCatching { mapTo...Reading(record) }.getOrNull()` silently discards mapping failures with no log
-- [MEDIUM] TIMEOUT: No cumulative timeout on getReadings pagination loop (`app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodGlucoseRepository.kt:99-111`, `HealthConnectBloodPressureRepository.kt:95-107`) — per-page timeout (10s) but no overall cap; also `TimeoutCancellationException` catch discards all accumulated records
+- [HIGH] CONVENTION: java.util.logging.Logger instead of Timber (`app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncHealthReadingsUseCase.kt:14-15,131`) — inconsistent logging framework, logs routed differently than rest of app
+- [MEDIUM] CONVENTION: Missing `operator` keyword on invoke() (`app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncHealthReadingsUseCase.kt:28`) — breaks callable-as-function convention
+- [MEDIUM] BUG: Kotlin assert() instead of JUnit assertTrue (`app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncHealthReadingsUseCaseTest.kt:367`) — test is no-op without -ea flag
+- [MEDIUM] BUG: Sync count uses toPublish.size instead of server-reported count (`app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncHealthReadingsUseCase.kt:91`) — inflated count if server deduplicates
 
 **Discarded findings (not bugs):**
-- [DISCARDED] SECURITY: Sentry DSN in manifest — Sentry-recommended client embedding pattern, not a secret
-- [DISCARDED] SECURITY: Worker returns success on HC permission denial — intentional fire-and-forget design per plan
-- [DISCARDED] SECURITY: Exported share target activities — intentional share-target pattern
-- [DISCARDED] SECURITY: baseUrl path traversal — user self-configures, self-targeting only
-- [DISCARDED] LOGGING: getFoodLog missing duration log — observability improvement, not a bug; CLAUDE.md doesn't require duration logging
-- [DISCARDED] BUG: Log uses wrong variable in SyncHealthReadingsUseCase success path — values provably equal (all chunks pushed = total read)
-- [DISCARDED] TEST: Test doesn't verify sort behavior — false positive; records have distinct mg/dL values (81 vs 101), assertion IS sort-dependent
-- [DISCARDED] TYPE: `!!` force-unwraps in tests — style preference, NPE gives clear stack trace
-- [DISCARDED] BUG: TOCTOU race in apiKeyFlow callbackFlow — DataStore serializes writes, race window is one line of code
-- [DISCARDED] EDGE CASE: First sync uses Instant.EPOCH — explicitly intentional per plan documentation
-- [DISCARDED] BUG: Migration re-attempts on permanent failure — retry on transient failure is correct behavior; mutex prevents concurrent retries
+- [DISCARDED] SECURITY: LAST_SYNCED_MEALS in plaintext DataStore (`DataStoreSettingsRepository.kt:60`) — Consistent design: all non-credential data uses DataStore, only secrets use EncryptedSharedPreferences
+- [DISCARDED] SECURITY: READ_HEALTH_DATA_HISTORY raw string permission (`SyncViewModel.kt:78`) — Intentional: this is a real Android permission required for historical data access; the backfill feature needs it
+- [DISCARDED] SECURITY: Server error messages logged via Timber (`FoodScannerApiClient.kt:71,148,205`) — Standard debug practice; Timber production tree can be configured to suppress
+- [DISCARDED] SECURITY: Camera permission requested without rationale (`SyncScreen.kt:83-85`) — UX preference, not a correctness bug
+- [DISCARDED] BUG: getFoodLog uses generic Exception (`FoodScannerApiClient.kt:52-64`) — Intentionally out of scope per plan: "The getFoodLog method also uses generic exceptions but is out of scope"
+- [DISCARDED] RESOURCE: Ledger sets unbounded when watermark stays at 0 (`DataStoreSettingsRepository.kt:336,361`) — Growth bounded by user logging frequency (~1-2/day, ~7KB/year). Plan documents this bound explicitly.
+- [DISCARDED] TIMEOUT: No per-request timeout on HTTP operations (`FoodScannerApiClient.kt:40,124,180`) — False positive: HttpClient has 30s `HttpTimeout` configured in `AppModule.kt:104-105`
+- [DISCARDED] TIMEOUT: No timeout on Health Connect getReadings() (`SyncHealthReadingsUseCase.kt:74`) — WorkManager provides outer timeout; HC reads are sub-second in practice
+- [DISCARDED] RACE: ViewModel var fields written from multiple coroutines (`SyncViewModel.kt:86-92`) — Safe: all coroutines use viewModelScope which runs on Dispatchers.Main (single-threaded)
+- [DISCARDED] BUG: LocalDate.now() in DataStore edit lambda (`DataStoreSettingsRepository.kt:301`) — Negligible: days-level granularity makes retry variance irrelevant for 7-day ETag cutoff
 
 ### Linear Updates
-- HEA-176: Review → Merge
-- HEA-177: In Progress → Merge
-- HEA-178: Review → Merge
-- HEA-179: Review → Merge
-- HEA-180: Review → Merge
-- HEA-181: Review → Merge
-- HEA-182: Review → Merge
-- HEA-183: Created in Todo (Fix: silent mapping failures)
-- HEA-184: Created in Todo (Fix: cumulative pagination timeout)
+- HEA-185: Review → Merge
+- HEA-186: Review → Merge
+- HEA-187: Review → Merge
+- HEA-188: Review → Merge
+- HEA-189: Review → Merge
+- HEA-190: Review → Merge
+- HEA-191: Created in Todo (Fix: java.util.logging → Timber)
+- HEA-192: Created in Todo (Fix: missing operator keyword)
+- HEA-193: Created in Todo (Fix: Kotlin assert → JUnit assertTrue)
+- HEA-194: Created in Todo (Fix: sync count server-reported)
 
 <!-- REVIEW COMPLETE -->
-
-### Continuation Status
-All tasks completed.
 
 ---
 
 ## Fix Plan
 
 **Source:** Review findings from Iteration 1
-**Linear Issues:** [HEA-183](https://linear.app/lw-claude/issue/HEA-183/fix-silent-mapping-failures-in-getreadings-pagination), [HEA-184](https://linear.app/lw-claude/issue/HEA-184/fix-no-cumulative-timeout-on-getreadings-pagination-loop)
+**Linear Issues:** [HEA-191](https://linear.app/lw-claude/issue/HEA-191), [HEA-192](https://linear.app/lw-claude/issue/HEA-192), [HEA-193](https://linear.app/lw-claude/issue/HEA-193), [HEA-194](https://linear.app/lw-claude/issue/HEA-194)
 
-### Fix 1: Silent mapping failures in getReadings
-**Linear Issue:** [HEA-183](https://linear.app/lw-claude/issue/HEA-183/fix-silent-mapping-failures-in-getreadings-pagination)
+### Fix 1: Replace java.util.logging with Timber in SyncHealthReadingsUseCase
+**Linear Issue:** [HEA-191](https://linear.app/lw-claude/issue/HEA-191)
 
-1. Write test in `HealthConnectBloodGlucoseRepositoryTest.kt`: mock a record that throws during mapping, verify it's excluded from results (existing behavior) and that the method still returns other valid records
-2. Add `.onFailure { Timber.w(it, "getReadings: failed to map glucose record") }` before `.getOrNull()` in `HealthConnectBloodGlucoseRepository.kt:118`
-3. Apply same fix to `HealthConnectBloodPressureRepository.kt:114` with matching test
+1. Replace `java.util.logging.Logger` and `java.util.logging.Level` imports with `timber.log.Timber`
+2. Replace `logger.log(Level.WARNING, ...)` at line 100 with `Timber.w(e, "syncType failed, keeping watermark at %d", watermark)`
+3. Remove `logger` companion object field at line 131
+4. Run verifier (expect pass — no test changes needed)
 
-### Fix 2: Cumulative timeout on getReadings pagination
-**Linear Issue:** [HEA-184](https://linear.app/lw-claude/issue/HEA-184/fix-no-cumulative-timeout-on-getreadings-pagination-loop)
+### Fix 2: Add operator keyword to SyncHealthReadingsUseCase.invoke()
+**Linear Issue:** [HEA-192](https://linear.app/lw-claude/issue/HEA-192)
 
-1. Hoist `allRecords` declaration before the `try` block in both `HealthConnectBloodGlucoseRepository.kt` and `HealthConnectBloodPressureRepository.kt`
-2. Add cumulative elapsed-time check inside the `do...while` loop (e.g., 120s) that breaks and returns partial results with a `Timber.w` log
-3. Change `TimeoutCancellationException` catch to return partial `allRecords` (mapped and sorted) instead of `emptyList()`
-4. Add `paginationTruncated` flag to suppress the success log on truncated reads
-5. Write tests: mock multi-page responses, verify partial results returned on cumulative timeout and on per-page timeout after accumulation
+1. Change `suspend fun invoke()` to `suspend operator fun invoke()` at line 28
+2. Run verifier (expect pass)
+
+### Fix 3: Replace Kotlin assert() with JUnit assertTrue in retry delay test
+**Linear Issue:** [HEA-193](https://linear.app/lw-claude/issue/HEA-193)
+
+1. Replace `assert(testScheduler.currentTime >= 3500L)` with `assertTrue(testScheduler.currentTime >= 3500L, "Expected at least 3500ms of virtual time, got ${testScheduler.currentTime}ms")` at line 367
+2. Add `import org.junit.jupiter.api.Assertions.assertTrue` if not present
+3. Run verifier (expect pass — assertion should still hold)
+
+### Fix 4: Use server-reported count for sync count increment
+**Linear Issue:** [HEA-194](https://linear.app/lw-claude/issue/HEA-194)
+
+1. Write test in `SyncHealthReadingsUseCaseTest.kt`: when push returns Result.success(95) for 100 records sent, sync count increments by 95 (not 100)
+2. Run verifier (expect fail)
+3. Change line 91 from `setCount(currentCount + toPublish.size)` to `setCount(currentCount + (result.getOrNull() ?: toPublish.size))`
+4. Run verifier (expect pass)
 
 ---
 
 ## Iteration 2
 
 **Implemented:** 2026-03-30
-**Method:** Single-agent (effort score 3, 1 work unit)
+**Method:** Single-agent (effort score 4, 1 work unit)
 
 ### Tasks Completed This Iteration
-- Fix 1: Silent mapping failures in getReadings — added `.onFailure { Timber.w(...) }` before `.getOrNull()` in both glucose and BP repositories
-- Fix 2: Cumulative timeout on getReadings pagination — hoisted `allRecords` before `try`, added 120s cumulative timeout guard, changed `TimeoutCancellationException` catch to return partial results, added `paginationTruncated` flag
+- Fix 1: Replace java.util.logging with Timber in SyncHealthReadingsUseCase (HEA-191)
+- Fix 2: Add operator keyword to SyncHealthReadingsUseCase.invoke() (HEA-192)
+- Fix 3: Replace Kotlin assert() with JUnit assertTrue in retry delay test (HEA-193)
+- Fix 4: Use server-reported count for sync count increment (HEA-194)
 
 ### Files Modified
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodGlucoseRepository.kt` — mapping failure logging, cumulative timeout, partial results on timeout
-- `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodPressureRepository.kt` — same fixes as glucose
-- `app/src/test/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodGlucoseRepositoryTest.kt` — added mapping exclusion test, partial results on timeout test
-- `app/src/test/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodPressureRepositoryTest.kt` — same tests as glucose
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncHealthReadingsUseCase.kt` — Replaced java.util.logging with Timber, added operator keyword, use server-reported count
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/SyncHealthReadingsUseCaseTest.kt` — Replaced assert() with assertTrue, added server-reported count test
 
 ### Linear Updates
-- HEA-183: Todo → In Progress → Review
-- HEA-184: Todo → Review
+- HEA-191: Todo → In Progress → Review
+- HEA-192: Todo → In Progress → Review
+- HEA-193: Todo → In Progress → Review
+- HEA-194: Todo → In Progress → Review
 
 ### Pre-commit Verification
-- bug-hunter: Found 1 MEDIUM bug (dead `callCount` variable in timeout tests), fixed
-- verifier: All tests pass, zero warnings, build successful
+- bug-hunter: 0 functional bugs, 1 LOW convention finding (import ordering — fixed)
+- verifier: All 28 tests pass, zero warnings
 
 ### Review Findings
 
-Files reviewed: 4
-Reviewer: single-agent (≤4 files)
-Checks applied: Security, Logic, Async, Resources, Type Safety, Conventions
+Files reviewed: 2
+Reviewer: single-agent (≤4 changed files)
+Checks applied: Security, Logic, Async, Resources, Type Safety, Conventions, Test Quality
 
-No issues found - all implementations are correct and follow project conventions.
+No issues found - all 4 fixes are correct and follow project conventions.
 
 ### Linear Updates
-- HEA-183: Review → Merge
-- HEA-184: Review → Merge
+- HEA-191: Review → Merge
+- HEA-192: Review → Merge
+- HEA-193: Review → Merge
+- HEA-194: Review → Merge
 
 <!-- REVIEW COMPLETE -->
 
 ### Continuation Status
-All tasks completed.
+All fix plan tasks completed.
 
 ---
 

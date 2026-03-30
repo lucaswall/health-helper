@@ -4,9 +4,12 @@ import com.healthhelper.app.domain.model.GlucoseReading
 import com.healthhelper.app.domain.model.HealthDataWriteResult
 import com.healthhelper.app.domain.repository.BloodGlucoseRepository
 import com.healthhelper.app.domain.repository.FoodScannerHealthRepository
+import com.healthhelper.app.domain.repository.SettingsRepository
 import io.mockk.coEvery
+import io.mockk.coJustRun
 import io.mockk.coVerify
 import io.mockk.mockk
+import java.time.Instant
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
@@ -18,15 +21,18 @@ class WriteGlucoseReadingUseCaseTest {
 
     private lateinit var bloodGlucoseRepository: BloodGlucoseRepository
     private lateinit var foodScannerRepository: FoodScannerHealthRepository
+    private lateinit var settingsRepository: SettingsRepository
     private lateinit var useCase: WriteGlucoseReadingUseCase
 
-    private val testReading = GlucoseReading(valueMgDl = 101)
+    private val fixedInstant = Instant.ofEpochMilli(1_700_000_000_000L)
+    private val testReading = GlucoseReading(valueMgDl = 101, timestamp = fixedInstant)
 
     @BeforeEach
     fun setUp() {
         bloodGlucoseRepository = mockk()
         foodScannerRepository = mockk()
-        useCase = WriteGlucoseReadingUseCase(bloodGlucoseRepository, foodScannerRepository)
+        settingsRepository = mockk()
+        useCase = WriteGlucoseReadingUseCase(bloodGlucoseRepository, foodScannerRepository, settingsRepository)
     }
 
     @Test
@@ -34,6 +40,7 @@ class WriteGlucoseReadingUseCaseTest {
     fun bothSucceed() = runTest {
         coEvery { bloodGlucoseRepository.writeBloodGlucoseRecord(any()) } returns true
         coEvery { foodScannerRepository.pushGlucoseReading(any()) } returns Result.success(Unit)
+        coJustRun { settingsRepository.addDirectPushedGlucoseTimestamp(any()) }
 
         val result = useCase.invoke(testReading)
 
@@ -48,6 +55,7 @@ class WriteGlucoseReadingUseCaseTest {
     fun hcFailsFsSucceeds() = runTest {
         coEvery { bloodGlucoseRepository.writeBloodGlucoseRecord(any()) } returns false
         coEvery { foodScannerRepository.pushGlucoseReading(any()) } returns Result.success(Unit)
+        coJustRun { settingsRepository.addDirectPushedGlucoseTimestamp(any()) }
 
         val result = useCase.invoke(testReading)
 
@@ -111,5 +119,54 @@ class WriteGlucoseReadingUseCaseTest {
         assertTrue(result.healthConnectSuccess)
         assertTrue(result.foodScannerResult.isFailure)
         coVerify { bloodGlucoseRepository.writeBloodGlucoseRecord(any()) }
+    }
+
+    // --- Ledger recording tests ---
+
+    @Test
+    @DisplayName("when FS push succeeds, addDirectPushedGlucoseTimestamp is called with reading timestamp")
+    fun ledgerRecordedOnFsSuccess() = runTest {
+        coEvery { bloodGlucoseRepository.writeBloodGlucoseRecord(any()) } returns true
+        coEvery { foodScannerRepository.pushGlucoseReading(any()) } returns Result.success(Unit)
+        coJustRun { settingsRepository.addDirectPushedGlucoseTimestamp(any()) }
+
+        useCase.invoke(testReading)
+
+        coVerify { settingsRepository.addDirectPushedGlucoseTimestamp(fixedInstant.toEpochMilli()) }
+    }
+
+    @Test
+    @DisplayName("when FS push fails (Result.failure), addDirectPushedGlucoseTimestamp is NOT called")
+    fun ledgerNotRecordedOnFsFailure() = runTest {
+        coEvery { bloodGlucoseRepository.writeBloodGlucoseRecord(any()) } returns true
+        coEvery { foodScannerRepository.pushGlucoseReading(any()) } returns Result.failure(RuntimeException("FS error"))
+
+        useCase.invoke(testReading)
+
+        coVerify(exactly = 0) { settingsRepository.addDirectPushedGlucoseTimestamp(any()) }
+    }
+
+    @Test
+    @DisplayName("when FS push throws exception, addDirectPushedGlucoseTimestamp is NOT called")
+    fun ledgerNotRecordedOnFsException() = runTest {
+        coEvery { bloodGlucoseRepository.writeBloodGlucoseRecord(any()) } returns true
+        coEvery { foodScannerRepository.pushGlucoseReading(any()) } throws RuntimeException("FS error")
+
+        useCase.invoke(testReading)
+
+        coVerify(exactly = 0) { settingsRepository.addDirectPushedGlucoseTimestamp(any()) }
+    }
+
+    @Test
+    @DisplayName("ledger write failure does not affect the returned HealthDataWriteResult")
+    fun ledgerWriteFailureDoesNotAffectResult() = runTest {
+        coEvery { bloodGlucoseRepository.writeBloodGlucoseRecord(any()) } returns true
+        coEvery { foodScannerRepository.pushGlucoseReading(any()) } returns Result.success(Unit)
+        coEvery { settingsRepository.addDirectPushedGlucoseTimestamp(any()) } throws RuntimeException("ledger write failed")
+
+        val result = useCase.invoke(testReading)
+
+        assertTrue(result.healthConnectSuccess)
+        assertTrue(result.foodScannerResult.isSuccess)
     }
 }

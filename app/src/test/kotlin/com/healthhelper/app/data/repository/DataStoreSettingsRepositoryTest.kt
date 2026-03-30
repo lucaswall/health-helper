@@ -385,19 +385,198 @@ class DataStoreSettingsRepositoryTest {
         }
     }
 
-    // --- lastHealthReadingsSyncTimestamp tests ---
+    // --- Per-type sync timestamps and status metadata tests ---
 
     @Test
-    @DisplayName("lastHealthReadingsSyncTimestampFlow defaults to 0L")
-    fun defaultLastHealthReadingsSyncTimestamp() = testScope.runTest {
-        assertEquals(0L, repository.lastHealthReadingsSyncTimestampFlow.first())
+    @DisplayName("lastGlucoseSyncTimestampFlow emits 0L initially")
+    fun lastGlucoseSyncTimestampFlowDefaultsToZero() = testScope.runTest {
+        assertEquals(0L, repository.lastGlucoseSyncTimestampFlow.first())
     }
 
     @Test
-    @DisplayName("setLastHealthReadingsSyncTimestamp stores value and can be read back")
-    fun storeAndRetrieveLastHealthReadingsSyncTimestamp() = testScope.runTest {
-        repository.setLastHealthReadingsSyncTimestamp(1_711_700_000_000L)
-        assertEquals(1_711_700_000_000L, repository.lastHealthReadingsSyncTimestampFlow.first())
+    @DisplayName("setLastGlucoseSyncTimestamp stores value and flow emits it")
+    fun setLastGlucoseSyncTimestampStoresAndEmits() = testScope.runTest {
+        repository.setLastGlucoseSyncTimestamp(1_711_700_000_000L)
+        assertEquals(1_711_700_000_000L, repository.lastGlucoseSyncTimestampFlow.first())
+    }
+
+    @Test
+    @DisplayName("lastBpSyncTimestampFlow emits 0L initially")
+    fun lastBpSyncTimestampFlowDefaultsToZero() = testScope.runTest {
+        assertEquals(0L, repository.lastBpSyncTimestampFlow.first())
+    }
+
+    @Test
+    @DisplayName("setLastBpSyncTimestamp stores value and flow emits it")
+    fun setLastBpSyncTimestampStoresAndEmits() = testScope.runTest {
+        repository.setLastBpSyncTimestamp(1_711_700_000_000L)
+        assertEquals(1_711_700_000_000L, repository.lastBpSyncTimestampFlow.first())
+    }
+
+    @Test
+    @DisplayName("glucoseSyncCountFlow emits 0 initially")
+    fun glucoseSyncCountFlowDefaultsToZero() = testScope.runTest {
+        assertEquals(0, repository.glucoseSyncCountFlow.first())
+    }
+
+    @Test
+    @DisplayName("setGlucoseSyncCount stores value and flow emits it")
+    fun setGlucoseSyncCountStoresAndEmits() = testScope.runTest {
+        repository.setGlucoseSyncCount(42)
+        assertEquals(42, repository.glucoseSyncCountFlow.first())
+    }
+
+    @Test
+    @DisplayName("bpSyncCountFlow emits 0 initially")
+    fun bpSyncCountFlowDefaultsToZero() = testScope.runTest {
+        assertEquals(0, repository.bpSyncCountFlow.first())
+    }
+
+    @Test
+    @DisplayName("setBpSyncCount stores value and flow emits it")
+    fun setBpSyncCountStoresAndEmits() = testScope.runTest {
+        repository.setBpSyncCount(7)
+        assertEquals(7, repository.bpSyncCountFlow.first())
+    }
+
+    @Test
+    @DisplayName("glucoseSyncCaughtUpFlow emits false initially")
+    fun glucoseSyncCaughtUpFlowDefaultsToFalse() = testScope.runTest {
+        assertEquals(false, repository.glucoseSyncCaughtUpFlow.first())
+    }
+
+    @Test
+    @DisplayName("setGlucoseSyncCaughtUp(true) stores value and flow emits true")
+    fun setGlucoseSyncCaughtUpTrueStoresAndEmits() = testScope.runTest {
+        repository.setGlucoseSyncCaughtUp(true)
+        assertEquals(true, repository.glucoseSyncCaughtUpFlow.first())
+    }
+
+    @Test
+    @DisplayName("bpSyncCaughtUpFlow emits false initially")
+    fun bpSyncCaughtUpFlowDefaultsToFalse() = testScope.runTest {
+        assertEquals(false, repository.bpSyncCaughtUpFlow.first())
+    }
+
+    @Test
+    @DisplayName("setBpSyncCaughtUp(true) stores value and flow emits true")
+    fun setBpSyncCaughtUpTrueStoresAndEmits() = testScope.runTest {
+        repository.setBpSyncCaughtUp(true)
+        assertEquals(true, repository.bpSyncCaughtUpFlow.first())
+    }
+
+    // --- Direct pushed glucose timestamps (ledger) tests ---
+
+    @Test
+    @DisplayName("getDirectPushedGlucoseTimestamps returns empty set initially")
+    fun directPushedGlucoseTimestampsEmptyInitially() = testScope.runTest {
+        assertEquals(emptySet<Long>(), repository.getDirectPushedGlucoseTimestamps())
+    }
+
+    @Test
+    @DisplayName("addDirectPushedGlucoseTimestamp then get returns set containing the timestamp")
+    fun addDirectPushedGlucoseTimestampAndGet() = testScope.runTest {
+        val ts = 1_700_000_000_000L
+        repository.addDirectPushedGlucoseTimestamp(ts)
+        assertTrue(repository.getDirectPushedGlucoseTimestamps().contains(ts))
+    }
+
+    @Test
+    @DisplayName("multiple addDirectPushedGlucoseTimestamp calls accumulate in the set")
+    fun multipleAddDirectPushedGlucoseTimestampsAccumulate() = testScope.runTest {
+        val ts1 = 1_700_000_000_000L
+        val ts2 = 1_700_000_001_000L
+        val ts3 = 1_700_000_002_000L
+        repository.addDirectPushedGlucoseTimestamp(ts1)
+        repository.addDirectPushedGlucoseTimestamp(ts2)
+        repository.addDirectPushedGlucoseTimestamp(ts3)
+        assertEquals(setOf(ts1, ts2, ts3), repository.getDirectPushedGlucoseTimestamps())
+    }
+
+    @Test
+    @DisplayName("pruneDirectPushedTimestamps removes glucose entries older than threshold and keeps newer ones")
+    fun pruneDirectPushedGlucoseTimestamps() = testScope.runTest {
+        val old = 1_000L
+        val recent = 3_000L
+        val threshold = 2_000L
+        repository.addDirectPushedGlucoseTimestamp(old)
+        repository.addDirectPushedGlucoseTimestamp(recent)
+        repository.pruneDirectPushedTimestamps(glucoseBeforeMs = threshold, bpBeforeMs = 0L)
+        val result = repository.getDirectPushedGlucoseTimestamps()
+        assertFalse(result.contains(old))
+        assertTrue(result.contains(recent))
+    }
+
+    @Test
+    @DisplayName("pruneDirectPushedTimestamps on empty glucose set is a no-op")
+    fun pruneDirectPushedGlucoseTimestampsOnEmptySetIsNoOp() = testScope.runTest {
+        repository.pruneDirectPushedTimestamps(glucoseBeforeMs = 999_999L, bpBeforeMs = 0L)
+        assertEquals(emptySet<Long>(), repository.getDirectPushedGlucoseTimestamps())
+    }
+
+    // --- Direct pushed BP timestamps (ledger) tests ---
+
+    @Test
+    @DisplayName("getDirectPushedBpTimestamps returns empty set initially")
+    fun directPushedBpTimestampsEmptyInitially() = testScope.runTest {
+        assertEquals(emptySet<Long>(), repository.getDirectPushedBpTimestamps())
+    }
+
+    @Test
+    @DisplayName("addDirectPushedBpTimestamp then get returns set containing the timestamp")
+    fun addDirectPushedBpTimestampAndGet() = testScope.runTest {
+        val ts = 1_700_000_000_000L
+        repository.addDirectPushedBpTimestamp(ts)
+        assertTrue(repository.getDirectPushedBpTimestamps().contains(ts))
+    }
+
+    @Test
+    @DisplayName("multiple addDirectPushedBpTimestamp calls accumulate in the set")
+    fun multipleAddDirectPushedBpTimestampsAccumulate() = testScope.runTest {
+        val ts1 = 1_700_000_000_000L
+        val ts2 = 1_700_000_001_000L
+        val ts3 = 1_700_000_002_000L
+        repository.addDirectPushedBpTimestamp(ts1)
+        repository.addDirectPushedBpTimestamp(ts2)
+        repository.addDirectPushedBpTimestamp(ts3)
+        assertEquals(setOf(ts1, ts2, ts3), repository.getDirectPushedBpTimestamps())
+    }
+
+    @Test
+    @DisplayName("pruneDirectPushedTimestamps removes BP entries older than threshold and keeps newer ones")
+    fun pruneDirectPushedBpTimestamps() = testScope.runTest {
+        val old = 1_000L
+        val recent = 3_000L
+        val threshold = 2_000L
+        repository.addDirectPushedBpTimestamp(old)
+        repository.addDirectPushedBpTimestamp(recent)
+        repository.pruneDirectPushedTimestamps(glucoseBeforeMs = 0L, bpBeforeMs = threshold)
+        val result = repository.getDirectPushedBpTimestamps()
+        assertFalse(result.contains(old))
+        assertTrue(result.contains(recent))
+    }
+
+    @Test
+    @DisplayName("pruneDirectPushedTimestamps on empty BP set is a no-op")
+    fun pruneDirectPushedBpTimestampsOnEmptySetIsNoOp() = testScope.runTest {
+        repository.pruneDirectPushedTimestamps(glucoseBeforeMs = 0L, bpBeforeMs = 999_999L)
+        assertEquals(emptySet<Long>(), repository.getDirectPushedBpTimestamps())
+    }
+
+    // --- Corrupted JSON graceful degradation for ledger ---
+
+    @Test
+    @DisplayName("corrupted JSON in DataStore returns empty set for glucose timestamps")
+    fun corruptedJsonReturnsEmptySetForGlucoseTimestamps() = testScope.runTest {
+        dataStore.edit { it[stringPreferencesKey("direct_pushed_glucose_timestamps")] = "not-valid-json{{{" }
+        assertEquals(emptySet<Long>(), repository.getDirectPushedGlucoseTimestamps())
+    }
+
+    @Test
+    @DisplayName("corrupted JSON in DataStore returns empty set for BP timestamps")
+    fun corruptedJsonReturnsEmptySetForBpTimestamps() = testScope.runTest {
+        dataStore.edit { it[stringPreferencesKey("direct_pushed_bp_timestamps")] = "not-valid-json{{{" }
+        assertEquals(emptySet<Long>(), repository.getDirectPushedBpTimestamps())
     }
 
     @Test

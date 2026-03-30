@@ -54,6 +54,8 @@ data class SyncUiState(
     val lastGlucoseReading: GlucoseReading? = null,
     val lastGlucoseReadingDisplay: String = "",
     val lastGlucoseReadingTime: String = "",
+    val glucoseSyncStatus: String = "",
+    val bpSyncStatus: String = "",
 )
 
 @HiltViewModel
@@ -82,6 +84,12 @@ class SyncViewModel @Inject constructor(
 
     private var syncJob: Job? = null
     private var lastSyncTimestamp = 0L
+    private var lastGlucoseSyncTs = 0L
+    private var lastBpSyncTs = 0L
+    private var glucoseSyncCount = 0
+    private var bpSyncCount = 0
+    private var glucoseSyncCaughtUp = false
+    private var bpSyncCaughtUp = false
 
     init {
         Timber.d("SyncViewModel: init, healthConnectAvailable=%b", healthConnectClient != null)
@@ -166,6 +174,17 @@ class SyncViewModel @Inject constructor(
                         it.copy(lastGlucoseReadingTime = formatRelativeTime(currentGlucose.timestamp.toEpochMilli()))
                     }
                 }
+                // Refresh sync status strings that contain relative timestamps
+                if (lastGlucoseSyncTs > 0 && glucoseSyncCount > 0 && !glucoseSyncCaughtUp) {
+                    _uiState.update {
+                        it.copy(glucoseSyncStatus = formatSyncStatus(glucoseSyncCount, glucoseSyncCaughtUp, lastGlucoseSyncTs))
+                    }
+                }
+                if (lastBpSyncTs > 0 && bpSyncCount > 0 && !bpSyncCaughtUp) {
+                    _uiState.update {
+                        it.copy(bpSyncStatus = formatSyncStatus(bpSyncCount, bpSyncCaughtUp, lastBpSyncTs))
+                    }
+                }
             }
         }
 
@@ -173,6 +192,38 @@ class SyncViewModel @Inject constructor(
         viewModelScope.launch {
             settingsRepository.lastSyncedMealsFlow.collect { meals ->
                 _uiState.update { it.copy(lastSyncedMeals = meals) }
+            }
+        }
+
+        // Observe glucose sync status flows
+        viewModelScope.launch {
+            combine(
+                settingsRepository.glucoseSyncCountFlow,
+                settingsRepository.glucoseSyncCaughtUpFlow,
+                settingsRepository.lastGlucoseSyncTimestampFlow,
+            ) { count, caughtUp, ts ->
+                glucoseSyncCount = count
+                glucoseSyncCaughtUp = caughtUp
+                lastGlucoseSyncTs = ts
+                formatSyncStatus(count, caughtUp, ts)
+            }.collect { status ->
+                _uiState.update { it.copy(glucoseSyncStatus = status) }
+            }
+        }
+
+        // Observe BP sync status flows
+        viewModelScope.launch {
+            combine(
+                settingsRepository.bpSyncCountFlow,
+                settingsRepository.bpSyncCaughtUpFlow,
+                settingsRepository.lastBpSyncTimestampFlow,
+            ) { count, caughtUp, ts ->
+                bpSyncCount = count
+                bpSyncCaughtUp = caughtUp
+                lastBpSyncTs = ts
+                formatSyncStatus(count, caughtUp, ts)
+            }.collect { status ->
+                _uiState.update { it.copy(bpSyncStatus = status) }
             }
         }
 
@@ -333,6 +384,21 @@ class SyncViewModel @Inject constructor(
         }
     }
 }
+
+internal fun formatSyncStatus(count: Int, caughtUp: Boolean, timestampMs: Long): String =
+    when {
+        count == 0 && !caughtUp -> "Not synced to food-scanner"
+        count == 0 && caughtUp -> "No readings to sync"
+        count > 0 && caughtUp -> "$count synced to food-scanner"
+        else -> {
+            val dateStr = formatRelativeTime(timestampMs)
+            if (dateStr.isNotEmpty()) {
+                "Syncing to food-scanner: up to $dateStr ($count pushed)"
+            } else {
+                "Syncing to food-scanner ($count pushed)"
+            }
+        }
+    }
 
 internal fun formatRelativeTime(timestampMillis: Long): String {
     if (timestampMillis <= 0L) return ""
