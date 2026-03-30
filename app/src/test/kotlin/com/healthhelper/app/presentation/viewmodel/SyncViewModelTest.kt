@@ -294,6 +294,52 @@ class SyncViewModelTest {
     }
 
     @Test
+    fun `cancelSync cancels running sync and shows cancelled message`() = viewModelTest {
+        coEvery { syncNutritionUseCase.invoke(any()) } coAnswers {
+            kotlinx.coroutines.delay(5000L)
+            SyncResult.Success(1, 1)
+        }
+        coEvery { settingsRepository.isConfigured() } returns true
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.triggerSync()
+        testDispatcher.scheduler.advanceTimeBy(100L)
+
+        // Sync should be running
+        assertTrue(viewModel.uiState.value.isSyncing)
+
+        // Cancel it
+        viewModel.cancelSync()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertFalse(state.isSyncing)
+            assertEquals("Sync cancelled", state.lastSyncResult)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `cancelSync does nothing when not syncing`() = viewModelTest {
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        // Should not throw or change state
+        viewModel.cancelSync()
+        advanceTimeBy(100)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertFalse(state.isSyncing)
+            assertNull(state.lastSyncResult)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
     fun `isConfigured updates when apiKey and baseUrl flows emit new values`() = viewModelTest {
         // Start unconfigured
         every { settingsRepository.apiKeyFlow } returns flowOf("")
@@ -832,7 +878,7 @@ class SyncViewModelTest {
     // --- Task 6 (HEA-190): Home screen sync status display ---
 
     @Test
-    fun `glucoseSyncStatus shows count synced when caughtUp true and count 342`() = viewModelTest {
+    fun `glucoseSyncStatus shows pushed count when caughtUp true and count 342`() = viewModelTest {
         every { settingsRepository.glucoseSyncCountFlow } returns flowOf(342)
         every { settingsRepository.glucoseSyncCaughtUpFlow } returns flowOf(true)
         every { settingsRepository.lastGlucoseSyncTimestampFlow } returns flowOf(0L)
@@ -842,13 +888,13 @@ class SyncViewModelTest {
 
         viewModel.uiState.test {
             val state = awaitItem()
-            assertEquals("342 synced to food-scanner", state.glucoseSyncStatus)
+            assertEquals("Pushed 342 readings", state.glucoseSyncStatus)
             cancelAndIgnoreRemainingEvents()
         }
     }
 
     @Test
-    fun `glucoseSyncStatus shows syncing with date when caughtUp false and count 100 and timestamp maps to Mar 15`() = viewModelTest {
+    fun `glucoseSyncStatus shows pushed count with date when caughtUp false and count 100 and timestamp maps to Mar 15`() = viewModelTest {
         val mar15Ms = java.time.Instant.parse("2026-03-15T12:00:00Z").toEpochMilli()
         every { settingsRepository.glucoseSyncCountFlow } returns flowOf(100)
         every { settingsRepository.glucoseSyncCaughtUpFlow } returns flowOf(false)
@@ -859,7 +905,7 @@ class SyncViewModelTest {
 
         viewModel.uiState.test {
             val state = awaitItem()
-            assertEquals("Syncing to food-scanner: up to Mar 15 (100 pushed)", state.glucoseSyncStatus)
+            assertEquals("Pushed 100 readings · Mar 15", state.glucoseSyncStatus)
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -895,7 +941,7 @@ class SyncViewModelTest {
     }
 
     @Test
-    fun `bpSyncStatus shows count synced when caughtUp true and count 342`() = viewModelTest {
+    fun `bpSyncStatus shows pushed count when caughtUp true and count 342`() = viewModelTest {
         every { settingsRepository.bpSyncCountFlow } returns flowOf(342)
         every { settingsRepository.bpSyncCaughtUpFlow } returns flowOf(true)
         every { settingsRepository.lastBpSyncTimestampFlow } returns flowOf(0L)
@@ -905,13 +951,13 @@ class SyncViewModelTest {
 
         viewModel.uiState.test {
             val state = awaitItem()
-            assertEquals("342 synced to food-scanner", state.bpSyncStatus)
+            assertEquals("Pushed 342 readings", state.bpSyncStatus)
             cancelAndIgnoreRemainingEvents()
         }
     }
 
     @Test
-    fun `bpSyncStatus shows syncing with date when caughtUp false and count 100 and timestamp maps to Mar 15`() = viewModelTest {
+    fun `bpSyncStatus shows pushed count with date when caughtUp false and count 100 and timestamp maps to Mar 15`() = viewModelTest {
         val mar15Ms = java.time.Instant.parse("2026-03-15T12:00:00Z").toEpochMilli()
         every { settingsRepository.bpSyncCountFlow } returns flowOf(100)
         every { settingsRepository.bpSyncCaughtUpFlow } returns flowOf(false)
@@ -922,7 +968,7 @@ class SyncViewModelTest {
 
         viewModel.uiState.test {
             val state = awaitItem()
-            assertEquals("Syncing to food-scanner: up to Mar 15 (100 pushed)", state.bpSyncStatus)
+            assertEquals("Pushed 100 readings · Mar 15", state.bpSyncStatus)
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -958,7 +1004,7 @@ class SyncViewModelTest {
     }
 
     @Test
-    fun `glucoseSyncStatus has no date part when timestamp is 0`() = viewModelTest {
+    fun `glucoseSyncStatus has no time part when timestamp is 0`() = viewModelTest {
         every { settingsRepository.glucoseSyncCountFlow } returns flowOf(50)
         every { settingsRepository.glucoseSyncCaughtUpFlow } returns flowOf(false)
         every { settingsRepository.lastGlucoseSyncTimestampFlow } returns flowOf(0L)
@@ -968,16 +1014,13 @@ class SyncViewModelTest {
 
         viewModel.uiState.test {
             val state = awaitItem()
-            assertFalse(
-                state.glucoseSyncStatus.contains("up to"),
-                "Expected no 'up to' date in '${state.glucoseSyncStatus}'",
-            )
+            assertEquals("Pushed 50 readings", state.glucoseSyncStatus)
             cancelAndIgnoreRemainingEvents()
         }
     }
 
     @Test
-    fun `glucoseSyncStatus contains relative time string when timestamp is positive and caughtUp false`() = viewModelTest {
+    fun `glucoseSyncStatus contains relative time when timestamp is positive`() = viewModelTest {
         val mar15Ms = java.time.Instant.parse("2026-03-15T12:00:00Z").toEpochMilli()
         every { settingsRepository.glucoseSyncCountFlow } returns flowOf(50)
         every { settingsRepository.glucoseSyncCaughtUpFlow } returns flowOf(false)
@@ -989,10 +1032,7 @@ class SyncViewModelTest {
         viewModel.uiState.test {
             val state = awaitItem()
             val relativeTime = formatRelativeTime(mar15Ms)
-            assertTrue(
-                state.glucoseSyncStatus.contains(relativeTime),
-                "Expected '$relativeTime' in '${state.glucoseSyncStatus}'",
-            )
+            assertEquals("Pushed 50 readings · $relativeTime", state.glucoseSyncStatus)
             cancelAndIgnoreRemainingEvents()
         }
     }

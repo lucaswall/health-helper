@@ -278,15 +278,15 @@ class SyncHealthReadingsUseCaseTest {
     // =========== SYNC COUNT TRACKING ===========
 
     @Test
-    @DisplayName("on successful push of N records, sync count incremented by N")
-    fun syncCountIncrementedByN() = runTest {
+    @DisplayName("on successful push of N records, sync count set to last batch size")
+    fun syncCountSetToLastBatch() = runTest {
         every { settingsRepository.glucoseSyncCountFlow } returns flowOf(10)
         coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns glucoseReadings(5)
         coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns Result.success(5)
 
         createUseCase().invoke()
 
-        coVerify { settingsRepository.setGlucoseSyncCount(15) }
+        coVerify { settingsRepository.setGlucoseSyncCount(5) }
     }
 
     @Test
@@ -298,7 +298,7 @@ class SyncHealthReadingsUseCaseTest {
 
         createUseCase().invoke()
 
-        coVerify { settingsRepository.setGlucoseSyncCount(105) }
+        coVerify { settingsRepository.setGlucoseSyncCount(95) }
     }
 
     @Test
@@ -313,8 +313,8 @@ class SyncHealthReadingsUseCaseTest {
 
         createUseCase().invoke()
 
-        coVerify { settingsRepository.setGlucoseSyncCount(8) }
-        coVerify { settingsRepository.setBpSyncCount(9) }
+        coVerify { settingsRepository.setGlucoseSyncCount(3) }
+        coVerify { settingsRepository.setBpSyncCount(2) }
     }
 
     // =========== RETRY WITH BACKOFF ===========

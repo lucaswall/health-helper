@@ -343,6 +343,13 @@ class SyncViewModel @Inject constructor(
         _uiState.update { it.copy(cameraPermissionGranted = granted) }
     }
 
+    fun cancelSync() {
+        val job = syncJob ?: return
+        if (!job.isActive) return
+        Timber.d("SyncViewModel: cancelSync requested by user")
+        job.cancel()
+    }
+
     fun triggerSync() {
         if (_uiState.value.isSyncing) {
             Timber.d("SyncViewModel: triggerSync ignored, already syncing")
@@ -389,7 +396,8 @@ class SyncViewModel @Inject constructor(
                     }
                 }
             } catch (e: CancellationException) {
-                throw e
+                Timber.d("SyncViewModel: triggerSync cancelled")
+                _uiState.update { it.copy(lastSyncResult = "Sync cancelled") }
             } catch (e: Exception) {
                 Timber.e(e, "triggerSync unexpected error")
                 _uiState.update { it.copy(lastSyncResult = "Sync failed. Please try again.") }
@@ -409,13 +417,13 @@ internal fun formatSyncStatus(count: Int, caughtUp: Boolean, timestampMs: Long):
     when {
         count == 0 && !caughtUp -> "Not synced to food-scanner"
         count == 0 && caughtUp -> "No readings to sync"
-        count > 0 && caughtUp -> "$count synced to food-scanner"
         else -> {
-            val dateStr = formatRelativeTime(timestampMs)
-            if (dateStr.isNotEmpty()) {
-                "Syncing to food-scanner: up to $dateStr ($count pushed)"
+            val timeStr = formatRelativeTime(timestampMs)
+            val label = if (count == 1) "reading" else "readings"
+            if (timeStr.isNotEmpty()) {
+                "Pushed $count $label · $timeStr"
             } else {
-                "Syncing to food-scanner ($count pushed)"
+                "Pushed $count $label"
             }
         }
     }

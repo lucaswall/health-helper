@@ -15,6 +15,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -202,13 +203,22 @@ fun SyncScreen(
 
                     Spacer(modifier = Modifier.height(4.dp))
 
-                    Button(
-                        onClick = viewModel::triggerSync,
-                        enabled = !uiState.isSyncing && uiState.isConfigured
-                            && uiState.healthConnectAvailable && uiState.permissionGranted,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(if (uiState.isSyncing) "Syncing..." else "Sync Now")
+                    if (uiState.isSyncing) {
+                        OutlinedButton(
+                            onClick = viewModel::cancelSync,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Cancel Sync")
+                        }
+                    } else {
+                        Button(
+                            onClick = viewModel::triggerSync,
+                            enabled = uiState.isConfigured
+                                && uiState.healthConnectAvailable && uiState.permissionGranted,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Sync Now")
+                        }
                     }
                 }
             }

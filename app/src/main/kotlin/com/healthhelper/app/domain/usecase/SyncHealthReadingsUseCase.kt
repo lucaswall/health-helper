@@ -32,7 +32,6 @@ class SyncHealthReadingsUseCase @Inject constructor(
             pushReadings = foodScannerHealthRepository::pushGlucoseReadings,
             watermarkFlow = settingsRepository.lastGlucoseSyncTimestampFlow,
             setWatermark = settingsRepository::setLastGlucoseSyncTimestamp,
-            countFlow = settingsRepository.glucoseSyncCountFlow,
             setCount = settingsRepository::setGlucoseSyncCount,
             setCaughtUp = settingsRepository::setGlucoseSyncCaughtUp,
             getLedger = settingsRepository::getDirectPushedGlucoseTimestamps,
@@ -44,7 +43,6 @@ class SyncHealthReadingsUseCase @Inject constructor(
             pushReadings = foodScannerHealthRepository::pushBloodPressureReadings,
             watermarkFlow = settingsRepository.lastBpSyncTimestampFlow,
             setWatermark = settingsRepository::setLastBpSyncTimestamp,
-            countFlow = settingsRepository.bpSyncCountFlow,
             setCount = settingsRepository::setBpSyncCount,
             setCaughtUp = settingsRepository::setBpSyncCaughtUp,
             getLedger = settingsRepository::getDirectPushedBpTimestamps,
@@ -59,7 +57,6 @@ class SyncHealthReadingsUseCase @Inject constructor(
         pushReadings: suspend (List<T>) -> Result<Int>,
         watermarkFlow: Flow<Long>,
         setWatermark: suspend (Long) -> Unit,
-        countFlow: Flow<Int>,
         setCount: suspend (Int) -> Unit,
         setCaughtUp: suspend (Boolean) -> Unit,
         getLedger: suspend () -> Set<Long>,
@@ -86,8 +83,7 @@ class SyncHealthReadingsUseCase @Inject constructor(
             if (toPublish.isNotEmpty()) {
                 val result = pushWithRetry { pushReadings(toPublish) }
                 if (result.isFailure) return watermark
-                val currentCount = countFlow.first()
-                setCount(currentCount + (result.getOrNull() ?: toPublish.size))
+                setCount(result.getOrNull() ?: toPublish.size)
             }
 
             setWatermark(lastBatchTimestamp)
