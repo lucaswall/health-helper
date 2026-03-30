@@ -385,19 +385,42 @@ class DataStoreSettingsRepositoryTest {
         }
     }
 
-    // --- lastHealthReadingsSyncTimestamp tests ---
+    // --- per-type sync flow stubs ---
 
     @Test
-    @DisplayName("lastHealthReadingsSyncTimestampFlow defaults to 0L")
-    fun defaultLastHealthReadingsSyncTimestamp() = testScope.runTest {
-        assertEquals(0L, repository.lastHealthReadingsSyncTimestampFlow.first())
+    @DisplayName("lastGlucoseSyncTimestampFlow defaults to 0L")
+    fun defaultLastGlucoseSyncTimestamp() = testScope.runTest {
+        assertEquals(0L, repository.lastGlucoseSyncTimestampFlow.first())
     }
 
     @Test
-    @DisplayName("setLastHealthReadingsSyncTimestamp stores value and can be read back")
-    fun storeAndRetrieveLastHealthReadingsSyncTimestamp() = testScope.runTest {
-        repository.setLastHealthReadingsSyncTimestamp(1_711_700_000_000L)
-        assertEquals(1_711_700_000_000L, repository.lastHealthReadingsSyncTimestampFlow.first())
+    @DisplayName("lastBpSyncTimestampFlow defaults to 0L")
+    fun defaultLastBpSyncTimestamp() = testScope.runTest {
+        assertEquals(0L, repository.lastBpSyncTimestampFlow.first())
+    }
+
+    @Test
+    @DisplayName("glucoseSyncCountFlow defaults to 0")
+    fun defaultGlucoseSyncCount() = testScope.runTest {
+        assertEquals(0, repository.glucoseSyncCountFlow.first())
+    }
+
+    @Test
+    @DisplayName("bpSyncCountFlow defaults to 0")
+    fun defaultBpSyncCount() = testScope.runTest {
+        assertEquals(0, repository.bpSyncCountFlow.first())
+    }
+
+    @Test
+    @DisplayName("glucoseSyncCaughtUpFlow defaults to false")
+    fun defaultGlucoseSyncCaughtUp() = testScope.runTest {
+        assertEquals(false, repository.glucoseSyncCaughtUpFlow.first())
+    }
+
+    @Test
+    @DisplayName("bpSyncCaughtUpFlow defaults to false")
+    fun defaultBpSyncCaughtUp() = testScope.runTest {
+        assertEquals(false, repository.bpSyncCaughtUpFlow.first())
     }
 
     @Test

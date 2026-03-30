@@ -25,7 +25,7 @@ class SyncHealthReadingsUseCase @Inject constructor(
             return
         }
 
-        val lastTimestamp = settingsRepository.lastHealthReadingsSyncTimestampFlow.first()
+        val lastTimestamp = settingsRepository.lastGlucoseSyncTimestampFlow.first()
         val end = Instant.now()
         val start = if (lastTimestamp == 0L) {
             Instant.EPOCH
@@ -73,7 +73,7 @@ class SyncHealthReadingsUseCase @Inject constructor(
         val bpFailed = bpReadings.isNotEmpty() && bpPushed < bpReadings.size
 
         if (!glucoseFailed && !bpFailed) {
-            settingsRepository.setLastHealthReadingsSyncTimestamp(end.toEpochMilli())
+            settingsRepository.setLastGlucoseSyncTimestamp(end.toEpochMilli())
             Timber.d(
                 "SyncHealthReadings: done — pushed %d glucose, %d BP; updated timestamp to %d",
                 glucoseReadings.size,

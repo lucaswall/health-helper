@@ -51,10 +51,10 @@ class SyncHealthReadingsUseCaseTest {
     @DisplayName("first sync uses Instant.EPOCH as start")
     fun firstSyncUsesEpochAsStart() = runTest {
         coEvery { settingsRepository.isConfigured() } returns true
-        every { settingsRepository.lastHealthReadingsSyncTimestampFlow } returns flowOf(0L)
+        every { settingsRepository.lastGlucoseSyncTimestampFlow } returns flowOf(0L)
         coEvery { bloodGlucoseRepository.getReadings(Instant.EPOCH, any()) } returns emptyList()
         coEvery { bloodPressureRepository.getReadings(Instant.EPOCH, any()) } returns emptyList()
-        coEvery { settingsRepository.setLastHealthReadingsSyncTimestamp(any()) } returns Unit
+        coEvery { settingsRepository.setLastGlucoseSyncTimestamp(any()) } returns Unit
 
         createUseCase().invoke()
 
@@ -69,10 +69,10 @@ class SyncHealthReadingsUseCaseTest {
         val expectedStart = Instant.ofEpochMilli(lastTimestamp).minus(1, ChronoUnit.DAYS)
 
         coEvery { settingsRepository.isConfigured() } returns true
-        every { settingsRepository.lastHealthReadingsSyncTimestampFlow } returns flowOf(lastTimestamp)
+        every { settingsRepository.lastGlucoseSyncTimestampFlow } returns flowOf(lastTimestamp)
         coEvery { bloodGlucoseRepository.getReadings(expectedStart, any()) } returns emptyList()
         coEvery { bloodPressureRepository.getReadings(expectedStart, any()) } returns emptyList()
-        coEvery { settingsRepository.setLastHealthReadingsSyncTimestamp(any()) } returns Unit
+        coEvery { settingsRepository.setLastGlucoseSyncTimestamp(any()) } returns Unit
 
         createUseCase().invoke()
 
@@ -84,62 +84,62 @@ class SyncHealthReadingsUseCaseTest {
     @DisplayName("glucose readings pushed successfully updates sync timestamp")
     fun glucosePushedSuccessfullyUpdatesTimestamp() = runTest {
         coEvery { settingsRepository.isConfigured() } returns true
-        every { settingsRepository.lastHealthReadingsSyncTimestampFlow } returns flowOf(0L)
+        every { settingsRepository.lastGlucoseSyncTimestampFlow } returns flowOf(0L)
         coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns listOf(glucoseReading)
         coEvery { bloodPressureRepository.getReadings(any(), any()) } returns emptyList()
         coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns Result.success(1)
-        coEvery { settingsRepository.setLastHealthReadingsSyncTimestamp(any()) } returns Unit
+        coEvery { settingsRepository.setLastGlucoseSyncTimestamp(any()) } returns Unit
 
         createUseCase().invoke()
 
-        coVerify { settingsRepository.setLastHealthReadingsSyncTimestamp(any()) }
+        coVerify { settingsRepository.setLastGlucoseSyncTimestamp(any()) }
     }
 
     @Test
     @DisplayName("BP readings pushed successfully updates sync timestamp")
     fun bpPushedSuccessfullyUpdatesTimestamp() = runTest {
         coEvery { settingsRepository.isConfigured() } returns true
-        every { settingsRepository.lastHealthReadingsSyncTimestampFlow } returns flowOf(0L)
+        every { settingsRepository.lastGlucoseSyncTimestampFlow } returns flowOf(0L)
         coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns emptyList()
         coEvery { bloodPressureRepository.getReadings(any(), any()) } returns listOf(bpReading)
         coEvery { foodScannerHealthRepository.pushBloodPressureReadings(any()) } returns Result.success(1)
-        coEvery { settingsRepository.setLastHealthReadingsSyncTimestamp(any()) } returns Unit
+        coEvery { settingsRepository.setLastGlucoseSyncTimestamp(any()) } returns Unit
 
         createUseCase().invoke()
 
-        coVerify { settingsRepository.setLastHealthReadingsSyncTimestamp(any()) }
+        coVerify { settingsRepository.setLastGlucoseSyncTimestamp(any()) }
     }
 
     @Test
     @DisplayName("mixed glucose and BP readings both pushed and timestamp updated")
     fun mixedReadingsBothPushedUpdatesTimestamp() = runTest {
         coEvery { settingsRepository.isConfigured() } returns true
-        every { settingsRepository.lastHealthReadingsSyncTimestampFlow } returns flowOf(0L)
+        every { settingsRepository.lastGlucoseSyncTimestampFlow } returns flowOf(0L)
         coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns listOf(glucoseReading)
         coEvery { bloodPressureRepository.getReadings(any(), any()) } returns listOf(bpReading)
         coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns Result.success(1)
         coEvery { foodScannerHealthRepository.pushBloodPressureReadings(any()) } returns Result.success(1)
-        coEvery { settingsRepository.setLastHealthReadingsSyncTimestamp(any()) } returns Unit
+        coEvery { settingsRepository.setLastGlucoseSyncTimestamp(any()) } returns Unit
 
         createUseCase().invoke()
 
         coVerify { foodScannerHealthRepository.pushGlucoseReadings(any()) }
         coVerify { foodScannerHealthRepository.pushBloodPressureReadings(any()) }
-        coVerify { settingsRepository.setLastHealthReadingsSyncTimestamp(any()) }
+        coVerify { settingsRepository.setLastGlucoseSyncTimestamp(any()) }
     }
 
     @Test
     @DisplayName("no readings found still updates sync timestamp")
     fun noReadingsFoundUpdatesTimestamp() = runTest {
         coEvery { settingsRepository.isConfigured() } returns true
-        every { settingsRepository.lastHealthReadingsSyncTimestampFlow } returns flowOf(0L)
+        every { settingsRepository.lastGlucoseSyncTimestampFlow } returns flowOf(0L)
         coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns emptyList()
         coEvery { bloodPressureRepository.getReadings(any(), any()) } returns emptyList()
-        coEvery { settingsRepository.setLastHealthReadingsSyncTimestamp(any()) } returns Unit
+        coEvery { settingsRepository.setLastGlucoseSyncTimestamp(any()) } returns Unit
 
         createUseCase().invoke()
 
-        coVerify { settingsRepository.setLastHealthReadingsSyncTimestamp(any()) }
+        coVerify { settingsRepository.setLastGlucoseSyncTimestamp(any()) }
         coVerify(exactly = 0) { foodScannerHealthRepository.pushGlucoseReadings(any()) }
         coVerify(exactly = 0) { foodScannerHealthRepository.pushBloodPressureReadings(any()) }
     }
@@ -148,7 +148,7 @@ class SyncHealthReadingsUseCaseTest {
     @DisplayName("glucose push fails but BP push succeeds - does not update sync timestamp")
     fun glucosePushFailsDoesNotUpdateTimestamp() = runTest {
         coEvery { settingsRepository.isConfigured() } returns true
-        every { settingsRepository.lastHealthReadingsSyncTimestampFlow } returns flowOf(0L)
+        every { settingsRepository.lastGlucoseSyncTimestampFlow } returns flowOf(0L)
         coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns listOf(glucoseReading)
         coEvery { bloodPressureRepository.getReadings(any(), any()) } returns listOf(bpReading)
         coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns Result.failure(Exception("push failed"))
@@ -156,14 +156,14 @@ class SyncHealthReadingsUseCaseTest {
 
         createUseCase().invoke()
 
-        coVerify(exactly = 0) { settingsRepository.setLastHealthReadingsSyncTimestamp(any()) }
+        coVerify(exactly = 0) { settingsRepository.setLastGlucoseSyncTimestamp(any()) }
     }
 
     @Test
     @DisplayName("BP push fails but glucose push succeeds - does not update sync timestamp")
     fun bpPushFailsDoesNotUpdateTimestamp() = runTest {
         coEvery { settingsRepository.isConfigured() } returns true
-        every { settingsRepository.lastHealthReadingsSyncTimestampFlow } returns flowOf(0L)
+        every { settingsRepository.lastGlucoseSyncTimestampFlow } returns flowOf(0L)
         coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns listOf(glucoseReading)
         coEvery { bloodPressureRepository.getReadings(any(), any()) } returns listOf(bpReading)
         coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns Result.success(1)
@@ -171,34 +171,34 @@ class SyncHealthReadingsUseCaseTest {
 
         createUseCase().invoke()
 
-        coVerify(exactly = 0) { settingsRepository.setLastHealthReadingsSyncTimestamp(any()) }
+        coVerify(exactly = 0) { settingsRepository.setLastGlucoseSyncTimestamp(any()) }
     }
 
     @Test
     @DisplayName("Health Connect SecurityException on glucose read - caught, BP still processed, timestamp updated")
     fun glucoseSecurityExceptionCaughtBpStillProcessed() = runTest {
         coEvery { settingsRepository.isConfigured() } returns true
-        every { settingsRepository.lastHealthReadingsSyncTimestampFlow } returns flowOf(0L)
+        every { settingsRepository.lastGlucoseSyncTimestampFlow } returns flowOf(0L)
         coEvery { bloodGlucoseRepository.getReadings(any(), any()) } throws SecurityException("no permission")
         coEvery { bloodPressureRepository.getReadings(any(), any()) } returns listOf(bpReading)
         coEvery { foodScannerHealthRepository.pushBloodPressureReadings(any()) } returns Result.success(1)
-        coEvery { settingsRepository.setLastHealthReadingsSyncTimestamp(any()) } returns Unit
+        coEvery { settingsRepository.setLastGlucoseSyncTimestamp(any()) } returns Unit
 
         createUseCase().invoke()
 
         coVerify(exactly = 0) { foodScannerHealthRepository.pushGlucoseReadings(any()) }
         coVerify { foodScannerHealthRepository.pushBloodPressureReadings(any()) }
-        coVerify { settingsRepository.setLastHealthReadingsSyncTimestamp(any()) }
+        coVerify { settingsRepository.setLastGlucoseSyncTimestamp(any()) }
     }
 
     @Test
     @DisplayName("Health Connect empty list - no API call made for that type")
     fun emptyListMakesNoApiCall() = runTest {
         coEvery { settingsRepository.isConfigured() } returns true
-        every { settingsRepository.lastHealthReadingsSyncTimestampFlow } returns flowOf(0L)
+        every { settingsRepository.lastGlucoseSyncTimestampFlow } returns flowOf(0L)
         coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns emptyList()
         coEvery { bloodPressureRepository.getReadings(any(), any()) } returns emptyList()
-        coEvery { settingsRepository.setLastHealthReadingsSyncTimestamp(any()) } returns Unit
+        coEvery { settingsRepository.setLastGlucoseSyncTimestamp(any()) } returns Unit
 
         createUseCase().invoke()
 
@@ -222,11 +222,11 @@ class SyncHealthReadingsUseCaseTest {
         val readings = (1..1500).map { GlucoseReading(valueMgDl = 100) }
 
         coEvery { settingsRepository.isConfigured() } returns true
-        every { settingsRepository.lastHealthReadingsSyncTimestampFlow } returns flowOf(0L)
+        every { settingsRepository.lastGlucoseSyncTimestampFlow } returns flowOf(0L)
         coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns readings
         coEvery { bloodPressureRepository.getReadings(any(), any()) } returns emptyList()
         coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns Result.success(1000)
-        coEvery { settingsRepository.setLastHealthReadingsSyncTimestamp(any()) } returns Unit
+        coEvery { settingsRepository.setLastGlucoseSyncTimestamp(any()) } returns Unit
 
         createUseCase().invoke()
 
@@ -240,11 +240,11 @@ class SyncHealthReadingsUseCaseTest {
         val readings = (1..2000).map { BloodPressureReading(systolic = 120, diastolic = 80) }
 
         coEvery { settingsRepository.isConfigured() } returns true
-        every { settingsRepository.lastHealthReadingsSyncTimestampFlow } returns flowOf(0L)
+        every { settingsRepository.lastGlucoseSyncTimestampFlow } returns flowOf(0L)
         coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns emptyList()
         coEvery { bloodPressureRepository.getReadings(any(), any()) } returns readings
         coEvery { foodScannerHealthRepository.pushBloodPressureReadings(any()) } returns Result.success(1000)
-        coEvery { settingsRepository.setLastHealthReadingsSyncTimestamp(any()) } returns Unit
+        coEvery { settingsRepository.setLastGlucoseSyncTimestamp(any()) } returns Unit
 
         createUseCase().invoke()
 
