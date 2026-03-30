@@ -116,14 +116,14 @@
    - Use `TimeRangeFilter.between(start, end)` instead of `TimeRangeFilter.after()`
    - Map all records via `mapToGlucoseReading()`, wrapping each in `runCatching` (same as `getLastReading`)
    - Sort by timestamp ascending
-   - No pagination needed — 30 days of manual readings is well under the page size limit
+   - Pagination needed for large time windows (CGM data). Use `pageToken` loop to read all records.
 7. Implement same pattern in `HealthConnectBloodPressureRepository`
 8. Run verifier (expect pass)
 
 **Notes:**
 - `getLastReading()` already uses `runCatching` per-record to skip records that fail mapping (e.g., out-of-range values). Follow same pattern.
 - Ascending sort is natural for push-to-server (oldest first)
-- CGM data (e.g., Dexcom every 5 min) could produce ~8640 records in 30 days. Health Connect pagination may be needed if reading large windows. For now, single read is acceptable — the sync window is typically 1-2 days after initial backfill.
+- CGM data (e.g., Dexcom every 5 min) could produce thousands of records. Use Health Connect `pageToken` pagination to read all records in the window. Sort all pages combined by timestamp ascending before returning.
 
 ### Task 4: Add batch push methods to FoodScannerHealthRepository
 **Linear Issue:** [HEA-179](https://linear.app/lw-claude/issue/HEA-179/add-batch-push-methods-to-foodscannerhealthrepository)
@@ -192,7 +192,7 @@
 **Steps:**
 1. Write tests:
    - Settings not configured: returns early without error (health readings sync is best-effort)
-   - First sync (timestamp = 0): reads from 30 days ago to now, pushes all to Food Scanner
+   - First sync (timestamp = 0): reads from `Instant.EPOCH` to now (all available history), pushes all to Food Scanner
    - Subsequent sync: reads from last sync timestamp minus 1 day (overlap buffer) to now
    - Glucose readings found and pushed successfully: updates sync timestamp
    - BP readings found and pushed successfully: updates sync timestamp
@@ -210,7 +210,7 @@
    - `suspend fun invoke()`:
      1. Check `settingsRepository.isConfigured()` — return early if not
      2. Read `lastHealthReadingsSyncTimestamp` from settings
-     3. Calculate `start`: if timestamp is 0, use `Instant.now().minus(30, ChronoUnit.DAYS)`; otherwise `Instant.ofEpochMilli(timestamp).minus(1, ChronoUnit.DAYS)` (1-day overlap to catch late-arriving records)
+     3. Calculate `start`: if timestamp is 0, use `Instant.EPOCH` (read all available history); otherwise `Instant.ofEpochMilli(timestamp).minus(1, ChronoUnit.DAYS)` (1-day overlap to catch late-arriving records)
      4. Calculate `end`: `Instant.now()`
      5. Read glucose readings from Health Connect via `bloodGlucoseRepository.getReadings(start, end)` — wrap in try-catch for SecurityException
      6. Read BP readings from Health Connect via `bloodPressureRepository.getReadings(start, end)` — wrap in try-catch for SecurityException
@@ -225,11 +225,15 @@
 - The 1-day overlap on subsequent syncs handles late-arriving records (e.g., CGM data syncing from phone). Food Scanner's upsert on `measuredAt` deduplicates.
 - CancellationException must propagate — check before catching generic Exception
 - Chunking at 1000 matches Food Scanner API batch limit
+- First sync uses `Instant.EPOCH` as start — Health Connect will return all records it has. The `READ_HEALTH_DATA_HISTORY` permission (added in this task) removes the 30-day read limit.
+- Add `<uses-permission android:name="android.permission.health.READ_HEALTH_DATA_HISTORY" />` to `AndroidManifest.xml` (after existing Health Connect permissions). This permission must also be requested at runtime alongside existing HC permissions.
+- Update the permission request flow (wherever existing HC permissions are requested) to include `READ_HEALTH_DATA_HISTORY`
 
 **Defensive Requirements:**
 - CancellationException rethrown before any generic catch
 - SecurityException from Health Connect reads caught independently per type (glucose failure doesn't skip BP)
 - 10s timeout inherited from repository layer — no additional timeout needed here
+- If `READ_HEALTH_DATA_HISTORY` is not granted, Health Connect silently limits to 30 days — no crash, just reduced backfill scope
 
 ### Task 7: Integrate health readings sync into SyncWorker
 **Linear Issue:** [HEA-182](https://linear.app/lw-claude/issue/HEA-182/integrate-health-readings-sync-into-syncworker)
@@ -287,5 +291,5 @@
 
 **Risks/Considerations:**
 - CGM devices (Dexcom) can produce ~288 readings/day (every 5 min). First 30-day backfill could be ~8640 records — well within batch limits but worth monitoring API response time
-- Health Connect's 30-day default read limit caps initial backfill. `READ_HEALTH_DATA_HISTORY` permission could extend this later if needed
+- `READ_HEALTH_DATA_HISTORY` permission added to read all available history. If user denies, Health Connect silently limits to 30 days — no crash, reduced scope
 - `zoneOffset` may be null for older Food Scanner entries logged before the field was added — fallback to system default is correct for these
