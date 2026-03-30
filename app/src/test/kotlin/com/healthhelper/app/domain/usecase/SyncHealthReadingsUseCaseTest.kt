@@ -102,10 +102,10 @@ class SyncHealthReadingsUseCaseTest {
     }
 
     @Test
-    @DisplayName("subsequent run reads glucose from exact saved timestamp with no 1-day overlap")
-    fun subsequentRunGlucoseReadsFromExactSavedTimestamp() = runTest {
+    @DisplayName("subsequent run reads glucose from watermark + 1ms to exclude last processed record")
+    fun subsequentRunGlucoseReadsFromWatermarkPlus1ms() = runTest {
         val savedTs = Instant.parse("2026-03-01T12:00:00Z").toEpochMilli()
-        val expectedStart = Instant.ofEpochMilli(savedTs)
+        val expectedStart = Instant.ofEpochMilli(savedTs + 1)
         every { settingsRepository.lastGlucoseSyncTimestampFlow } returns flowOf(savedTs)
         coEvery { bloodGlucoseRepository.getReadings(expectedStart, any()) } returns emptyList()
 
@@ -118,7 +118,7 @@ class SyncHealthReadingsUseCaseTest {
     @DisplayName("glucose and BP use independent watermarks")
     fun glucoseAndBpUseIndependentWatermarks() = runTest {
         val bpTs = Instant.parse("2026-03-01T12:00:00Z").toEpochMilli()
-        val bpStart = Instant.ofEpochMilli(bpTs)
+        val bpStart = Instant.ofEpochMilli(bpTs + 1)
         every { settingsRepository.lastGlucoseSyncTimestampFlow } returns flowOf(0L)
         every { settingsRepository.lastBpSyncTimestampFlow } returns flowOf(bpTs)
         coEvery { bloodPressureRepository.getReadings(bpStart, any()) } returns emptyList()

@@ -67,7 +67,7 @@ class SyncHealthReadingsUseCase @Inject constructor(
     ): Long {
         val watermark = watermarkFlow.first()
         return try {
-            val start = if (watermark == 0L) Instant.EPOCH else Instant.ofEpochMilli(watermark)
+            val start = if (watermark == 0L) Instant.EPOCH else Instant.ofEpochMilli(watermark + 1)
             val end = Instant.now()
 
             val readings = getReadings(start, end)
