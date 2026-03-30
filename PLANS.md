@@ -293,3 +293,67 @@
 - CGM devices (Dexcom) can produce ~288 readings/day (every 5 min). First 30-day backfill could be ~8640 records — well within batch limits but worth monitoring API response time
 - `READ_HEALTH_DATA_HISTORY` permission added to read all available history. If user denies, Health Connect silently limits to 30 days — no crash, reduced scope
 - `zoneOffset` may be null for older Food Scanner entries logged before the field was added — fallback to system default is correct for these
+
+---
+
+## Iteration 1
+
+**Implemented:** 2026-03-30
+**Method:** Agent team (3 workers, worktree-isolated)
+
+### Tasks Completed This Iteration
+- Task 1: Add zoneOffset to food log DTOs and domain model — added `zoneOffset: String? = null` to MealEntryDto, FoodLogEntry, and FoodScannerApiClient mapping (worker-1)
+- Task 2: Use zoneOffset in NutritionRecordMapper — parse via `ZoneId.of()`, fallback to system default on null/malformed (worker-1)
+- Task 3: Add range-read methods to Health Connect glucose and BP repositories — `getReadings(start, end)` with per-page timeout, pagination, per-record runCatching (worker-2)
+- Task 4: Add batch push methods to FoodScannerHealthRepository — `pushGlucoseReadings`/`pushBloodPressureReadings` with extracted DTO mapping helpers (worker-2)
+- Task 5: Add health readings sync timestamp to SettingsRepository — `lastHealthReadingsSyncTimestampFlow` + setter, DataStore key (worker-2)
+- Task 6: Create SyncHealthReadingsUseCase — reads HC glucose/BP, pushes in 1000-item chunks, updates timestamp on full success, best-effort (worker-3)
+- Task 7: Integrate health readings sync into SyncWorker — called after nutrition sync, fire-and-forget, skip on NeedsConfiguration (worker-3)
+
+### Files Modified
+- `app/src/main/kotlin/com/healthhelper/app/data/api/dto/FoodLogResponse.kt` — added zoneOffset to MealEntryDto
+- `app/src/main/kotlin/com/healthhelper/app/domain/model/FoodLogEntry.kt` — added zoneOffset field
+- `app/src/main/kotlin/com/healthhelper/app/data/api/FoodScannerApiClient.kt` — pass zoneOffset in mapping
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/NutritionRecordMapper.kt` — use ZoneId.of() for zoneOffset parsing
+- `app/src/main/kotlin/com/healthhelper/app/domain/repository/BloodGlucoseRepository.kt` — added getReadings interface
+- `app/src/main/kotlin/com/healthhelper/app/domain/repository/BloodPressureRepository.kt` — added getReadings interface
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodGlucoseRepository.kt` — getReadings with per-page timeout and pagination
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodPressureRepository.kt` — getReadings with per-page timeout and pagination
+- `app/src/main/kotlin/com/healthhelper/app/domain/repository/FoodScannerHealthRepository.kt` — added batch push interfaces
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/FoodScannerHealthRepositoryImpl.kt` — batch push implementations with extracted DTO helpers
+- `app/src/main/kotlin/com/healthhelper/app/domain/repository/SettingsRepository.kt` — added health readings sync timestamp
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/DataStoreSettingsRepository.kt` — DataStore implementation
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncHealthReadingsUseCase.kt` — new use case
+- `app/src/main/kotlin/com/healthhelper/app/data/sync/SyncWorker.kt` — integrated health readings sync
+- `app/src/main/AndroidManifest.xml` — added READ_HEALTH_DATA_HISTORY permission
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` — added READ_HEALTH_DATA_HISTORY to runtime permissions
+- 7 test files (new and modified)
+
+### Linear Updates
+- HEA-176: Todo → In Progress → Review
+- HEA-177: Todo → In Progress → Review
+- HEA-178: Todo → In Progress → Review
+- HEA-179: Todo → In Progress → Review
+- HEA-180: Todo → In Progress → Review
+- HEA-181: Todo → In Progress → Review
+- HEA-182: Todo → In Progress → Review
+
+### Pre-commit Verification
+- bug-hunter: Found 3 bugs (1 HIGH, 2 MEDIUM), all fixed before proceeding
+  - HIGH: withTimeout wrapping entire pagination loop → moved to per-page timeout
+  - MEDIUM: pushInChunks all-or-nothing with no recovery → returns pushed count, stops on first failure
+  - MEDIUM: ZoneOffset.of() rejects "Z" and zone IDs → changed to ZoneId.of()
+- verifier: All tests pass, zero warnings, build successful
+
+### Work Partition
+- Worker 1: Tasks 1, 2 (food log timezone — DTOs + mapper)
+- Worker 2: Tasks 3, 4, 5 (health data infrastructure — HC repos + batch push + settings)
+- Worker 3: Tasks 6, 7 (sync orchestration — use case + worker integration + manifest)
+
+### Merge Summary
+- Worker 2: fast-forward (no conflicts)
+- Worker 3: auto-merged, duplicate declarations from overlapping interface edits (resolved: removed worker-3 stubs, kept worker-2 real implementations)
+- Worker 1: auto-merged (no conflicts)
+
+### Continuation Status
+All tasks completed.

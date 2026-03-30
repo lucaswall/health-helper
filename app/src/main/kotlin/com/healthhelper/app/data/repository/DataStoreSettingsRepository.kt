@@ -53,7 +53,6 @@ class DataStoreSettingsRepository @Inject constructor(
         val LAST_HEALTH_READINGS_SYNC_TIMESTAMP = longPreferencesKey("last_health_readings_sync_timestamp")
         val LAST_SYNCED_MEALS = stringPreferencesKey("last_synced_meals")
         val FOOD_LOG_ETAGS = stringPreferencesKey("food_log_etags")
-        val LAST_HEALTH_READINGS_SYNC_TIMESTAMP = longPreferencesKey("last_health_readings_sync_timestamp")
         const val DEFAULT_SYNC_INTERVAL = 15
         const val ENCRYPTED_API_KEY = "api_key"
         const val ENCRYPTED_ANTHROPIC_KEY = "anthropic_api_key"
@@ -268,10 +267,6 @@ class DataStoreSettingsRepository @Inject constructor(
             pruned[date] = etag
             prefs[FOOD_LOG_ETAGS] = Json.encodeToString(pruned)
         }
-    }
-
-    override suspend fun setLastHealthReadingsSyncTimestamp(value: Long) {
-        dataStore.edit { it[LAST_HEALTH_READINGS_SYNC_TIMESTAMP] = value }
     }
 
     override suspend fun isConfigured(): Boolean {

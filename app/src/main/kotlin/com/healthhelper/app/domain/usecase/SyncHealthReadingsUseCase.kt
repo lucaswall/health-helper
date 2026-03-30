@@ -49,24 +49,28 @@ class SyncHealthReadingsUseCase @Inject constructor(
             bpReadings.size,
         )
 
-        var glucoseFailed = false
-        var bpFailed = false
-
-        if (glucoseReadings.isNotEmpty()) {
-            glucoseFailed = !pushInChunks(
+        val glucosePushed = if (glucoseReadings.isNotEmpty()) {
+            pushInChunks(
                 items = glucoseReadings,
                 label = "glucose",
                 push = { chunk -> foodScannerHealthRepository.pushGlucoseReadings(chunk) },
             )
+        } else {
+            glucoseReadings.size
         }
 
-        if (bpReadings.isNotEmpty()) {
-            bpFailed = !pushInChunks(
+        val bpPushed = if (bpReadings.isNotEmpty()) {
+            pushInChunks(
                 items = bpReadings,
                 label = "BP",
                 push = { chunk -> foodScannerHealthRepository.pushBloodPressureReadings(chunk) },
             )
+        } else {
+            bpReadings.size
         }
+
+        val glucoseFailed = glucoseReadings.isNotEmpty() && glucosePushed < glucoseReadings.size
+        val bpFailed = bpReadings.isNotEmpty() && bpPushed < bpReadings.size
 
         if (!glucoseFailed && !bpFailed) {
             settingsRepository.setLastHealthReadingsSyncTimestamp(end.toEpochMilli())
@@ -78,9 +82,11 @@ class SyncHealthReadingsUseCase @Inject constructor(
             )
         } else {
             Timber.w(
-                "SyncHealthReadings: done with failures — glucoseFailed=%b, bpFailed=%b; timestamp NOT updated",
-                glucoseFailed,
-                bpFailed,
+                "SyncHealthReadings: partial failure — pushed %d/%d glucose, %d/%d BP; timestamp NOT updated",
+                glucosePushed,
+                glucoseReadings.size,
+                bpPushed,
+                bpReadings.size,
             )
         }
     }
@@ -117,7 +123,8 @@ class SyncHealthReadingsUseCase @Inject constructor(
         items: List<T>,
         label: String,
         push: suspend (List<T>) -> Result<Int>,
-    ): Boolean {
+    ): Int {
+        var totalPushed = 0
         val chunks = items.chunked(CHUNK_SIZE)
         for ((index, chunk) in chunks.withIndex()) {
             val result = push(chunk)
@@ -129,10 +136,11 @@ class SyncHealthReadingsUseCase @Inject constructor(
                     chunks.size,
                     result.exceptionOrNull()?.message,
                 )
-                return false
+                return totalPushed
             }
+            totalPushed += chunk.size
         }
-        return true
+        return totalPushed
     }
 
     companion object {

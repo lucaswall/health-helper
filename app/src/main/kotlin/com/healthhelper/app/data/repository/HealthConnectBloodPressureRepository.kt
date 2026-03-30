@@ -47,10 +47,6 @@ class HealthConnectBloodPressureRepository @Inject constructor(
         }
     }
 
-    override suspend fun getReadings(start: Instant, end: Instant): List<BloodPressureReading> {
-        throw NotImplementedError("getReadings not yet implemented")
-    }
-
     override suspend fun getLastReading(): BloodPressureReading? {
         if (healthConnectClient == null) {
             Timber.w("getLastReading: Health Connect not available")
@@ -95,20 +91,20 @@ class HealthConnectBloodPressureRepository @Inject constructor(
         return try {
             val startMs = System.currentTimeMillis()
             val allRecords = mutableListOf<BloodPressureRecord>()
-            withTimeout(10_000L) {
-                var pageToken: String? = null
-                do {
-                    val response = healthConnectClient.readRecords(
+            var pageToken: String? = null
+            do {
+                val response = withTimeout(10_000L) {
+                    healthConnectClient.readRecords(
                         ReadRecordsRequest(
                             recordType = BloodPressureRecord::class,
                             timeRangeFilter = TimeRangeFilter.between(start, end),
                             pageToken = pageToken,
                         ),
                     )
-                    allRecords.addAll(response.records)
-                    pageToken = response.pageToken
-                } while (pageToken != null)
-            }
+                }
+                allRecords.addAll(response.records)
+                pageToken = response.pageToken
+            } while (pageToken != null)
             Timber.d(
                 "getReadings: read %d BP records in %dms",
                 allRecords.size,

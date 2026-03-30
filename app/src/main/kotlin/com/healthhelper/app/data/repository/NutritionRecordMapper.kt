@@ -11,7 +11,6 @@ import timber.log.Timber
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
-import java.time.ZoneOffset
 import java.time.ZonedDateTime
 import java.time.format.DateTimeParseException
 
@@ -29,7 +28,7 @@ fun mapToNutritionRecord(entry: FoodLogEntry, date: String): NutritionRecord {
     }
     val zoneId: java.time.ZoneId = if (entry.zoneOffset != null) {
         try {
-            ZoneOffset.of(entry.zoneOffset)
+            ZoneId.of(entry.zoneOffset)
         } catch (e: java.time.DateTimeException) {
             Timber.w("mapToNutritionRecord: unparseable zoneOffset '%s' for entry %d, defaulting to system", entry.zoneOffset, entry.id)
             ZoneId.systemDefault()
