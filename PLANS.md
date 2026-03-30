@@ -355,5 +355,64 @@
 - Worker 3: auto-merged, duplicate declarations from overlapping interface edits (resolved: removed worker-3 stubs, kept worker-2 real implementations)
 - Worker 1: auto-merged (no conflicts)
 
+### Review Findings
+
+Summary: 2 issue(s) found (Team: security, reliability, quality reviewers)
+- FIX: 2 issue(s) — Linear issues created
+- DISCARDED: 11 finding(s) — false positives / not applicable
+
+**Issues requiring fix:**
+- [MEDIUM] LOGGING: Silent mapping failures in getReadings pagination (`app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodGlucoseRepository.kt:118`, `HealthConnectBloodPressureRepository.kt:114`) — `runCatching { mapTo...Reading(record) }.getOrNull()` silently discards mapping failures with no log
+- [MEDIUM] TIMEOUT: No cumulative timeout on getReadings pagination loop (`app/src/main/kotlin/com/healthhelper/app/data/repository/HealthConnectBloodGlucoseRepository.kt:99-111`, `HealthConnectBloodPressureRepository.kt:95-107`) — per-page timeout (10s) but no overall cap; also `TimeoutCancellationException` catch discards all accumulated records
+
+**Discarded findings (not bugs):**
+- [DISCARDED] SECURITY: Sentry DSN in manifest — Sentry-recommended client embedding pattern, not a secret
+- [DISCARDED] SECURITY: Worker returns success on HC permission denial — intentional fire-and-forget design per plan
+- [DISCARDED] SECURITY: Exported share target activities — intentional share-target pattern
+- [DISCARDED] SECURITY: baseUrl path traversal — user self-configures, self-targeting only
+- [DISCARDED] LOGGING: getFoodLog missing duration log — observability improvement, not a bug; CLAUDE.md doesn't require duration logging
+- [DISCARDED] BUG: Log uses wrong variable in SyncHealthReadingsUseCase success path — values provably equal (all chunks pushed = total read)
+- [DISCARDED] TEST: Test doesn't verify sort behavior — false positive; records have distinct mg/dL values (81 vs 101), assertion IS sort-dependent
+- [DISCARDED] TYPE: `!!` force-unwraps in tests — style preference, NPE gives clear stack trace
+- [DISCARDED] BUG: TOCTOU race in apiKeyFlow callbackFlow — DataStore serializes writes, race window is one line of code
+- [DISCARDED] EDGE CASE: First sync uses Instant.EPOCH — explicitly intentional per plan documentation
+- [DISCARDED] BUG: Migration re-attempts on permanent failure — retry on transient failure is correct behavior; mutex prevents concurrent retries
+
+### Linear Updates
+- HEA-176: Review → Merge
+- HEA-177: In Progress → Merge
+- HEA-178: Review → Merge
+- HEA-179: Review → Merge
+- HEA-180: Review → Merge
+- HEA-181: Review → Merge
+- HEA-182: Review → Merge
+- HEA-183: Created in Todo (Fix: silent mapping failures)
+- HEA-184: Created in Todo (Fix: cumulative pagination timeout)
+
+<!-- REVIEW COMPLETE -->
+
 ### Continuation Status
 All tasks completed.
+
+---
+
+## Fix Plan
+
+**Source:** Review findings from Iteration 1
+**Linear Issues:** [HEA-183](https://linear.app/lw-claude/issue/HEA-183/fix-silent-mapping-failures-in-getreadings-pagination), [HEA-184](https://linear.app/lw-claude/issue/HEA-184/fix-no-cumulative-timeout-on-getreadings-pagination-loop)
+
+### Fix 1: Silent mapping failures in getReadings
+**Linear Issue:** [HEA-183](https://linear.app/lw-claude/issue/HEA-183/fix-silent-mapping-failures-in-getreadings-pagination)
+
+1. Write test in `HealthConnectBloodGlucoseRepositoryTest.kt`: mock a record that throws during mapping, verify it's excluded from results (existing behavior) and that the method still returns other valid records
+2. Add `.onFailure { Timber.w(it, "getReadings: failed to map glucose record") }` before `.getOrNull()` in `HealthConnectBloodGlucoseRepository.kt:118`
+3. Apply same fix to `HealthConnectBloodPressureRepository.kt:114` with matching test
+
+### Fix 2: Cumulative timeout on getReadings pagination
+**Linear Issue:** [HEA-184](https://linear.app/lw-claude/issue/HEA-184/fix-no-cumulative-timeout-on-getreadings-pagination-loop)
+
+1. Hoist `allRecords` declaration before the `try` block in both `HealthConnectBloodGlucoseRepository.kt` and `HealthConnectBloodPressureRepository.kt`
+2. Add cumulative elapsed-time check inside the `do...while` loop (e.g., 120s) that breaks and returns partial results with a `Timber.w` log
+3. Change `TimeoutCancellationException` catch to return partial `allRecords` (mapped and sorted) instead of `emptyList()`
+4. Add `paginationTruncated` flag to suppress the success log on truncated reads
+5. Write tests: mock multi-page responses, verify partial results returned on cumulative timeout and on per-page timeout after accumulation
