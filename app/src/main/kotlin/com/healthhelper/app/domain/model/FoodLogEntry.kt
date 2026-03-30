@@ -5,6 +5,7 @@ data class FoodLogEntry(
     val foodName: String,
     val mealType: MealType,
     val time: String?,
+    val zoneOffset: String? = null,
     val calories: Double,
     val proteinG: Double,
     val carbsG: Double,

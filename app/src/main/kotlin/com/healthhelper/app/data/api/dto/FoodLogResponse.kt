@@ -30,6 +30,7 @@ data class MealEntryDto(
     val id: Int,
     val foodName: String,
     val time: String? = null,
+    val zoneOffset: String? = null,
     val calories: Double,
     val proteinG: Double,
     val carbsG: Double,

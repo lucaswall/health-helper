@@ -431,6 +431,77 @@ class FoodScannerApiClientTest {
     }
 
     @Test
+    @DisplayName("zoneOffset present in JSON is mapped to FoodLogEntry")
+    fun zoneOffsetMappedFromJson() = runTest {
+        val json = """
+            {
+                "success": true,
+                "data": {
+                    "date": "2026-02-27",
+                    "meals": [{
+                        "mealTypeId": 1,
+                        "entries": [{
+                            "id": 101,
+                            "foodName": "Oatmeal",
+                            "time": "08:00:00",
+                            "zoneOffset": "+05:30",
+                            "calories": 300.0,
+                            "proteinG": 10.0,
+                            "carbsG": 50.0,
+                            "fatG": 5.0,
+                            "fiberG": 4.0,
+                            "sodiumMg": 100.0
+                        }]
+                    }]
+                },
+                "timestamp": 123
+            }
+        """.trimIndent()
+        val engine = MockEngine { respond(content = json, headers = jsonHeaders) }
+        val client = createClient(engine)
+
+        val result = client.getFoodLog("https://food.example.com", "fsk_test", "2026-02-27")
+
+        assertTrue(result.isSuccess)
+        assertEquals("+05:30", result.getOrThrow().entries[0].zoneOffset)
+    }
+
+    @Test
+    @DisplayName("zoneOffset absent in JSON maps to null on FoodLogEntry")
+    fun zoneOffsetAbsentMapsToNull() = runTest {
+        val json = """
+            {
+                "success": true,
+                "data": {
+                    "date": "2026-02-27",
+                    "meals": [{
+                        "mealTypeId": 1,
+                        "entries": [{
+                            "id": 101,
+                            "foodName": "Oatmeal",
+                            "time": "08:00:00",
+                            "calories": 300.0,
+                            "proteinG": 10.0,
+                            "carbsG": 50.0,
+                            "fatG": 5.0,
+                            "fiberG": 4.0,
+                            "sodiumMg": 100.0
+                        }]
+                    }]
+                },
+                "timestamp": 123
+            }
+        """.trimIndent()
+        val engine = MockEngine { respond(content = json, headers = jsonHeaders) }
+        val client = createClient(engine)
+
+        val result = client.getFoodLog("https://food.example.com", "fsk_test", "2026-02-27")
+
+        assertTrue(result.isSuccess)
+        assertNull(result.getOrThrow().entries[0].zoneOffset)
+    }
+
+    @Test
     @DisplayName("500 response returns failure with 'Server unavailable' message")
     fun serverError500() = runTest {
         val engine = MockEngine { respondError(HttpStatusCode.InternalServerError) }
