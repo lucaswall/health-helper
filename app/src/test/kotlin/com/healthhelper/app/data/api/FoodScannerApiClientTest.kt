@@ -814,4 +814,178 @@ class FoodScannerApiClientTest {
 
         assertTrue(result.isFailure)
     }
+
+    // --- Typed exception tests for postGlucoseReadings ---
+
+    @Test
+    @DisplayName("postGlucoseReadings 429 wraps RateLimitException in Result")
+    fun postGlucoseReadings429TypedRateLimit() = runTest {
+        val engine = MockEngine { respondError(HttpStatusCode.TooManyRequests) }
+        val client = createClient(engine)
+
+        val result = client.postGlucoseReadings("https://food.example.com", "fsk_test", sampleGlucoseRequest)
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull() is RateLimitException)
+    }
+
+    @Test
+    @DisplayName("postGlucoseReadings 401 wraps AuthenticationException in Result")
+    fun postGlucoseReadings401TypedAuth() = runTest {
+        val engine = MockEngine { respondError(HttpStatusCode.Unauthorized) }
+        val client = createClient(engine)
+
+        val result = client.postGlucoseReadings("https://food.example.com", "fsk_bad", sampleGlucoseRequest)
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull() is AuthenticationException)
+    }
+
+    @Test
+    @DisplayName("postGlucoseReadings 500 wraps ServerException in Result")
+    fun postGlucoseReadings500TypedServer() = runTest {
+        val engine = MockEngine { respondError(HttpStatusCode.InternalServerError) }
+        val client = createClient(engine)
+
+        val result = client.postGlucoseReadings("https://food.example.com", "fsk_test", sampleGlucoseRequest)
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull() is ServerException)
+    }
+
+    @Test
+    @DisplayName("postGlucoseReadings 502 wraps ServerException in Result")
+    fun postGlucoseReadings502TypedServer() = runTest {
+        val engine = MockEngine { respondError(HttpStatusCode.BadGateway) }
+        val client = createClient(engine)
+
+        val result = client.postGlucoseReadings("https://food.example.com", "fsk_test", sampleGlucoseRequest)
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull() is ServerException)
+    }
+
+    @Test
+    @DisplayName("postGlucoseReadings 503 wraps ServerException in Result")
+    fun postGlucoseReadings503TypedServer() = runTest {
+        val engine = MockEngine { respondError(HttpStatusCode.ServiceUnavailable) }
+        val client = createClient(engine)
+
+        val result = client.postGlucoseReadings("https://food.example.com", "fsk_test", sampleGlucoseRequest)
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull() is ServerException)
+    }
+
+    @Test
+    @DisplayName("postGlucoseReadings network IOException is not wrapped in FoodScannerApiException")
+    fun postGlucoseReadingsIoExceptionNotWrapped() = runTest {
+        val engine = MockEngine { throw java.io.IOException("Connection refused") }
+        val client = createClient(engine)
+
+        val result = client.postGlucoseReadings("https://food.example.com", "fsk_test", sampleGlucoseRequest)
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull() is java.io.IOException)
+        assertFalse(result.exceptionOrNull() is FoodScannerApiException)
+    }
+
+    @Test
+    @DisplayName("postGlucoseReadings 400 wraps generic FoodScannerApiException in Result")
+    fun postGlucoseReadings400TypedGeneric() = runTest {
+        val engine = MockEngine { respondError(HttpStatusCode.BadRequest) }
+        val client = createClient(engine)
+
+        val result = client.postGlucoseReadings("https://food.example.com", "fsk_test", sampleGlucoseRequest)
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull() is FoodScannerApiException)
+    }
+
+    // --- Typed exception tests for postBloodPressureReadings ---
+
+    @Test
+    @DisplayName("postBloodPressureReadings 429 wraps RateLimitException in Result")
+    fun postBloodPressureReadings429TypedRateLimit() = runTest {
+        val engine = MockEngine { respondError(HttpStatusCode.TooManyRequests) }
+        val client = createClient(engine)
+
+        val result = client.postBloodPressureReadings("https://food.example.com", "fsk_test", sampleBpRequest)
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull() is RateLimitException)
+    }
+
+    @Test
+    @DisplayName("postBloodPressureReadings 401 wraps AuthenticationException in Result")
+    fun postBloodPressureReadings401TypedAuth() = runTest {
+        val engine = MockEngine { respondError(HttpStatusCode.Unauthorized) }
+        val client = createClient(engine)
+
+        val result = client.postBloodPressureReadings("https://food.example.com", "fsk_bad", sampleBpRequest)
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull() is AuthenticationException)
+    }
+
+    @Test
+    @DisplayName("postBloodPressureReadings 500 wraps ServerException in Result")
+    fun postBloodPressureReadings500TypedServer() = runTest {
+        val engine = MockEngine { respondError(HttpStatusCode.InternalServerError) }
+        val client = createClient(engine)
+
+        val result = client.postBloodPressureReadings("https://food.example.com", "fsk_test", sampleBpRequest)
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull() is ServerException)
+    }
+
+    @Test
+    @DisplayName("postBloodPressureReadings 502 wraps ServerException in Result")
+    fun postBloodPressureReadings502TypedServer() = runTest {
+        val engine = MockEngine { respondError(HttpStatusCode.BadGateway) }
+        val client = createClient(engine)
+
+        val result = client.postBloodPressureReadings("https://food.example.com", "fsk_test", sampleBpRequest)
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull() is ServerException)
+    }
+
+    @Test
+    @DisplayName("postBloodPressureReadings 503 wraps ServerException in Result")
+    fun postBloodPressureReadings503TypedServer() = runTest {
+        val engine = MockEngine { respondError(HttpStatusCode.ServiceUnavailable) }
+        val client = createClient(engine)
+
+        val result = client.postBloodPressureReadings("https://food.example.com", "fsk_test", sampleBpRequest)
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull() is ServerException)
+    }
+
+    @Test
+    @DisplayName("postBloodPressureReadings network IOException is not wrapped in FoodScannerApiException")
+    fun postBloodPressureReadingsIoExceptionNotWrapped() = runTest {
+        val engine = MockEngine { throw java.io.IOException("Connection refused") }
+        val client = createClient(engine)
+
+        val result = client.postBloodPressureReadings("https://food.example.com", "fsk_test", sampleBpRequest)
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull() is java.io.IOException)
+        assertFalse(result.exceptionOrNull() is FoodScannerApiException)
+    }
+
+    @Test
+    @DisplayName("postBloodPressureReadings 400 wraps generic FoodScannerApiException in Result")
+    fun postBloodPressureReadings400TypedGeneric() = runTest {
+        val engine = MockEngine { respondError(HttpStatusCode.BadRequest) }
+        val client = createClient(engine)
+
+        val result = client.postBloodPressureReadings("https://food.example.com", "fsk_test", sampleBpRequest)
+
+        assertTrue(result.isFailure)
+        assertTrue(result.exceptionOrNull() is FoodScannerApiException)
+    }
 }
