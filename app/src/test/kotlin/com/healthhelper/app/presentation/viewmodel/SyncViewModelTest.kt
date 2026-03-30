@@ -77,6 +77,8 @@ class SyncViewModelTest {
         every { settingsRepository.bpSyncCountFlow } returns flowOf(0)
         every { settingsRepository.glucoseSyncCaughtUpFlow } returns flowOf(false)
         every { settingsRepository.bpSyncCaughtUpFlow } returns flowOf(false)
+        every { settingsRepository.glucoseSyncRunTimestampFlow } returns flowOf(0L)
+        every { settingsRepository.bpSyncRunTimestampFlow } returns flowOf(0L)
         coEvery { settingsRepository.isConfigured() } returns true
         coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.NeedsConfiguration
         every { syncScheduler.getNextSyncTimeFlow() } returns flowOf(null)
@@ -879,16 +881,17 @@ class SyncViewModelTest {
 
     @Test
     fun `glucoseSyncStatus shows pushed count when caughtUp true and count 342`() = viewModelTest {
+        val recentMs = System.currentTimeMillis() - 60_000L
         every { settingsRepository.glucoseSyncCountFlow } returns flowOf(342)
         every { settingsRepository.glucoseSyncCaughtUpFlow } returns flowOf(true)
-        every { settingsRepository.lastGlucoseSyncTimestampFlow } returns flowOf(0L)
+        every { settingsRepository.glucoseSyncRunTimestampFlow } returns flowOf(recentMs)
 
         viewModel = createViewModel()
         advanceTimeBy(1_000)
 
         viewModel.uiState.test {
             val state = awaitItem()
-            assertEquals("Pushed 342 readings", state.glucoseSyncStatus)
+            assertTrue(state.glucoseSyncStatus.startsWith("Pushed 342 readings"), "Got: ${state.glucoseSyncStatus}")
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -898,7 +901,7 @@ class SyncViewModelTest {
         val mar15Ms = java.time.Instant.parse("2026-03-15T12:00:00Z").toEpochMilli()
         every { settingsRepository.glucoseSyncCountFlow } returns flowOf(100)
         every { settingsRepository.glucoseSyncCaughtUpFlow } returns flowOf(false)
-        every { settingsRepository.lastGlucoseSyncTimestampFlow } returns flowOf(mar15Ms)
+        every { settingsRepository.glucoseSyncRunTimestampFlow } returns flowOf(mar15Ms)
 
         viewModel = createViewModel()
         advanceTimeBy(1_000)
@@ -926,32 +929,35 @@ class SyncViewModelTest {
     }
 
     @Test
-    fun `glucoseSyncStatus shows no readings when count 0 and caughtUp true`() = viewModelTest {
+    fun `glucoseSyncStatus shows up to date when count 0 and caughtUp true and has run`() = viewModelTest {
+        val recentMs = System.currentTimeMillis() - 60_000L
         every { settingsRepository.glucoseSyncCountFlow } returns flowOf(0)
         every { settingsRepository.glucoseSyncCaughtUpFlow } returns flowOf(true)
+        every { settingsRepository.glucoseSyncRunTimestampFlow } returns flowOf(recentMs)
 
         viewModel = createViewModel()
         advanceTimeBy(1_000)
 
         viewModel.uiState.test {
             val state = awaitItem()
-            assertEquals("No readings to sync", state.glucoseSyncStatus)
+            assertTrue(state.glucoseSyncStatus.startsWith("Up to date"), "Got: ${state.glucoseSyncStatus}")
             cancelAndIgnoreRemainingEvents()
         }
     }
 
     @Test
     fun `bpSyncStatus shows pushed count when caughtUp true and count 342`() = viewModelTest {
+        val recentMs = System.currentTimeMillis() - 60_000L
         every { settingsRepository.bpSyncCountFlow } returns flowOf(342)
         every { settingsRepository.bpSyncCaughtUpFlow } returns flowOf(true)
-        every { settingsRepository.lastBpSyncTimestampFlow } returns flowOf(0L)
+        every { settingsRepository.bpSyncRunTimestampFlow } returns flowOf(recentMs)
 
         viewModel = createViewModel()
         advanceTimeBy(1_000)
 
         viewModel.uiState.test {
             val state = awaitItem()
-            assertEquals("Pushed 342 readings", state.bpSyncStatus)
+            assertTrue(state.bpSyncStatus.startsWith("Pushed 342 readings"), "Got: ${state.bpSyncStatus}")
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -961,7 +967,7 @@ class SyncViewModelTest {
         val mar15Ms = java.time.Instant.parse("2026-03-15T12:00:00Z").toEpochMilli()
         every { settingsRepository.bpSyncCountFlow } returns flowOf(100)
         every { settingsRepository.bpSyncCaughtUpFlow } returns flowOf(false)
-        every { settingsRepository.lastBpSyncTimestampFlow } returns flowOf(mar15Ms)
+        every { settingsRepository.bpSyncRunTimestampFlow } returns flowOf(mar15Ms)
 
         viewModel = createViewModel()
         advanceTimeBy(1_000)
@@ -989,32 +995,34 @@ class SyncViewModelTest {
     }
 
     @Test
-    fun `bpSyncStatus shows no readings when count 0 and caughtUp true`() = viewModelTest {
+    fun `bpSyncStatus shows up to date when count 0 and caughtUp true and has run`() = viewModelTest {
+        val recentMs = System.currentTimeMillis() - 60_000L
         every { settingsRepository.bpSyncCountFlow } returns flowOf(0)
         every { settingsRepository.bpSyncCaughtUpFlow } returns flowOf(true)
+        every { settingsRepository.bpSyncRunTimestampFlow } returns flowOf(recentMs)
 
         viewModel = createViewModel()
         advanceTimeBy(1_000)
 
         viewModel.uiState.test {
             val state = awaitItem()
-            assertEquals("No readings to sync", state.bpSyncStatus)
+            assertTrue(state.bpSyncStatus.startsWith("Up to date"), "Got: ${state.bpSyncStatus}")
             cancelAndIgnoreRemainingEvents()
         }
     }
 
     @Test
-    fun `glucoseSyncStatus has no time part when timestamp is 0`() = viewModelTest {
+    fun `glucoseSyncStatus shows not synced when run timestamp is 0`() = viewModelTest {
         every { settingsRepository.glucoseSyncCountFlow } returns flowOf(50)
         every { settingsRepository.glucoseSyncCaughtUpFlow } returns flowOf(false)
-        every { settingsRepository.lastGlucoseSyncTimestampFlow } returns flowOf(0L)
+        every { settingsRepository.glucoseSyncRunTimestampFlow } returns flowOf(0L)
 
         viewModel = createViewModel()
         advanceTimeBy(1_000)
 
         viewModel.uiState.test {
             val state = awaitItem()
-            assertEquals("Pushed 50 readings", state.glucoseSyncStatus)
+            assertEquals("Not synced to food-scanner", state.glucoseSyncStatus)
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -1024,7 +1032,7 @@ class SyncViewModelTest {
         val mar15Ms = java.time.Instant.parse("2026-03-15T12:00:00Z").toEpochMilli()
         every { settingsRepository.glucoseSyncCountFlow } returns flowOf(50)
         every { settingsRepository.glucoseSyncCaughtUpFlow } returns flowOf(false)
-        every { settingsRepository.lastGlucoseSyncTimestampFlow } returns flowOf(mar15Ms)
+        every { settingsRepository.glucoseSyncRunTimestampFlow } returns flowOf(mar15Ms)
 
         viewModel = createViewModel()
         advanceTimeBy(1_000)

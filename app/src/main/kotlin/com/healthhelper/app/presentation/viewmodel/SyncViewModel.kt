@@ -203,7 +203,7 @@ class SyncViewModel @Inject constructor(
             combine(
                 settingsRepository.glucoseSyncCountFlow,
                 settingsRepository.glucoseSyncCaughtUpFlow,
-                settingsRepository.lastGlucoseSyncTimestampFlow,
+                settingsRepository.glucoseSyncRunTimestampFlow,
             ) { count, caughtUp, ts ->
                 glucoseSyncCount = count
                 glucoseSyncCaughtUp = caughtUp
@@ -219,7 +219,7 @@ class SyncViewModel @Inject constructor(
             combine(
                 settingsRepository.bpSyncCountFlow,
                 settingsRepository.bpSyncCaughtUpFlow,
-                settingsRepository.lastBpSyncTimestampFlow,
+                settingsRepository.bpSyncRunTimestampFlow,
             ) { count, caughtUp, ts ->
                 bpSyncCount = count
                 bpSyncCaughtUp = caughtUp
@@ -385,7 +385,7 @@ class SyncViewModel @Inject constructor(
                 }
                 _uiState.update { it.copy(lastSyncResult = resultMessage) }
 
-                // Fire-and-forget health readings sync (same as SyncWorker)
+                // Health readings sync (same as SyncWorker)
                 if (result !is SyncResult.NeedsConfiguration) {
                     try {
                         syncHealthReadingsUseCase()
@@ -413,20 +413,18 @@ class SyncViewModel @Inject constructor(
     }
 }
 
-internal fun formatSyncStatus(count: Int, caughtUp: Boolean, timestampMs: Long): String =
-    when {
-        count == 0 && !caughtUp -> "Not synced to food-scanner"
-        count == 0 && caughtUp -> "No readings to sync"
+internal fun formatSyncStatus(count: Int, caughtUp: Boolean, runTimestampMs: Long): String {
+    if (runTimestampMs == 0L) return "Not synced to food-scanner"
+    val timeStr = formatRelativeTime(runTimestampMs)
+    return when {
+        count == 0 && caughtUp -> "Up to date · $timeStr"
+        count == 0 -> "Pushed 0 readings · $timeStr"
         else -> {
-            val timeStr = formatRelativeTime(timestampMs)
             val label = if (count == 1) "reading" else "readings"
-            if (timeStr.isNotEmpty()) {
-                "Pushed $count $label · $timeStr"
-            } else {
-                "Pushed $count $label"
-            }
+            "Pushed $count $label · $timeStr"
         }
     }
+}
 
 internal fun formatRelativeTime(timestampMillis: Long): String {
     if (timestampMillis <= 0L) return ""

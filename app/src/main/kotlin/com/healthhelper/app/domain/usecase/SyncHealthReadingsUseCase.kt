@@ -34,6 +34,7 @@ class SyncHealthReadingsUseCase @Inject constructor(
             setWatermark = settingsRepository::setLastGlucoseSyncTimestamp,
             setCount = settingsRepository::setGlucoseSyncCount,
             setCaughtUp = settingsRepository::setGlucoseSyncCaughtUp,
+            setRunTimestamp = settingsRepository::setGlucoseSyncRunTimestamp,
             getLedger = settingsRepository::getDirectPushedGlucoseTimestamps,
             getTimestamp = { it.timestamp.toEpochMilli() },
         )
@@ -45,6 +46,7 @@ class SyncHealthReadingsUseCase @Inject constructor(
             setWatermark = settingsRepository::setLastBpSyncTimestamp,
             setCount = settingsRepository::setBpSyncCount,
             setCaughtUp = settingsRepository::setBpSyncCaughtUp,
+            setRunTimestamp = settingsRepository::setBpSyncRunTimestamp,
             getLedger = settingsRepository::getDirectPushedBpTimestamps,
             getTimestamp = { it.timestamp.toEpochMilli() },
         )
@@ -59,6 +61,7 @@ class SyncHealthReadingsUseCase @Inject constructor(
         setWatermark: suspend (Long) -> Unit,
         setCount: suspend (Int) -> Unit,
         setCaughtUp: suspend (Boolean) -> Unit,
+        setRunTimestamp: suspend (Long) -> Unit,
         getLedger: suspend () -> Set<Long>,
         getTimestamp: (T) -> Long,
     ): Long {
@@ -71,7 +74,9 @@ class SyncHealthReadingsUseCase @Inject constructor(
             val batch = readings.take(MAX_READINGS_PER_RUN)
 
             if (batch.isEmpty()) {
+                setCount(0)
                 setCaughtUp(true)
+                setRunTimestamp(System.currentTimeMillis())
                 return watermark
             }
 
@@ -84,10 +89,13 @@ class SyncHealthReadingsUseCase @Inject constructor(
                 val result = pushWithRetry { pushReadings(toPublish) }
                 if (result.isFailure) return watermark
                 setCount(result.getOrNull() ?: toPublish.size)
+            } else {
+                setCount(0)
             }
 
             setWatermark(lastBatchTimestamp)
             setCaughtUp(caughtUp)
+            setRunTimestamp(System.currentTimeMillis())
             lastBatchTimestamp
         } catch (e: CancellationException) {
             throw e

@@ -57,6 +57,8 @@ class DataStoreSettingsRepository @Inject constructor(
         val BP_SYNC_COUNT = intPreferencesKey("bp_sync_count")
         val GLUCOSE_SYNC_CAUGHT_UP = booleanPreferencesKey("glucose_sync_caught_up")
         val BP_SYNC_CAUGHT_UP = booleanPreferencesKey("bp_sync_caught_up")
+        val GLUCOSE_SYNC_RUN_TIMESTAMP = longPreferencesKey("glucose_sync_run_timestamp")
+        val BP_SYNC_RUN_TIMESTAMP = longPreferencesKey("bp_sync_run_timestamp")
         val LAST_SYNCED_MEALS = stringPreferencesKey("last_synced_meals")
         val FOOD_LOG_ETAGS = stringPreferencesKey("food_log_etags")
         val DIRECT_PUSHED_GLUCOSE_TIMESTAMPS = stringPreferencesKey("direct_pushed_glucose_timestamps")
@@ -165,6 +167,12 @@ class DataStoreSettingsRepository @Inject constructor(
     override val bpSyncCaughtUpFlow: Flow<Boolean> =
         dataStore.data.map { it[BP_SYNC_CAUGHT_UP] ?: false }
 
+    override val glucoseSyncRunTimestampFlow: Flow<Long> =
+        dataStore.data.map { it[GLUCOSE_SYNC_RUN_TIMESTAMP] ?: 0L }
+
+    override val bpSyncRunTimestampFlow: Flow<Long> =
+        dataStore.data.map { it[BP_SYNC_RUN_TIMESTAMP] ?: 0L }
+
     override val lastSyncedMealsFlow: Flow<List<SyncedMealSummary>> =
         dataStore.data.map { prefs ->
             val json = prefs[LAST_SYNCED_MEALS] ?: return@map emptyList()
@@ -257,6 +265,14 @@ class DataStoreSettingsRepository @Inject constructor(
 
     override suspend fun setBpSyncCaughtUp(value: Boolean) {
         dataStore.edit { it[BP_SYNC_CAUGHT_UP] = value }
+    }
+
+    override suspend fun setGlucoseSyncRunTimestamp(value: Long) {
+        dataStore.edit { it[GLUCOSE_SYNC_RUN_TIMESTAMP] = value }
+    }
+
+    override suspend fun setBpSyncRunTimestamp(value: Long) {
+        dataStore.edit { it[BP_SYNC_RUN_TIMESTAMP] = value }
     }
 
     override suspend fun setLastSyncedMeals(meals: List<SyncedMealSummary>) {

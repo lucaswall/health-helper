@@ -46,6 +46,8 @@ class SyncHealthReadingsUseCaseTest {
         coEvery { settingsRepository.setBpSyncCount(any()) } returns Unit
         coEvery { settingsRepository.setGlucoseSyncCaughtUp(any()) } returns Unit
         coEvery { settingsRepository.setBpSyncCaughtUp(any()) } returns Unit
+        coEvery { settingsRepository.setGlucoseSyncRunTimestamp(any()) } returns Unit
+        coEvery { settingsRepository.setBpSyncRunTimestamp(any()) } returns Unit
         coEvery { settingsRepository.getDirectPushedGlucoseTimestamps() } returns emptySet()
         coEvery { settingsRepository.getDirectPushedBpTimestamps() } returns emptySet()
         coEvery { settingsRepository.pruneDirectPushedTimestamps(any(), any()) } returns Unit

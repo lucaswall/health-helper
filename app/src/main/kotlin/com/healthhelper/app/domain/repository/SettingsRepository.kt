@@ -16,6 +16,8 @@ interface SettingsRepository {
     val bpSyncCountFlow: Flow<Int>
     val glucoseSyncCaughtUpFlow: Flow<Boolean>
     val bpSyncCaughtUpFlow: Flow<Boolean>
+    val glucoseSyncRunTimestampFlow: Flow<Long>
+    val bpSyncRunTimestampFlow: Flow<Long>
     val lastSyncedMealsFlow: Flow<List<SyncedMealSummary>>
 
     suspend fun setApiKey(value: String)
@@ -30,6 +32,8 @@ interface SettingsRepository {
     suspend fun setBpSyncCount(value: Int)
     suspend fun setGlucoseSyncCaughtUp(value: Boolean)
     suspend fun setBpSyncCaughtUp(value: Boolean)
+    suspend fun setGlucoseSyncRunTimestamp(value: Long)
+    suspend fun setBpSyncRunTimestamp(value: Long)
     suspend fun setLastSyncedMeals(meals: List<SyncedMealSummary>)
     suspend fun getETag(date: String): String?
     suspend fun setETag(date: String, etag: String)
