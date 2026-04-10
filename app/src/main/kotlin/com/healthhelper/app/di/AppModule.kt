@@ -99,8 +99,7 @@ object AppModule {
     @Singleton
     fun provideHydrationRepository(
         healthConnectClient: HealthConnectClient?,
-        @ApplicationContext context: Context,
-    ): HydrationRepository = HealthConnectHydrationRepository(healthConnectClient, context)
+    ): HydrationRepository = HealthConnectHydrationRepository(healthConnectClient)
 
     @Provides
     @Singleton
