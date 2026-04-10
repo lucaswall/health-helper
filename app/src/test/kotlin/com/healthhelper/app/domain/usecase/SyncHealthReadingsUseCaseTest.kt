@@ -5,6 +5,7 @@ import com.healthhelper.app.data.api.RateLimitException
 import com.healthhelper.app.data.api.ServerException
 import com.healthhelper.app.domain.model.BloodPressureReading
 import com.healthhelper.app.domain.model.GlucoseReading
+import com.healthhelper.app.domain.model.HydrationReading
 import com.healthhelper.app.domain.repository.BloodGlucoseRepository
 import com.healthhelper.app.domain.repository.BloodPressureRepository
 import com.healthhelper.app.domain.repository.FoodScannerHealthRepository
@@ -85,6 +86,14 @@ class SyncHealthReadingsUseCaseTest {
             BloodPressureReading(
                 systolic = 120,
                 diastolic = 80,
+                timestamp = Instant.ofEpochMilli(startMs + i * 1000L),
+            )
+        }
+
+    private fun hydrationReadings(count: Int, startMs: Long = 1_000L): List<HydrationReading> =
+        (0 until count).map { i ->
+            HydrationReading(
+                volumeMl = 250,
                 timestamp = Instant.ofEpochMilli(startMs + i * 1000L),
             )
         }
@@ -469,5 +478,72 @@ class SyncHealthReadingsUseCaseTest {
 
         coVerify(exactly = 0) { bloodGlucoseRepository.getReadings(any(), any()) }
         coVerify(exactly = 0) { bloodPressureRepository.getReadings(any(), any()) }
+    }
+
+    // =========== HYDRATION SYNC ===========
+
+    @Test
+    @DisplayName("successful hydration push calls pushHydrationReadings and advances watermark")
+    fun hydrationPushAdvancesWatermark() = runTest {
+        val readings = hydrationReadings(3, startMs = 1_000L)
+        val expectedWatermark = readings.last().timestamp.toEpochMilli()
+        coEvery { hydrationRepository.getReadings(any(), any()) } returns readings
+        coEvery { foodScannerHealthRepository.pushHydrationReadings(any()) } returns Result.success(3)
+
+        createUseCase().invoke()
+
+        coVerify { foodScannerHealthRepository.pushHydrationReadings(match { it.size == 3 }) }
+        coVerify { settingsRepository.setLastHydrationSyncTimestamp(expectedWatermark) }
+        coVerify { settingsRepository.setHydrationSyncCount(3) }
+    }
+
+    @Test
+    @DisplayName("hydration push failure does NOT advance watermark")
+    fun hydrationPushFailureDoesNotAdvanceWatermark() = runTest {
+        coEvery { hydrationRepository.getReadings(any(), any()) } returns hydrationReadings(1)
+        coEvery { foodScannerHealthRepository.pushHydrationReadings(any()) } returns
+            Result.failure(Exception("push failed"))
+
+        createUseCase().invoke()
+
+        coVerify(exactly = 0) { settingsRepository.setLastHydrationSyncTimestamp(any()) }
+    }
+
+    @Test
+    @DisplayName("hydration exception does not block glucose or BP sync")
+    fun hydrationExceptionDoesNotBlockOtherSyncs() = runTest {
+        coEvery { hydrationRepository.getReadings(any(), any()) } throws RuntimeException("hydration read failed")
+        coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns glucoseReadings(1, startMs = 1_000L)
+        coEvery { bloodPressureRepository.getReadings(any(), any()) } returns bpReadings(1, startMs = 2_000L)
+        coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns Result.success(1)
+        coEvery { foodScannerHealthRepository.pushBloodPressureReadings(any()) } returns Result.success(1)
+
+        createUseCase().invoke()
+
+        coVerify { foodScannerHealthRepository.pushGlucoseReadings(any()) }
+        coVerify { foodScannerHealthRepository.pushBloodPressureReadings(any()) }
+    }
+
+    @Test
+    @DisplayName("hydration caughtUp set to true when fewer than 100 readings returned")
+    fun hydrationCaughtUpWhenFewerThan100() = runTest {
+        coEvery { hydrationRepository.getReadings(any(), any()) } returns hydrationReadings(50)
+        coEvery { foodScannerHealthRepository.pushHydrationReadings(any()) } returns Result.success(50)
+
+        createUseCase().invoke()
+
+        coVerify { settingsRepository.setHydrationSyncCaughtUp(true) }
+    }
+
+    @Test
+    @DisplayName("hydration caughtUp set to false when exactly 100 readings returned")
+    fun hydrationNotCaughtUpWhenExactly100() = runTest {
+        coEvery { hydrationRepository.getReadings(any(), any()) } returns hydrationReadings(100)
+        coEvery { foodScannerHealthRepository.pushHydrationReadings(any()) } returns Result.success(100)
+
+        createUseCase().invoke()
+
+        coVerify(exactly = 0) { settingsRepository.setHydrationSyncCaughtUp(true) }
+        coVerify { settingsRepository.setHydrationSyncCaughtUp(false) }
     }
 }

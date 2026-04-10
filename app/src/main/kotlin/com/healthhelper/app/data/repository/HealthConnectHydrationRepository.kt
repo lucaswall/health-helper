@@ -1,11 +1,9 @@
 package com.healthhelper.app.data.repository
 
-import android.content.Context
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.records.HydrationRecord
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
-import dagger.hilt.android.qualifiers.ApplicationContext
 import com.healthhelper.app.domain.model.HydrationReading
 import com.healthhelper.app.domain.repository.HydrationRepository
 import kotlin.coroutines.cancellation.CancellationException
@@ -17,7 +15,6 @@ import javax.inject.Inject
 
 class HealthConnectHydrationRepository @Inject constructor(
     private val healthConnectClient: HealthConnectClient?,
-    @ApplicationContext private val context: Context,
 ) : HydrationRepository {
 
     override suspend fun getReadings(start: Instant, end: Instant): List<HydrationReading> {
