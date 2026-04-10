@@ -59,6 +59,10 @@ class DataStoreSettingsRepository @Inject constructor(
         val BP_SYNC_CAUGHT_UP = booleanPreferencesKey("bp_sync_caught_up")
         val GLUCOSE_SYNC_RUN_TIMESTAMP = longPreferencesKey("glucose_sync_run_timestamp")
         val BP_SYNC_RUN_TIMESTAMP = longPreferencesKey("bp_sync_run_timestamp")
+        val LAST_HYDRATION_SYNC_TIMESTAMP = longPreferencesKey("last_hydration_sync_timestamp")
+        val HYDRATION_SYNC_COUNT = intPreferencesKey("hydration_sync_count")
+        val HYDRATION_SYNC_CAUGHT_UP = booleanPreferencesKey("hydration_sync_caught_up")
+        val HYDRATION_SYNC_RUN_TIMESTAMP = longPreferencesKey("hydration_sync_run_timestamp")
         val LAST_SYNCED_MEALS = stringPreferencesKey("last_synced_meals")
         val FOOD_LOG_ETAGS = stringPreferencesKey("food_log_etags")
         val DIRECT_PUSHED_GLUCOSE_TIMESTAMPS = stringPreferencesKey("direct_pushed_glucose_timestamps")
@@ -173,6 +177,18 @@ class DataStoreSettingsRepository @Inject constructor(
     override val bpSyncRunTimestampFlow: Flow<Long> =
         dataStore.data.map { it[BP_SYNC_RUN_TIMESTAMP] ?: 0L }
 
+    override val lastHydrationSyncTimestampFlow: Flow<Long> =
+        dataStore.data.map { it[LAST_HYDRATION_SYNC_TIMESTAMP] ?: 0L }
+
+    override val hydrationSyncCountFlow: Flow<Int> =
+        dataStore.data.map { it[HYDRATION_SYNC_COUNT] ?: 0 }
+
+    override val hydrationSyncCaughtUpFlow: Flow<Boolean> =
+        dataStore.data.map { it[HYDRATION_SYNC_CAUGHT_UP] ?: false }
+
+    override val hydrationSyncRunTimestampFlow: Flow<Long> =
+        dataStore.data.map { it[HYDRATION_SYNC_RUN_TIMESTAMP] ?: 0L }
+
     override val lastSyncedMealsFlow: Flow<List<SyncedMealSummary>> =
         dataStore.data.map { prefs ->
             val json = prefs[LAST_SYNCED_MEALS] ?: return@map emptyList()
@@ -273,6 +289,22 @@ class DataStoreSettingsRepository @Inject constructor(
 
     override suspend fun setBpSyncRunTimestamp(value: Long) {
         dataStore.edit { it[BP_SYNC_RUN_TIMESTAMP] = value }
+    }
+
+    override suspend fun setLastHydrationSyncTimestamp(value: Long) {
+        dataStore.edit { it[LAST_HYDRATION_SYNC_TIMESTAMP] = value }
+    }
+
+    override suspend fun setHydrationSyncCount(value: Int) {
+        dataStore.edit { it[HYDRATION_SYNC_COUNT] = value }
+    }
+
+    override suspend fun setHydrationSyncCaughtUp(value: Boolean) {
+        dataStore.edit { it[HYDRATION_SYNC_CAUGHT_UP] = value }
+    }
+
+    override suspend fun setHydrationSyncRunTimestamp(value: Long) {
+        dataStore.edit { it[HYDRATION_SYNC_RUN_TIMESTAMP] = value }
     }
 
     override suspend fun setLastSyncedMeals(meals: List<SyncedMealSummary>) {

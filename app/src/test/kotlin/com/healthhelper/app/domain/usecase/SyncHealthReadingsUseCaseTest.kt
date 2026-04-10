@@ -8,6 +8,7 @@ import com.healthhelper.app.domain.model.GlucoseReading
 import com.healthhelper.app.domain.repository.BloodGlucoseRepository
 import com.healthhelper.app.domain.repository.BloodPressureRepository
 import com.healthhelper.app.domain.repository.FoodScannerHealthRepository
+import com.healthhelper.app.domain.repository.HydrationRepository
 import com.healthhelper.app.domain.repository.SettingsRepository
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -30,6 +31,7 @@ class SyncHealthReadingsUseCaseTest {
 
     private val bloodGlucoseRepository = mockk<BloodGlucoseRepository>()
     private val bloodPressureRepository = mockk<BloodPressureRepository>()
+    private val hydrationRepository = mockk<HydrationRepository>()
     private val foodScannerHealthRepository = mockk<FoodScannerHealthRepository>()
     private val settingsRepository = mockk<SettingsRepository>()
 
@@ -51,13 +53,21 @@ class SyncHealthReadingsUseCaseTest {
         coEvery { settingsRepository.getDirectPushedGlucoseTimestamps() } returns emptySet()
         coEvery { settingsRepository.getDirectPushedBpTimestamps() } returns emptySet()
         coEvery { settingsRepository.pruneDirectPushedTimestamps(any(), any()) } returns Unit
+        every { settingsRepository.lastHydrationSyncTimestampFlow } returns flowOf(0L)
+        every { settingsRepository.hydrationSyncCountFlow } returns flowOf(0)
+        coEvery { settingsRepository.setLastHydrationSyncTimestamp(any()) } returns Unit
+        coEvery { settingsRepository.setHydrationSyncCount(any()) } returns Unit
+        coEvery { settingsRepository.setHydrationSyncCaughtUp(any()) } returns Unit
+        coEvery { settingsRepository.setHydrationSyncRunTimestamp(any()) } returns Unit
         coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns emptyList()
         coEvery { bloodPressureRepository.getReadings(any(), any()) } returns emptyList()
+        coEvery { hydrationRepository.getReadings(any(), any()) } returns emptyList()
     }
 
     private fun createUseCase() = SyncHealthReadingsUseCase(
         bloodGlucoseRepository = bloodGlucoseRepository,
         bloodPressureRepository = bloodPressureRepository,
+        hydrationRepository = hydrationRepository,
         foodScannerHealthRepository = foodScannerHealthRepository,
         settingsRepository = settingsRepository,
     )

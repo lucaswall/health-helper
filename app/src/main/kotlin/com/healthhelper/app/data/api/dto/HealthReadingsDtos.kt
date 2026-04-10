@@ -33,6 +33,18 @@ data class BloodPressureReadingRequest(
 )
 
 @Serializable
+data class HydrationReadingDto(
+    val measuredAt: String,
+    val volumeMl: Int,
+    val zoneOffset: String? = null,
+)
+
+@Serializable
+data class HydrationReadingRequest(
+    val readings: List<HydrationReadingDto>,
+)
+
+@Serializable
 data class UpsertResponse(
     val upserted: Int,
 )

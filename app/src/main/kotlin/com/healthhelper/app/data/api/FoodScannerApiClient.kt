@@ -3,6 +3,7 @@ package com.healthhelper.app.data.api
 import com.healthhelper.app.data.api.dto.ApiEnvelope
 import com.healthhelper.app.data.api.dto.BloodPressureReadingRequest
 import com.healthhelper.app.data.api.dto.GlucoseReadingRequest
+import com.healthhelper.app.data.api.dto.HydrationReadingRequest
 import com.healthhelper.app.data.api.dto.NutritionSummaryDto
 import com.healthhelper.app.data.api.dto.UpsertResponse
 import com.healthhelper.app.domain.model.FoodLogEntry
@@ -218,6 +219,62 @@ class FoodScannerApiClient @Inject constructor(
                 Timber.w(e, "postBloodPressureReadings network error")
             } else {
                 Timber.e(e, "postBloodPressureReadings error")
+            }
+            Result.failure(e)
+        }
+    }
+
+    suspend fun postHydrationReadings(
+        baseUrl: String,
+        apiKey: String,
+        request: HydrationReadingRequest,
+    ): Result<Int> {
+        if (baseUrl.isBlank() || !baseUrl.lowercase().startsWith("https://")) {
+            return Result.failure(Exception("API URL not configured. Set a valid HTTPS URL in Settings."))
+        }
+        return try {
+            val startMs = System.currentTimeMillis()
+            val response = httpClient.post("${baseUrl.trimEnd('/')}/api/v1/hydration-readings") {
+                bearerAuth(apiKey)
+                contentType(ContentType.Application.Json)
+                setBody(request)
+            }
+            if (!response.status.isSuccess()) {
+                val status = response.status.value
+                val exception: FoodScannerApiException = when (status) {
+                    401 -> AuthenticationException(status)
+                    429 -> RateLimitException(status)
+                    in 500..599 -> ServerException(status)
+                    else -> FoodScannerApiException("HTTP error $status", status)
+                }
+                when (status) {
+                    401, 429, in 500..599 -> Timber.w("postHydrationReadings HTTP error: %d", status)
+                    else -> Timber.e("postHydrationReadings HTTP error: %d", status)
+                }
+                return Result.failure(exception)
+            }
+            val elapsed = System.currentTimeMillis() - startMs
+            val envelope: ApiEnvelope<UpsertResponse> = response.body()
+            if (!envelope.success) {
+                val serverMsg = envelope.error?.message
+                if (serverMsg != null) {
+                    Timber.w("postHydrationReadings server error: %s", serverMsg)
+                }
+                Result.failure(Exception("Server returned an error"))
+            } else {
+                val upserted = envelope.data?.upserted ?: 0
+                Timber.d("postHydrationReadings: upserted=%d in %dms", upserted, elapsed)
+                Result.success(upserted)
+            }
+        } catch (e: SerializationException) {
+            Timber.e(e, "postHydrationReadings parse error")
+            Result.failure(Exception("Failed to parse response"))
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            if (e is java.io.IOException || e is java.nio.channels.UnresolvedAddressException) {
+                Timber.w(e, "postHydrationReadings network error")
+            } else {
+                Timber.e(e, "postHydrationReadings error")
             }
             Result.failure(e)
         }

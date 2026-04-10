@@ -5,9 +5,11 @@ import com.healthhelper.app.data.api.RateLimitException
 import com.healthhelper.app.data.api.ServerException
 import com.healthhelper.app.domain.model.BloodPressureReading
 import com.healthhelper.app.domain.model.GlucoseReading
+import com.healthhelper.app.domain.model.HydrationReading
 import com.healthhelper.app.domain.repository.BloodGlucoseRepository
 import com.healthhelper.app.domain.repository.BloodPressureRepository
 import com.healthhelper.app.domain.repository.FoodScannerHealthRepository
+import com.healthhelper.app.domain.repository.HydrationRepository
 import com.healthhelper.app.domain.repository.SettingsRepository
 import java.io.IOException
 import java.time.Instant
@@ -21,6 +23,7 @@ import timber.log.Timber
 class SyncHealthReadingsUseCase @Inject constructor(
     private val bloodGlucoseRepository: BloodGlucoseRepository,
     private val bloodPressureRepository: BloodPressureRepository,
+    private val hydrationRepository: HydrationRepository,
     private val foodScannerHealthRepository: FoodScannerHealthRepository,
     private val settingsRepository: SettingsRepository,
 ) {
@@ -48,6 +51,18 @@ class SyncHealthReadingsUseCase @Inject constructor(
             setCaughtUp = settingsRepository::setBpSyncCaughtUp,
             setRunTimestamp = settingsRepository::setBpSyncRunTimestamp,
             getLedger = settingsRepository::getDirectPushedBpTimestamps,
+            getTimestamp = { it.timestamp.toEpochMilli() },
+        )
+
+        syncType(
+            getReadings = hydrationRepository::getReadings,
+            pushReadings = foodScannerHealthRepository::pushHydrationReadings,
+            watermarkFlow = settingsRepository.lastHydrationSyncTimestampFlow,
+            setWatermark = settingsRepository::setLastHydrationSyncTimestamp,
+            setCount = settingsRepository::setHydrationSyncCount,
+            setCaughtUp = settingsRepository::setHydrationSyncCaughtUp,
+            setRunTimestamp = settingsRepository::setHydrationSyncRunTimestamp,
+            getLedger = { emptySet() },
             getTimestamp = { it.timestamp.toEpochMilli() },
         )
 

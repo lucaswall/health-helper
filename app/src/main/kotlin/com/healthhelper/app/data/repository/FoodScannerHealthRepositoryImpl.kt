@@ -5,8 +5,11 @@ import com.healthhelper.app.data.api.dto.BloodPressureReadingDto
 import com.healthhelper.app.data.api.dto.BloodPressureReadingRequest
 import com.healthhelper.app.data.api.dto.GlucoseReadingDto
 import com.healthhelper.app.data.api.dto.GlucoseReadingRequest
+import com.healthhelper.app.data.api.dto.HydrationReadingDto
+import com.healthhelper.app.data.api.dto.HydrationReadingRequest
 import com.healthhelper.app.domain.model.BloodPressureReading
 import com.healthhelper.app.domain.model.GlucoseReading
+import com.healthhelper.app.domain.model.HydrationReading
 import com.healthhelper.app.domain.repository.FoodScannerHealthRepository
 import com.healthhelper.app.domain.repository.SettingsRepository
 import java.time.ZoneId
@@ -72,6 +75,20 @@ class FoodScannerHealthRepositoryImpl @Inject constructor(
         )
     }
 
+    override suspend fun pushHydrationReadings(readings: List<HydrationReading>): Result<Int> {
+        if (readings.isEmpty()) return Result.success(0)
+        val baseUrl = settingsRepository.baseUrlFlow.first()
+        val apiKey = settingsRepository.apiKeyFlow.first()
+        if (baseUrl.isBlank() || apiKey.isBlank()) {
+            return Result.failure(Exception("Food-scanner settings not configured"))
+        }
+        return apiClient.postHydrationReadings(
+            baseUrl = baseUrl,
+            apiKey = apiKey,
+            request = HydrationReadingRequest(readings = readings.map { toHydrationReadingDto(it) }),
+        )
+    }
+
     private fun toGlucoseReadingDto(reading: GlucoseReading): GlucoseReadingDto =
         GlucoseReadingDto(
             measuredAt = reading.timestamp.toString(),
@@ -90,6 +107,14 @@ class FoodScannerHealthRepositoryImpl @Inject constructor(
             zoneOffset = zoneOffsetString(reading.timestamp),
             bodyPosition = reading.bodyPosition.name.lowercase(),
             measurementLocation = reading.measurementLocation.name.lowercase(),
+        )
+
+    private fun toHydrationReadingDto(reading: HydrationReading): HydrationReadingDto =
+        HydrationReadingDto(
+            measuredAt = reading.timestamp.toString(),
+            volumeMl = reading.volumeMl,
+            zoneOffset = reading.zoneOffset?.toString()?.let { if (it == "Z") "+00:00" else it }
+                ?: zoneOffsetString(reading.timestamp),
         )
 
     private fun zoneOffsetString(timestamp: java.time.Instant): String {
