@@ -6,6 +6,7 @@ import com.healthhelper.app.data.api.ServerException
 import com.healthhelper.app.domain.model.BloodPressureReading
 import com.healthhelper.app.domain.model.GlucoseReading
 import com.healthhelper.app.domain.model.HydrationReading
+import com.healthhelper.app.domain.model.ReadingsResult
 import com.healthhelper.app.domain.repository.BloodGlucoseRepository
 import com.healthhelper.app.domain.repository.BloodPressureRepository
 import com.healthhelper.app.domain.repository.FoodScannerHealthRepository
@@ -60,9 +61,9 @@ class SyncHealthReadingsUseCaseTest {
         coEvery { settingsRepository.setHydrationSyncCount(any()) } returns Unit
         coEvery { settingsRepository.setHydrationSyncCaughtUp(any()) } returns Unit
         coEvery { settingsRepository.setHydrationSyncRunTimestamp(any()) } returns Unit
-        coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns emptyList()
-        coEvery { bloodPressureRepository.getReadings(any(), any()) } returns emptyList()
-        coEvery { hydrationRepository.getReadings(any(), any()) } returns emptyList()
+        coEvery { bloodGlucoseRepository.getReadingsResult(any(), any()) } returns ReadingsResult(emptyList())
+        coEvery { bloodPressureRepository.getReadingsResult(any(), any()) } returns ReadingsResult(emptyList())
+        coEvery { hydrationRepository.getReadingsResult(any(), any()) } returns ReadingsResult(emptyList())
     }
 
     private fun createUseCase() = SyncHealthReadingsUseCase(
@@ -107,7 +108,7 @@ class SyncHealthReadingsUseCaseTest {
 
         createUseCase().invoke()
 
-        coVerify { bloodGlucoseRepository.getReadings(Instant.EPOCH, any()) }
+        coVerify { bloodGlucoseRepository.getReadingsResult(Instant.EPOCH, any()) }
     }
 
     @Test
@@ -117,7 +118,7 @@ class SyncHealthReadingsUseCaseTest {
 
         createUseCase().invoke()
 
-        coVerify { bloodPressureRepository.getReadings(Instant.EPOCH, any()) }
+        coVerify { bloodPressureRepository.getReadingsResult(Instant.EPOCH, any()) }
     }
 
     @Test
@@ -126,11 +127,11 @@ class SyncHealthReadingsUseCaseTest {
         val savedTs = Instant.parse("2026-03-01T12:00:00Z").toEpochMilli()
         val expectedStart = Instant.ofEpochMilli(savedTs + 1)
         every { settingsRepository.lastGlucoseSyncTimestampFlow } returns flowOf(savedTs)
-        coEvery { bloodGlucoseRepository.getReadings(expectedStart, any()) } returns emptyList()
+        coEvery { bloodGlucoseRepository.getReadingsResult(expectedStart, any()) } returns ReadingsResult(emptyList())
 
         createUseCase().invoke()
 
-        coVerify { bloodGlucoseRepository.getReadings(expectedStart, any()) }
+        coVerify { bloodGlucoseRepository.getReadingsResult(expectedStart, any()) }
     }
 
     @Test
@@ -140,12 +141,12 @@ class SyncHealthReadingsUseCaseTest {
         val bpStart = Instant.ofEpochMilli(bpTs + 1)
         every { settingsRepository.lastGlucoseSyncTimestampFlow } returns flowOf(0L)
         every { settingsRepository.lastBpSyncTimestampFlow } returns flowOf(bpTs)
-        coEvery { bloodPressureRepository.getReadings(bpStart, any()) } returns emptyList()
+        coEvery { bloodPressureRepository.getReadingsResult(bpStart, any()) } returns ReadingsResult(emptyList())
 
         createUseCase().invoke()
 
-        coVerify { bloodGlucoseRepository.getReadings(Instant.EPOCH, any()) }
-        coVerify { bloodPressureRepository.getReadings(bpStart, any()) }
+        coVerify { bloodGlucoseRepository.getReadingsResult(Instant.EPOCH, any()) }
+        coVerify { bloodPressureRepository.getReadingsResult(bpStart, any()) }
     }
 
     // =========== 100-RECORD CAP ===========
@@ -153,7 +154,7 @@ class SyncHealthReadingsUseCaseTest {
     @Test
     @DisplayName("when HC returns 150 glucose readings, only first 100 are pushed")
     fun first100Of150Pushed() = runTest {
-        coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns glucoseReadings(150)
+        coEvery { bloodGlucoseRepository.getReadingsResult(any(), any()) } returns ReadingsResult(glucoseReadings(150))
         coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns Result.success(100)
 
         createUseCase().invoke()
@@ -164,7 +165,7 @@ class SyncHealthReadingsUseCaseTest {
     @Test
     @DisplayName("when HC returns 50 readings, all 50 pushed and caughtUp set to true")
     fun lessThan100AllPushedAndCaughtUpTrue() = runTest {
-        coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns glucoseReadings(50)
+        coEvery { bloodGlucoseRepository.getReadingsResult(any(), any()) } returns ReadingsResult(glucoseReadings(50))
         coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns Result.success(50)
 
         createUseCase().invoke()
@@ -176,7 +177,7 @@ class SyncHealthReadingsUseCaseTest {
     @Test
     @DisplayName("when HC returns exactly 100 readings, caughtUp is NOT set to true")
     fun exactly100NotCaughtUp() = runTest {
-        coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns glucoseReadings(100)
+        coEvery { bloodGlucoseRepository.getReadingsResult(any(), any()) } returns ReadingsResult(glucoseReadings(100))
         coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns Result.success(100)
 
         createUseCase().invoke()
@@ -188,13 +189,53 @@ class SyncHealthReadingsUseCaseTest {
     @Test
     @DisplayName("when HC returns 0 readings, no push, caughtUp true, watermark NOT advanced")
     fun zeroReadingsNoPushCaughtUpTrueWatermarkNotAdvanced() = runTest {
-        coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns emptyList()
+        coEvery { bloodGlucoseRepository.getReadingsResult(any(), any()) } returns ReadingsResult(emptyList())
 
         createUseCase().invoke()
 
         coVerify(exactly = 0) { foodScannerHealthRepository.pushGlucoseReadings(any()) }
         coVerify { settingsRepository.setGlucoseSyncCaughtUp(true) }
         coVerify(exactly = 0) { settingsRepository.setLastGlucoseSyncTimestamp(any()) }
+    }
+
+    // =========== TRUNCATION HANDLING ===========
+
+    @Test
+    @DisplayName("when result is truncated with fewer than 100 readings, caughtUp is NOT set to true")
+    fun truncatedResultNotCaughtUp() = runTest {
+        coEvery { bloodGlucoseRepository.getReadingsResult(any(), any()) } returns
+            ReadingsResult(glucoseReadings(50), truncated = true)
+        coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns Result.success(50)
+
+        createUseCase().invoke()
+
+        coVerify(exactly = 0) { settingsRepository.setGlucoseSyncCaughtUp(true) }
+        coVerify { settingsRepository.setGlucoseSyncCaughtUp(false) }
+    }
+
+    @Test
+    @DisplayName("when result is NOT truncated with fewer than 100 readings, caughtUp is true")
+    fun nonTruncatedResultCaughtUp() = runTest {
+        coEvery { bloodGlucoseRepository.getReadingsResult(any(), any()) } returns
+            ReadingsResult(glucoseReadings(50), truncated = false)
+        coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns Result.success(50)
+
+        createUseCase().invoke()
+
+        coVerify { settingsRepository.setGlucoseSyncCaughtUp(true) }
+    }
+
+    @Test
+    @DisplayName("truncated hydration result does not mark caught up even with few readings")
+    fun truncatedHydrationNotCaughtUp() = runTest {
+        coEvery { hydrationRepository.getReadingsResult(any(), any()) } returns
+            ReadingsResult(hydrationReadings(10), truncated = true)
+        coEvery { foodScannerHealthRepository.pushHydrationReadings(any()) } returns Result.success(10)
+
+        createUseCase().invoke()
+
+        coVerify(exactly = 0) { settingsRepository.setHydrationSyncCaughtUp(true) }
+        coVerify { settingsRepository.setHydrationSyncCaughtUp(false) }
     }
 
     // =========== LEDGER FILTERING ===========
@@ -210,7 +251,7 @@ class SyncHealthReadingsUseCaseTest {
             GlucoseReading(valueMgDl = 100, timestamp = Instant.ofEpochMilli(ts2)),
             GlucoseReading(valueMgDl = 100, timestamp = Instant.ofEpochMilli(ts3)),
         )
-        coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns readings
+        coEvery { bloodGlucoseRepository.getReadingsResult(any(), any()) } returns ReadingsResult(readings)
         coEvery { settingsRepository.getDirectPushedGlucoseTimestamps() } returns setOf(ts2)
         coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns Result.success(2)
 
@@ -229,7 +270,7 @@ class SyncHealthReadingsUseCaseTest {
         val readings = glucoseReadings(100, startMs = 1_000L)
         val allTimestamps = readings.map { it.timestamp.toEpochMilli() }.toSet()
         val lastTimestamp = readings.last().timestamp.toEpochMilli()
-        coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns readings
+        coEvery { bloodGlucoseRepository.getReadingsResult(any(), any()) } returns ReadingsResult(readings)
         coEvery { settingsRepository.getDirectPushedGlucoseTimestamps() } returns allTimestamps
 
         createUseCase().invoke()
@@ -243,8 +284,8 @@ class SyncHealthReadingsUseCaseTest {
     fun ledgerPrunedAfterWatermarkAdvances() = runTest {
         val glucoseTs = 5_000L
         val bpTs = 6_000L
-        coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns glucoseReadings(1, startMs = glucoseTs)
-        coEvery { bloodPressureRepository.getReadings(any(), any()) } returns bpReadings(1, startMs = bpTs)
+        coEvery { bloodGlucoseRepository.getReadingsResult(any(), any()) } returns ReadingsResult(glucoseReadings(1, startMs = glucoseTs))
+        coEvery { bloodPressureRepository.getReadingsResult(any(), any()) } returns ReadingsResult(bpReadings(1, startMs = bpTs))
         coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns Result.success(1)
         coEvery { foodScannerHealthRepository.pushBloodPressureReadings(any()) } returns Result.success(1)
 
@@ -260,7 +301,7 @@ class SyncHealthReadingsUseCaseTest {
     fun watermarkSetToLastPushedRecordTimestamp() = runTest {
         val readings = glucoseReadings(3, startMs = 1_000L)
         val expectedWatermark = readings.last().timestamp.toEpochMilli()
-        coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns readings
+        coEvery { bloodGlucoseRepository.getReadingsResult(any(), any()) } returns ReadingsResult(readings)
         coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns Result.success(3)
 
         createUseCase().invoke()
@@ -271,8 +312,8 @@ class SyncHealthReadingsUseCaseTest {
     @Test
     @DisplayName("glucose watermark advances independently when BP push fails")
     fun glucoseWatermarkAdvancesIndependentlyOfBp() = runTest {
-        coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns glucoseReadings(1, startMs = 1_000L)
-        coEvery { bloodPressureRepository.getReadings(any(), any()) } returns bpReadings(1, startMs = 2_000L)
+        coEvery { bloodGlucoseRepository.getReadingsResult(any(), any()) } returns ReadingsResult(glucoseReadings(1, startMs = 1_000L))
+        coEvery { bloodPressureRepository.getReadingsResult(any(), any()) } returns ReadingsResult(bpReadings(1, startMs = 2_000L))
         coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns Result.success(1)
         coEvery { foodScannerHealthRepository.pushBloodPressureReadings(any()) } returns Result.failure(Exception("bp failed"))
 
@@ -285,8 +326,8 @@ class SyncHealthReadingsUseCaseTest {
     @Test
     @DisplayName("BP watermark advances independently when glucose push fails")
     fun bpWatermarkAdvancesIndependentlyOfGlucose() = runTest {
-        coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns glucoseReadings(1, startMs = 1_000L)
-        coEvery { bloodPressureRepository.getReadings(any(), any()) } returns bpReadings(1, startMs = 2_000L)
+        coEvery { bloodGlucoseRepository.getReadingsResult(any(), any()) } returns ReadingsResult(glucoseReadings(1, startMs = 1_000L))
+        coEvery { bloodPressureRepository.getReadingsResult(any(), any()) } returns ReadingsResult(bpReadings(1, startMs = 2_000L))
         coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns Result.failure(Exception("glucose failed"))
         coEvery { foodScannerHealthRepository.pushBloodPressureReadings(any()) } returns Result.success(1)
 
@@ -302,7 +343,7 @@ class SyncHealthReadingsUseCaseTest {
     @DisplayName("on successful push of N records, sync count set to last batch size")
     fun syncCountSetToLastBatch() = runTest {
         every { settingsRepository.glucoseSyncCountFlow } returns flowOf(10)
-        coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns glucoseReadings(5)
+        coEvery { bloodGlucoseRepository.getReadingsResult(any(), any()) } returns ReadingsResult(glucoseReadings(5))
         coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns Result.success(5)
 
         createUseCase().invoke()
@@ -314,7 +355,7 @@ class SyncHealthReadingsUseCaseTest {
     @DisplayName("sync count uses server-reported count, not local list size")
     fun syncCountUsesServerReportedCount() = runTest {
         every { settingsRepository.glucoseSyncCountFlow } returns flowOf(10)
-        coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns glucoseReadings(100)
+        coEvery { bloodGlucoseRepository.getReadingsResult(any(), any()) } returns ReadingsResult(glucoseReadings(100))
         coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns Result.success(95)
 
         createUseCase().invoke()
@@ -327,8 +368,8 @@ class SyncHealthReadingsUseCaseTest {
     fun glucoseBpCountsTrackedIndependently() = runTest {
         every { settingsRepository.glucoseSyncCountFlow } returns flowOf(5)
         every { settingsRepository.bpSyncCountFlow } returns flowOf(7)
-        coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns glucoseReadings(3, startMs = 1_000L)
-        coEvery { bloodPressureRepository.getReadings(any(), any()) } returns bpReadings(2, startMs = 10_000L)
+        coEvery { bloodGlucoseRepository.getReadingsResult(any(), any()) } returns ReadingsResult(glucoseReadings(3, startMs = 1_000L))
+        coEvery { bloodPressureRepository.getReadingsResult(any(), any()) } returns ReadingsResult(bpReadings(2, startMs = 10_000L))
         coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns Result.success(3)
         coEvery { foodScannerHealthRepository.pushBloodPressureReadings(any()) } returns Result.success(2)
 
@@ -343,7 +384,7 @@ class SyncHealthReadingsUseCaseTest {
     @Test
     @DisplayName("when push fails with RateLimitException, retries up to 3 times (4 total attempts)")
     fun retryOnRateLimitException() = runTest {
-        coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns glucoseReadings(1)
+        coEvery { bloodGlucoseRepository.getReadingsResult(any(), any()) } returns ReadingsResult(glucoseReadings(1))
         coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns
             Result.failure(RateLimitException())
 
@@ -355,7 +396,7 @@ class SyncHealthReadingsUseCaseTest {
     @Test
     @DisplayName("when push fails with ServerException, retries up to 3 times (4 total attempts)")
     fun retryOnServerException() = runTest {
-        coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns glucoseReadings(1)
+        coEvery { bloodGlucoseRepository.getReadingsResult(any(), any()) } returns ReadingsResult(glucoseReadings(1))
         coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns
             Result.failure(ServerException(500))
 
@@ -367,7 +408,7 @@ class SyncHealthReadingsUseCaseTest {
     @Test
     @DisplayName("when push fails with IOException, retries up to 3 times (4 total attempts)")
     fun retryOnIOException() = runTest {
-        coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns glucoseReadings(1)
+        coEvery { bloodGlucoseRepository.getReadingsResult(any(), any()) } returns ReadingsResult(glucoseReadings(1))
         coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns
             Result.failure(IOException("network error"))
 
@@ -379,7 +420,7 @@ class SyncHealthReadingsUseCaseTest {
     @Test
     @DisplayName("after 3 retries exhausted, watermark is NOT advanced for that type")
     fun after3RetriesWatermarkNotAdvanced() = runTest {
-        coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns glucoseReadings(1)
+        coEvery { bloodGlucoseRepository.getReadingsResult(any(), any()) } returns ReadingsResult(glucoseReadings(1))
         coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns
             Result.failure(RateLimitException())
 
@@ -391,7 +432,7 @@ class SyncHealthReadingsUseCaseTest {
     @Test
     @DisplayName("on retry, delay increases: 500ms, 1s, 2s — verified with virtual time")
     fun retryDelayIncreases() = runTest {
-        coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns glucoseReadings(1)
+        coEvery { bloodGlucoseRepository.getReadingsResult(any(), any()) } returns ReadingsResult(glucoseReadings(1))
         coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns
             Result.failure(RateLimitException())
 
@@ -408,7 +449,7 @@ class SyncHealthReadingsUseCaseTest {
     @Test
     @DisplayName("when push fails with AuthenticationException, no retry and watermark NOT advanced")
     fun noRetryOnAuthenticationException() = runTest {
-        coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns glucoseReadings(1)
+        coEvery { bloodGlucoseRepository.getReadingsResult(any(), any()) } returns ReadingsResult(glucoseReadings(1))
         coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns
             Result.failure(AuthenticationException())
 
@@ -421,7 +462,7 @@ class SyncHealthReadingsUseCaseTest {
     @Test
     @DisplayName("when push fails with generic non-retryable exception, no retry and watermark NOT advanced")
     fun noRetryOnGenericException() = runTest {
-        coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns glucoseReadings(1)
+        coEvery { bloodGlucoseRepository.getReadingsResult(any(), any()) } returns ReadingsResult(glucoseReadings(1))
         coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns
             Result.failure(Exception("unexpected error"))
 
@@ -436,8 +477,8 @@ class SyncHealthReadingsUseCaseTest {
     @Test
     @DisplayName("glucose read throws SecurityException - caught, BP still processed normally")
     fun glucoseSecurityExceptionCaughtBpStillProcessed() = runTest {
-        coEvery { bloodGlucoseRepository.getReadings(any(), any()) } throws SecurityException("no permission")
-        coEvery { bloodPressureRepository.getReadings(any(), any()) } returns bpReadings(1)
+        coEvery { bloodGlucoseRepository.getReadingsResult(any(), any()) } throws SecurityException("no permission")
+        coEvery { bloodPressureRepository.getReadingsResult(any(), any()) } returns ReadingsResult(bpReadings(1))
         coEvery { foodScannerHealthRepository.pushBloodPressureReadings(any()) } returns Result.success(1)
 
         createUseCase().invoke()
@@ -449,8 +490,8 @@ class SyncHealthReadingsUseCaseTest {
     @Test
     @DisplayName("glucose read throws generic Exception - caught, BP still processed normally")
     fun glucoseGenericExceptionCaughtBpStillProcessed() = runTest {
-        coEvery { bloodGlucoseRepository.getReadings(any(), any()) } throws RuntimeException("read failed")
-        coEvery { bloodPressureRepository.getReadings(any(), any()) } returns bpReadings(1)
+        coEvery { bloodGlucoseRepository.getReadingsResult(any(), any()) } throws RuntimeException("read failed")
+        coEvery { bloodPressureRepository.getReadingsResult(any(), any()) } returns ReadingsResult(bpReadings(1))
         coEvery { foodScannerHealthRepository.pushBloodPressureReadings(any()) } returns Result.success(1)
 
         createUseCase().invoke()
@@ -476,8 +517,8 @@ class SyncHealthReadingsUseCaseTest {
 
         createUseCase().invoke()
 
-        coVerify(exactly = 0) { bloodGlucoseRepository.getReadings(any(), any()) }
-        coVerify(exactly = 0) { bloodPressureRepository.getReadings(any(), any()) }
+        coVerify(exactly = 0) { bloodGlucoseRepository.getReadingsResult(any(), any()) }
+        coVerify(exactly = 0) { bloodPressureRepository.getReadingsResult(any(), any()) }
     }
 
     // =========== HYDRATION SYNC ===========
@@ -487,7 +528,7 @@ class SyncHealthReadingsUseCaseTest {
     fun hydrationPushAdvancesWatermark() = runTest {
         val readings = hydrationReadings(3, startMs = 1_000L)
         val expectedWatermark = readings.last().timestamp.toEpochMilli()
-        coEvery { hydrationRepository.getReadings(any(), any()) } returns readings
+        coEvery { hydrationRepository.getReadingsResult(any(), any()) } returns ReadingsResult(readings)
         coEvery { foodScannerHealthRepository.pushHydrationReadings(any()) } returns Result.success(3)
 
         createUseCase().invoke()
@@ -500,7 +541,7 @@ class SyncHealthReadingsUseCaseTest {
     @Test
     @DisplayName("hydration push failure does NOT advance watermark")
     fun hydrationPushFailureDoesNotAdvanceWatermark() = runTest {
-        coEvery { hydrationRepository.getReadings(any(), any()) } returns hydrationReadings(1)
+        coEvery { hydrationRepository.getReadingsResult(any(), any()) } returns ReadingsResult(hydrationReadings(1))
         coEvery { foodScannerHealthRepository.pushHydrationReadings(any()) } returns
             Result.failure(Exception("push failed"))
 
@@ -512,9 +553,9 @@ class SyncHealthReadingsUseCaseTest {
     @Test
     @DisplayName("hydration exception does not block glucose or BP sync")
     fun hydrationExceptionDoesNotBlockOtherSyncs() = runTest {
-        coEvery { hydrationRepository.getReadings(any(), any()) } throws RuntimeException("hydration read failed")
-        coEvery { bloodGlucoseRepository.getReadings(any(), any()) } returns glucoseReadings(1, startMs = 1_000L)
-        coEvery { bloodPressureRepository.getReadings(any(), any()) } returns bpReadings(1, startMs = 2_000L)
+        coEvery { hydrationRepository.getReadingsResult(any(), any()) } throws RuntimeException("hydration read failed")
+        coEvery { bloodGlucoseRepository.getReadingsResult(any(), any()) } returns ReadingsResult(glucoseReadings(1, startMs = 1_000L))
+        coEvery { bloodPressureRepository.getReadingsResult(any(), any()) } returns ReadingsResult(bpReadings(1, startMs = 2_000L))
         coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns Result.success(1)
         coEvery { foodScannerHealthRepository.pushBloodPressureReadings(any()) } returns Result.success(1)
 
@@ -527,7 +568,7 @@ class SyncHealthReadingsUseCaseTest {
     @Test
     @DisplayName("hydration caughtUp set to true when fewer than 100 readings returned")
     fun hydrationCaughtUpWhenFewerThan100() = runTest {
-        coEvery { hydrationRepository.getReadings(any(), any()) } returns hydrationReadings(50)
+        coEvery { hydrationRepository.getReadingsResult(any(), any()) } returns ReadingsResult(hydrationReadings(50))
         coEvery { foodScannerHealthRepository.pushHydrationReadings(any()) } returns Result.success(50)
 
         createUseCase().invoke()
@@ -538,7 +579,7 @@ class SyncHealthReadingsUseCaseTest {
     @Test
     @DisplayName("hydration caughtUp set to false when exactly 100 readings returned")
     fun hydrationNotCaughtUpWhenExactly100() = runTest {
-        coEvery { hydrationRepository.getReadings(any(), any()) } returns hydrationReadings(100)
+        coEvery { hydrationRepository.getReadingsResult(any(), any()) } returns ReadingsResult(hydrationReadings(100))
         coEvery { foodScannerHealthRepository.pushHydrationReadings(any()) } returns Result.success(100)
 
         createUseCase().invoke()

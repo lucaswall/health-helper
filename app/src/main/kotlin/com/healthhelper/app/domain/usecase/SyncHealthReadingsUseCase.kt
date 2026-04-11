@@ -6,6 +6,7 @@ import com.healthhelper.app.data.api.ServerException
 import com.healthhelper.app.domain.model.BloodPressureReading
 import com.healthhelper.app.domain.model.GlucoseReading
 import com.healthhelper.app.domain.model.HydrationReading
+import com.healthhelper.app.domain.model.ReadingsResult
 import com.healthhelper.app.domain.repository.BloodGlucoseRepository
 import com.healthhelper.app.domain.repository.BloodPressureRepository
 import com.healthhelper.app.domain.repository.FoodScannerHealthRepository
@@ -31,7 +32,7 @@ class SyncHealthReadingsUseCase @Inject constructor(
         if (!settingsRepository.isConfigured()) return
 
         val glucoseWatermark = syncType(
-            getReadings = bloodGlucoseRepository::getReadings,
+            getReadings = bloodGlucoseRepository::getReadingsResult,
             pushReadings = foodScannerHealthRepository::pushGlucoseReadings,
             watermarkFlow = settingsRepository.lastGlucoseSyncTimestampFlow,
             setWatermark = settingsRepository::setLastGlucoseSyncTimestamp,
@@ -43,7 +44,7 @@ class SyncHealthReadingsUseCase @Inject constructor(
         )
 
         val bpWatermark = syncType(
-            getReadings = bloodPressureRepository::getReadings,
+            getReadings = bloodPressureRepository::getReadingsResult,
             pushReadings = foodScannerHealthRepository::pushBloodPressureReadings,
             watermarkFlow = settingsRepository.lastBpSyncTimestampFlow,
             setWatermark = settingsRepository::setLastBpSyncTimestamp,
@@ -55,7 +56,7 @@ class SyncHealthReadingsUseCase @Inject constructor(
         )
 
         syncType(
-            getReadings = hydrationRepository::getReadings,
+            getReadings = hydrationRepository::getReadingsResult,
             pushReadings = foodScannerHealthRepository::pushHydrationReadings,
             watermarkFlow = settingsRepository.lastHydrationSyncTimestampFlow,
             setWatermark = settingsRepository::setLastHydrationSyncTimestamp,
@@ -70,7 +71,7 @@ class SyncHealthReadingsUseCase @Inject constructor(
     }
 
     private suspend fun <T> syncType(
-        getReadings: suspend (Instant, Instant) -> List<T>,
+        getReadings: suspend (Instant, Instant) -> ReadingsResult<T>,
         pushReadings: suspend (List<T>) -> Result<Int>,
         watermarkFlow: Flow<Long>,
         setWatermark: suspend (Long) -> Unit,
@@ -85,7 +86,8 @@ class SyncHealthReadingsUseCase @Inject constructor(
             val start = if (watermark == 0L) Instant.EPOCH else Instant.ofEpochMilli(watermark + 1)
             val end = Instant.now()
 
-            val readings = getReadings(start, end)
+            val result = getReadings(start, end)
+            val readings = result.readings
             val batch = readings.take(MAX_READINGS_PER_RUN)
 
             if (batch.isEmpty()) {
@@ -98,7 +100,7 @@ class SyncHealthReadingsUseCase @Inject constructor(
             val ledger = getLedger()
             val toPublish = batch.filter { getTimestamp(it) !in ledger }
             val lastBatchTimestamp = getTimestamp(batch.last())
-            val caughtUp = readings.size < MAX_READINGS_PER_RUN
+            val caughtUp = readings.size < MAX_READINGS_PER_RUN && !result.truncated
 
             if (toPublish.isNotEmpty()) {
                 val result = pushWithRetry { pushReadings(toPublish) }
