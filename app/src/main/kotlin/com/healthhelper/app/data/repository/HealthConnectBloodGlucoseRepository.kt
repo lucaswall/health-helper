@@ -8,6 +8,7 @@ import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import dagger.hilt.android.qualifiers.ApplicationContext
 import com.healthhelper.app.domain.model.GlucoseReading
+import com.healthhelper.app.domain.model.ReadingsResult
 import com.healthhelper.app.domain.repository.BloodGlucoseRepository
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
@@ -91,13 +92,16 @@ class HealthConnectBloodGlucoseRepository @Inject constructor(
         }
     }
 
-    override suspend fun getReadings(start: Instant, end: Instant): List<GlucoseReading> {
+    override suspend fun getReadings(start: Instant, end: Instant): List<GlucoseReading> =
+        getReadingsResult(start, end).readings
+
+    override suspend fun getReadingsResult(start: Instant, end: Instant): ReadingsResult<GlucoseReading> {
         if (healthConnectClient == null) {
             Timber.w("getReadings: Health Connect not available")
-            return emptyList()
+            return ReadingsResult(emptyList())
         }
         val allRecords = mutableListOf<BloodGlucoseRecord>()
-        var paginationTruncated = false
+        var truncated = false
         return try {
             val startMs = System.currentTimeMillis()
             var pageToken: String? = null
@@ -109,7 +113,7 @@ class HealthConnectBloodGlucoseRepository @Inject constructor(
                         CUMULATIVE_TIMEOUT_MS / 1000,
                         allRecords.size,
                     )
-                    paginationTruncated = true
+                    truncated = true
                     break
                 }
                 val response = withTimeout(10_000L) {
@@ -125,36 +129,38 @@ class HealthConnectBloodGlucoseRepository @Inject constructor(
                 allRecords.addAll(response.records)
                 pageToken = response.pageToken
             } while (pageToken != null)
-            if (!paginationTruncated) {
+            if (!truncated) {
                 Timber.d(
                     "getReadings: read %d glucose records in %dms",
                     allRecords.size,
                     System.currentTimeMillis() - startMs,
                 )
             }
-            allRecords
+            val readings = allRecords
                 .mapNotNull { record ->
                     runCatching { mapToGlucoseReading(record) }
                         .onFailure { Timber.w(it, "getReadings: failed to map glucose record") }
                         .getOrNull()
                 }
                 .sortedBy { it.timestamp }
+            ReadingsResult(readings, truncated)
         } catch (e: TimeoutCancellationException) {
             Timber.w("getReadings: per-page timeout, returning %d partial glucose records", allRecords.size)
-            allRecords
+            val readings = allRecords
                 .mapNotNull { record ->
                     runCatching { mapToGlucoseReading(record) }
                         .onFailure { Timber.w(it, "getReadings: failed to map glucose record") }
                         .getOrNull()
                 }
                 .sortedBy { it.timestamp }
+            ReadingsResult(readings, truncated = true)
         } catch (e: SecurityException) {
             Timber.e(e, "getReadings: permission denied")
-            emptyList()
+            ReadingsResult(emptyList())
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             Timber.e(e, "getReadings: failed")
-            emptyList()
+            ReadingsResult(emptyList())
         }
     }
 
