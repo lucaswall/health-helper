@@ -129,3 +129,34 @@
 **Scope:** 3 tasks, 4 files (2 create, 2 modify), ~8 tests
 **Key Decisions:** Daily total (not last reading) for the primary display; relative time format ("2 months ago") for history progress across all ranges; no action button since hydration is read-only from Health Connect.
 **Risks:** HydrationRecord read permission not currently in REQUIRED_HC_PERMISSIONS — existing installs will need to re-grant Health Connect permissions after this update.
+
+---
+
+## Iteration 1
+
+**Implemented:** 2026-04-10
+**Method:** Single-agent
+
+### Tasks Completed This Iteration
+- Task 1: GetTodayHydrationTotalUseCase (HEA-200) — Created use case + 5 tests
+- Task 2: SyncViewModel hydration integration (HEA-201) — Added 3 SyncUiState fields, hydration sync/history observers, loadTodayHydration, formatHistoryAge, formatHydrationHistoryStatus, HydrationRecord permission + 9 tests
+- Task 3: SyncScreen hydration card (HEA-202) — Added hydration card after glucose card with daily total, sync status, history status
+
+### Files Modified
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/GetTodayHydrationTotalUseCase.kt` — Created domain use case summing today's hydration readings
+- `app/src/test/kotlin/com/healthhelper/app/domain/usecase/GetTodayHydrationTotalUseCaseTest.kt` — Created 5 tests for use case
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` — Added hydration fields to SyncUiState, HydrationRecord permission, sync/history observers, load/refresh methods, formatHistoryAge/formatHydrationHistoryStatus functions
+- `app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt` — Added 9 hydration tests + mock setup
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SyncScreen.kt` — Added hydration card section
+
+### Linear Updates
+- HEA-200: Todo → In Progress → Review
+- HEA-201: Todo → In Progress → Review
+- HEA-202: Todo → In Progress → Review
+
+### Pre-commit Verification
+- bug-hunter: Found 1 medium bug (formatHistoryAge "0 days ago"), fixed before proceeding. 2 low issues skipped (match existing codebase patterns).
+- verifier: All tests pass, zero warnings, build clean
+
+### Continuation Status
+All tasks completed.
