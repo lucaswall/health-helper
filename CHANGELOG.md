@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-04-10
+
+### Fixed
+
+- Fixed sync incorrectly marking history as caught up when Health Connect returned truncated results
+- Fixed hydration watermark not resetting properly for full history re-sync
+
 ## [1.8.0] - 2026-04-10
 
 ### Added
@@ -149,7 +156,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Settings screen for API configuration and sync interval
 - Adaptive launcher icon with health cross design
 
-[Unreleased]: https://github.com/lucaswall/health-helper/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/lucaswall/health-helper/compare/v1.8.1...HEAD
+[1.8.1]: https://github.com/lucaswall/health-helper/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/lucaswall/health-helper/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/lucaswall/health-helper/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/lucaswall/health-helper/compare/v1.5.2...v1.6.0

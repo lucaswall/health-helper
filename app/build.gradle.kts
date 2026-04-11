@@ -15,8 +15,8 @@ android {
         applicationId = "com.healthhelper.app"
         minSdk = 28
         targetSdk = 36
-        versionCode = 15
-        versionName = "1.8.0"
+        versionCode = 16
+        versionName = "1.8.1"
     }
 
     buildTypes {
