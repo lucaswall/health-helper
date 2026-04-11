@@ -55,6 +55,8 @@ class SyncHealthReadingsUseCase @Inject constructor(
             getTimestamp = { it.timestamp.toEpochMilli() },
         )
 
+        settingsRepository.resetHydrationWatermarkIfNeeded()
+
         syncType(
             getReadings = hydrationRepository::getReadingsResult,
             pushReadings = foodScannerHealthRepository::pushHydrationReadings,

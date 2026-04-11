@@ -61,6 +61,7 @@ class SyncHealthReadingsUseCaseTest {
         coEvery { settingsRepository.setHydrationSyncCount(any()) } returns Unit
         coEvery { settingsRepository.setHydrationSyncCaughtUp(any()) } returns Unit
         coEvery { settingsRepository.setHydrationSyncRunTimestamp(any()) } returns Unit
+        coEvery { settingsRepository.resetHydrationWatermarkIfNeeded() } returns Unit
         coEvery { bloodGlucoseRepository.getReadingsResult(any(), any()) } returns ReadingsResult(emptyList())
         coEvery { bloodPressureRepository.getReadingsResult(any(), any()) } returns ReadingsResult(emptyList())
         coEvery { hydrationRepository.getReadingsResult(any(), any()) } returns ReadingsResult(emptyList())

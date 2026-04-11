@@ -67,6 +67,7 @@ class DataStoreSettingsRepository @Inject constructor(
         val FOOD_LOG_ETAGS = stringPreferencesKey("food_log_etags")
         val DIRECT_PUSHED_GLUCOSE_TIMESTAMPS = stringPreferencesKey("direct_pushed_glucose_timestamps")
         val DIRECT_PUSHED_BP_TIMESTAMPS = stringPreferencesKey("direct_pushed_bp_timestamps")
+        val HYDRATION_WATERMARK_RESET_V1 = booleanPreferencesKey("hydration_watermark_reset_v1")
         const val DEFAULT_SYNC_INTERVAL = 15
         const val ENCRYPTED_API_KEY = "api_key"
         const val ENCRYPTED_ANTHROPIC_KEY = "anthropic_api_key"
@@ -447,6 +448,22 @@ class DataStoreSettingsRepository @Inject constructor(
                 val pruned = existing.filter { it >= bpBeforeMs }.toSet()
                 prefs[DIRECT_PUSHED_BP_TIMESTAMPS] = Json.encodeToString(pruned)
             }
+        }
+    }
+
+    override suspend fun resetHydrationWatermarkIfNeeded() {
+        dataStore.edit { prefs ->
+            if (prefs[HYDRATION_WATERMARK_RESET_V1] == true) return@edit
+            val currentWatermark = prefs[LAST_HYDRATION_SYNC_TIMESTAMP] ?: 0L
+            if (currentWatermark > 0L) {
+                Timber.i(
+                    "resetHydrationWatermarkIfNeeded: resetting watermark from %d to 0 for full re-sync",
+                    currentWatermark,
+                )
+                prefs[LAST_HYDRATION_SYNC_TIMESTAMP] = 0L
+                prefs[HYDRATION_SYNC_CAUGHT_UP] = false
+            }
+            prefs[HYDRATION_WATERMARK_RESET_V1] = true
         }
     }
 }

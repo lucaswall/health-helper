@@ -51,4 +51,5 @@ interface SettingsRepository {
     suspend fun getDirectPushedBpTimestamps(): Set<Long>
     suspend fun addDirectPushedBpTimestamp(timestampMs: Long)
     suspend fun pruneDirectPushedTimestamps(glucoseBeforeMs: Long, bpBeforeMs: Long)
+    suspend fun resetHydrationWatermarkIfNeeded()
 }
