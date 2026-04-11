@@ -4,6 +4,7 @@ import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.BloodGlucoseRecord
 import androidx.health.connect.client.records.BloodPressureRecord
+import androidx.health.connect.client.records.HydrationRecord
 import androidx.health.connect.client.records.NutritionRecord
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -16,9 +17,11 @@ import com.healthhelper.app.domain.model.SyncedMealSummary
 import com.healthhelper.app.domain.repository.SettingsRepository
 import com.healthhelper.app.domain.usecase.GetLastBloodPressureReadingUseCase
 import com.healthhelper.app.domain.usecase.GetLastGlucoseReadingUseCase
+import com.healthhelper.app.domain.usecase.GetTodayHydrationTotalUseCase
 import com.healthhelper.app.domain.usecase.SyncHealthReadingsUseCase
 import com.healthhelper.app.domain.usecase.SyncNutritionUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
+import java.text.NumberFormat
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -58,6 +61,9 @@ data class SyncUiState(
     val lastGlucoseReadingTime: String = "",
     val glucoseSyncStatus: String = "",
     val bpSyncStatus: String = "",
+    val hydrationTodayDisplay: String = "",
+    val hydrationSyncStatus: String = "",
+    val hydrationHistoryStatus: String = "",
 )
 
 @HiltViewModel
@@ -68,6 +74,7 @@ class SyncViewModel @Inject constructor(
     private val syncScheduler: SyncScheduler,
     private val getLastBpReadingUseCase: GetLastBloodPressureReadingUseCase,
     private val getLastGlucoseReadingUseCase: GetLastGlucoseReadingUseCase,
+    private val getTodayHydrationTotalUseCase: GetTodayHydrationTotalUseCase,
     private val healthConnectClient: HealthConnectClient?,
 ) : ViewModel() {
 
@@ -78,6 +85,7 @@ class SyncViewModel @Inject constructor(
             HealthPermission.getReadPermission(BloodPressureRecord::class),
             HealthPermission.getWritePermission(BloodGlucoseRecord::class),
             HealthPermission.getReadPermission(BloodGlucoseRecord::class),
+            HealthPermission.getReadPermission(HydrationRecord::class),
             "android.permission.health.READ_HEALTH_DATA_HISTORY",
         )
     }
@@ -93,6 +101,9 @@ class SyncViewModel @Inject constructor(
     private var bpSyncCount = 0
     private var glucoseSyncCaughtUp = false
     private var bpSyncCaughtUp = false
+    private var lastHydrationSyncTs = 0L
+    private var hydrationSyncCount = 0
+    private var hydrationSyncCaughtUp = false
 
     init {
         Timber.d("SyncViewModel: init, healthConnectAvailable=%b", healthConnectClient != null)
@@ -122,12 +133,15 @@ class SyncViewModel @Inject constructor(
             }
         }
 
-        // Load last BP and glucose readings on launch
+        // Load last BP, glucose, and hydration readings on launch
         viewModelScope.launch {
             loadLastBpReading()
         }
         viewModelScope.launch {
             loadLastGlucoseReading()
+        }
+        viewModelScope.launch {
+            loadTodayHydration()
         }
 
         // Observe all settings flows for UI state — isConfigured derived reactively
@@ -177,7 +191,14 @@ class SyncViewModel @Inject constructor(
                         it.copy(lastGlucoseReadingTime = formatRelativeTime(currentGlucose.timestamp.toEpochMilli()))
                     }
                 }
+                // Refresh hydration daily total
+                loadTodayHydration()
                 // Refresh sync status strings that contain relative timestamps
+                if (lastHydrationSyncTs > 0 && hydrationSyncCount > 0 && !hydrationSyncCaughtUp) {
+                    _uiState.update {
+                        it.copy(hydrationSyncStatus = formatSyncStatus(hydrationSyncCount, hydrationSyncCaughtUp, lastHydrationSyncTs))
+                    }
+                }
                 if (lastGlucoseSyncTs > 0 && glucoseSyncCount > 0 && !glucoseSyncCaughtUp) {
                     _uiState.update {
                         it.copy(glucoseSyncStatus = formatSyncStatus(glucoseSyncCount, glucoseSyncCaughtUp, lastGlucoseSyncTs))
@@ -227,6 +248,35 @@ class SyncViewModel @Inject constructor(
                 formatSyncStatus(count, caughtUp, ts)
             }.collect { status ->
                 _uiState.update { it.copy(bpSyncStatus = status) }
+            }
+        }
+
+        // Observe hydration sync status flows
+        viewModelScope.launch {
+            combine(
+                settingsRepository.hydrationSyncCountFlow,
+                settingsRepository.hydrationSyncCaughtUpFlow,
+                settingsRepository.hydrationSyncRunTimestampFlow,
+            ) { count, caughtUp, ts ->
+                hydrationSyncCount = count
+                hydrationSyncCaughtUp = caughtUp
+                lastHydrationSyncTs = ts
+                formatSyncStatus(count, caughtUp, ts)
+            }.collect { status ->
+                _uiState.update { it.copy(hydrationSyncStatus = status) }
+            }
+        }
+
+        // Observe hydration history status
+        viewModelScope.launch {
+            combine(
+                settingsRepository.lastHydrationSyncTimestampFlow,
+                settingsRepository.hydrationSyncCaughtUpFlow,
+                settingsRepository.hydrationSyncRunTimestampFlow,
+            ) { watermark, caughtUp, runTs ->
+                formatHydrationHistoryStatus(watermark, caughtUp, runTs)
+            }.collect { status ->
+                _uiState.update { it.copy(hydrationHistoryStatus = status) }
             }
         }
 
@@ -316,6 +366,31 @@ class SyncViewModel @Inject constructor(
     fun refreshLastGlucoseReading() {
         viewModelScope.launch {
             loadLastGlucoseReading()
+        }
+    }
+
+    private suspend fun loadTodayHydration() {
+        try {
+            val total = getTodayHydrationTotalUseCase.invoke()
+            _uiState.update {
+                it.copy(
+                    hydrationTodayDisplay = if (total > 0) {
+                        "${NumberFormat.getIntegerInstance().format(total)} mL"
+                    } else {
+                        ""
+                    },
+                )
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to load today hydration total")
+        }
+    }
+
+    fun refreshTodayHydration() {
+        viewModelScope.launch {
+            loadTodayHydration()
         }
     }
 
@@ -424,6 +499,28 @@ internal fun formatSyncStatus(count: Int, caughtUp: Boolean, runTimestampMs: Lon
             "Pushed $count $label · $timeStr"
         }
     }
+}
+
+internal fun formatHistoryAge(timestampMillis: Long): String {
+    if (timestampMillis <= 0L) return ""
+    val now = System.currentTimeMillis()
+    val diffMs = now - timestampMillis
+    if (diffMs < 0) return "just now"
+    val diffDays = diffMs / (24 * 60 * 60 * 1000L)
+    return when {
+        diffDays == 0L -> "today"
+        diffDays < 7 -> "${diffDays} days ago"
+        diffDays < 30 -> "${diffDays / 7} weeks ago"
+        diffDays < 365 -> "${diffDays / 30} months ago"
+        else -> "${diffDays / 365} years ago"
+    }
+}
+
+internal fun formatHydrationHistoryStatus(watermark: Long, caughtUp: Boolean, runTimestamp: Long): String {
+    if (runTimestamp == 0L) return ""
+    if (caughtUp) return "History: up to date"
+    if (watermark == 0L) return "History: starting..."
+    return "History: synced to ${formatHistoryAge(watermark)}"
 }
 
 internal fun formatRelativeTime(timestampMillis: Long): String {

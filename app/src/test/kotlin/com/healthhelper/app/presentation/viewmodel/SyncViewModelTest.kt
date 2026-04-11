@@ -17,12 +17,14 @@ import com.healthhelper.app.domain.repository.SettingsRepository
 import com.healthhelper.app.domain.model.GlucoseReading
 import com.healthhelper.app.domain.usecase.GetLastBloodPressureReadingUseCase
 import com.healthhelper.app.domain.usecase.GetLastGlucoseReadingUseCase
+import com.healthhelper.app.domain.usecase.GetTodayHydrationTotalUseCase
 import com.healthhelper.app.domain.usecase.SyncHealthReadingsUseCase
 import com.healthhelper.app.domain.usecase.SyncNutritionUseCase
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import java.text.NumberFormat
 import java.time.Instant
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -51,6 +53,7 @@ class SyncViewModelTest {
     private lateinit var syncScheduler: SyncScheduler
     private lateinit var getLastBpReadingUseCase: GetLastBloodPressureReadingUseCase
     private lateinit var getLastGlucoseReadingUseCase: GetLastGlucoseReadingUseCase
+    private lateinit var getTodayHydrationTotalUseCase: GetTodayHydrationTotalUseCase
     private lateinit var syncHealthReadingsUseCase: SyncHealthReadingsUseCase
     private lateinit var viewModel: SyncViewModel
 
@@ -62,6 +65,7 @@ class SyncViewModelTest {
         syncScheduler = mockk(relaxed = true)
         getLastBpReadingUseCase = mockk()
         getLastGlucoseReadingUseCase = mockk()
+        getTodayHydrationTotalUseCase = mockk()
         syncHealthReadingsUseCase = mockk(relaxed = true)
 
         every { settingsRepository.apiKeyFlow } returns flowOf("fsk_test")
@@ -79,11 +83,16 @@ class SyncViewModelTest {
         every { settingsRepository.bpSyncCaughtUpFlow } returns flowOf(false)
         every { settingsRepository.glucoseSyncRunTimestampFlow } returns flowOf(0L)
         every { settingsRepository.bpSyncRunTimestampFlow } returns flowOf(0L)
+        every { settingsRepository.hydrationSyncCountFlow } returns flowOf(0)
+        every { settingsRepository.hydrationSyncCaughtUpFlow } returns flowOf(false)
+        every { settingsRepository.hydrationSyncRunTimestampFlow } returns flowOf(0L)
+        every { settingsRepository.lastHydrationSyncTimestampFlow } returns flowOf(0L)
         coEvery { settingsRepository.isConfigured() } returns true
         coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.NeedsConfiguration
         every { syncScheduler.getNextSyncTimeFlow() } returns flowOf(null)
         coEvery { getLastBpReadingUseCase.invoke() } returns null
         coEvery { getLastGlucoseReadingUseCase.invoke() } returns null
+        coEvery { getTodayHydrationTotalUseCase.invoke() } returns 0
     }
 
     @AfterEach
@@ -94,7 +103,7 @@ class SyncViewModelTest {
     private val healthConnectClient: HealthConnectClient? = mockk(relaxed = true)
 
     private fun createViewModel(hcClient: HealthConnectClient? = healthConnectClient): SyncViewModel =
-        SyncViewModel(syncNutritionUseCase, syncHealthReadingsUseCase, settingsRepository, syncScheduler, getLastBpReadingUseCase, getLastGlucoseReadingUseCase, hcClient)
+        SyncViewModel(syncNutritionUseCase, syncHealthReadingsUseCase, settingsRepository, syncScheduler, getLastBpReadingUseCase, getLastGlucoseReadingUseCase, getTodayHydrationTotalUseCase, hcClient)
 
     /**
      * Wraps [runTest] to cancel viewModelScope after the test body,
@@ -1041,6 +1050,173 @@ class SyncViewModelTest {
             val state = awaitItem()
             val relativeTime = formatRelativeTime(mar15Ms)
             assertEquals("Pushed 50 readings · $relativeTime", state.glucoseSyncStatus)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    // --- HEA-201: Hydration sync card ---
+
+    @Test
+    fun `hydrationTodayDisplay shows formatted total when use case returns positive value`() = viewModelTest {
+        coEvery { getTodayHydrationTotalUseCase.invoke() } returns 1250
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            val expected = "${NumberFormat.getIntegerInstance().format(1250)} mL"
+            assertEquals(expected, state.hydrationTodayDisplay)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `hydrationTodayDisplay is empty when use case returns 0`() = viewModelTest {
+        coEvery { getTodayHydrationTotalUseCase.invoke() } returns 0
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals("", state.hydrationTodayDisplay)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `hydrationSyncStatus shows not synced when run timestamp is 0`() = viewModelTest {
+        every { settingsRepository.hydrationSyncCountFlow } returns flowOf(10)
+        every { settingsRepository.hydrationSyncRunTimestampFlow } returns flowOf(0L)
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals("Not synced to food-scanner", state.hydrationSyncStatus)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `hydrationSyncStatus shows pushed count with relative time`() = viewModelTest {
+        val recentMs = System.currentTimeMillis() - 60_000L
+        every { settingsRepository.hydrationSyncCountFlow } returns flowOf(12)
+        every { settingsRepository.hydrationSyncCaughtUpFlow } returns flowOf(false)
+        every { settingsRepository.hydrationSyncRunTimestampFlow } returns flowOf(recentMs)
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertTrue(state.hydrationSyncStatus.startsWith("Pushed 12 readings"), "Got: ${state.hydrationSyncStatus}")
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `hydrationSyncStatus shows up to date when caught up`() = viewModelTest {
+        val recentMs = System.currentTimeMillis() - 60_000L
+        every { settingsRepository.hydrationSyncCountFlow } returns flowOf(0)
+        every { settingsRepository.hydrationSyncCaughtUpFlow } returns flowOf(true)
+        every { settingsRepository.hydrationSyncRunTimestampFlow } returns flowOf(recentMs)
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertTrue(state.hydrationSyncStatus.startsWith("Up to date"), "Got: ${state.hydrationSyncStatus}")
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `hydrationHistoryStatus shows up to date when caught up`() = viewModelTest {
+        val recentMs = System.currentTimeMillis() - 60_000L
+        every { settingsRepository.lastHydrationSyncTimestampFlow } returns flowOf(recentMs)
+        every { settingsRepository.hydrationSyncCaughtUpFlow } returns flowOf(true)
+        every { settingsRepository.hydrationSyncRunTimestampFlow } returns flowOf(recentMs)
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals("History: up to date", state.hydrationHistoryStatus)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `hydrationHistoryStatus shows relative age when backfilling`() = viewModelTest {
+        val twoMonthsAgoMs = System.currentTimeMillis() - (60L * 24 * 60 * 60 * 1000)
+        val recentMs = System.currentTimeMillis() - 60_000L
+        every { settingsRepository.lastHydrationSyncTimestampFlow } returns flowOf(twoMonthsAgoMs)
+        every { settingsRepository.hydrationSyncCaughtUpFlow } returns flowOf(false)
+        every { settingsRepository.hydrationSyncRunTimestampFlow } returns flowOf(recentMs)
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertTrue(state.hydrationHistoryStatus.startsWith("History: synced to"), "Got: ${state.hydrationHistoryStatus}")
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `hydrationHistoryStatus shows today when watermark is recent`() = viewModelTest {
+        val oneHourAgoMs = System.currentTimeMillis() - 3_600_000L
+        val recentMs = System.currentTimeMillis() - 60_000L
+        every { settingsRepository.lastHydrationSyncTimestampFlow } returns flowOf(oneHourAgoMs)
+        every { settingsRepository.hydrationSyncCaughtUpFlow } returns flowOf(false)
+        every { settingsRepository.hydrationSyncRunTimestampFlow } returns flowOf(recentMs)
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals("History: synced to today", state.hydrationHistoryStatus)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `hydrationHistoryStatus is empty when never synced`() = viewModelTest {
+        every { settingsRepository.lastHydrationSyncTimestampFlow } returns flowOf(0L)
+        every { settingsRepository.hydrationSyncCaughtUpFlow } returns flowOf(false)
+        every { settingsRepository.hydrationSyncRunTimestampFlow } returns flowOf(0L)
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals("", state.hydrationHistoryStatus)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `refreshTodayHydration reloads from use case`() = viewModelTest {
+        coEvery { getTodayHydrationTotalUseCase.invoke() } returns 0 andThen 750
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.refreshTodayHydration()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            val expected = "${NumberFormat.getIntegerInstance().format(750)} mL"
+            assertEquals(expected, state.hydrationTodayDisplay)
             cancelAndIgnoreRemainingEvents()
         }
     }

@@ -352,6 +352,50 @@ fun SyncScreen(
                     }
                 }
             }
+
+            // Section 4: Hydration
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text(
+                        text = "Hydration",
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+
+                    if (uiState.hydrationTodayDisplay.isNotEmpty()) {
+                        Text(
+                            text = "${uiState.hydrationTodayDisplay} today",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    } else {
+                        Text(
+                            text = "No readings today",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+
+                    if (uiState.hydrationSyncStatus.isNotEmpty()) {
+                        Text(
+                            text = uiState.hydrationSyncStatus,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+
+                    if (uiState.hydrationHistoryStatus.isNotEmpty()) {
+                        Text(
+                            text = uiState.hydrationHistoryStatus,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
         }
     }
 }

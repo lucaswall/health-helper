@@ -62,7 +62,7 @@ class SettingsViewModel @Inject constructor(
                     PersistedSettings(apiKey, anthropicApiKey, baseUrl, syncInterval)
                 }.collect { settings ->
                     persistedSettings = settings
-                    if (!isSaving) {
+                    if (!isSaving && !_uiState.value.hasUnsavedChanges) {
                         val configured = settings.apiKey.isNotEmpty() && settings.baseUrl.isNotEmpty()
                         _uiState.update {
                             it.copy(
