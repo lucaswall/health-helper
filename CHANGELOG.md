@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-04-10
+
+### Added
+
+- Hydration readings from Health Connect now sync to Food Scanner alongside glucose and blood pressure
+
+### Fixed
+
+- Fixed fractional hydration volumes being silently dropped instead of rounded
+
 ## [1.6.0] - 2026-03-30
 
 ### Added
@@ -129,7 +139,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Settings screen for API configuration and sync interval
 - Adaptive launcher icon with health cross design
 
-[Unreleased]: https://github.com/lucaswall/health-helper/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/lucaswall/health-helper/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/lucaswall/health-helper/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/lucaswall/health-helper/compare/v1.5.2...v1.6.0
 [1.5.2]: https://github.com/lucaswall/health-helper/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/lucaswall/health-helper/compare/v1.5.0...v1.5.1
