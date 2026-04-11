@@ -24,6 +24,7 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import java.text.NumberFormat
 import java.time.Instant
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -1064,7 +1065,8 @@ class SyncViewModelTest {
 
         viewModel.uiState.test {
             val state = awaitItem()
-            assertEquals("1,250 mL", state.hydrationTodayDisplay)
+            val expected = "${NumberFormat.getIntegerInstance().format(1250)} mL"
+            assertEquals(expected, state.hydrationTodayDisplay)
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -1197,6 +1199,24 @@ class SyncViewModelTest {
         viewModel.uiState.test {
             val state = awaitItem()
             assertEquals("", state.hydrationHistoryStatus)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `refreshTodayHydration reloads from use case`() = viewModelTest {
+        coEvery { getTodayHydrationTotalUseCase.invoke() } returns 0 andThen 750
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.refreshTodayHydration()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            val expected = "${NumberFormat.getIntegerInstance().format(750)} mL"
+            assertEquals(expected, state.hydrationTodayDisplay)
             cancelAndIgnoreRemainingEvents()
         }
     }

@@ -1,6 +1,7 @@
 # Implementation Plan
 
 **Created:** 2026-04-10
+**Status:** COMPLETE
 **Source:** Inline request: Hydration sync home screen card with daily total, sync status, and history progress
 **Linear Issues:** [HEA-200](https://linear.app/lw-claude/issue/HEA-200), [HEA-201](https://linear.app/lw-claude/issue/HEA-201), [HEA-202](https://linear.app/lw-claude/issue/HEA-202)
 **Branch:** feat/hydration-sync-card
@@ -158,5 +159,40 @@
 - bug-hunter: Found 1 medium bug (formatHistoryAge "0 days ago"), fixed before proceeding. 2 low issues skipped (match existing codebase patterns).
 - verifier: All tests pass, zero warnings, build clean
 
+### Review Findings
+
+Summary: 2 issue(s) found, fixed inline (Team: security, reliability, quality reviewers)
+- FIXED INLINE: 2 issue(s) — verified via TDD + bug-hunter
+
+**Issues fixed inline:**
+- [HIGH] BUG: Locale-sensitive test assertion hardcodes "1,250 mL" (`app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt:1067`) — replaced with `NumberFormat.getIntegerInstance().format()` for locale independence
+- [MEDIUM] EDGE CASE: Missing `refreshTodayHydration()` test (`app/src/test/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModelTest.kt`) — added test following existing BP/glucose refresh test pattern
+
+**Discarded findings (not bugs):**
+- [DISCARDED] SECURITY: HC data loaded before permission check completes (SyncViewModel.kt:143-145) — Pre-existing pattern across all data types; HC runtime enforces permissions, exception caught and returns 0/null
+- [DISCARDED] TIMEOUT: No timeout on getReadings() in use case (GetTodayHydrationTotalUseCase.kt:19) — Pre-existing pattern; BP and glucose use cases also lack timeout wrapping; try-catch handles eventual errors
+- [DISCARDED] BUG: "Up to date" relative time never refreshes (SyncViewModel.kt:197-200) — Pre-existing pattern identical to glucose (lines 202-206) and BP (lines 207-210)
+- [DISCARDED] TYPE: `healthConnectClient!!` force-unwrap in tests (SyncViewModelTest.kt:531+) — Pre-existing pattern; always initialized as non-null mock; no crash risk; style-only
+- [DISCARDED] CONVENTION: Timber in domain layer (GetTodayHydrationTotalUseCase.kt:4) — Established codebase pattern; 5 other domain use cases import Timber
+
+### Linear Updates
+- HEA-200: Review → Merge
+- HEA-201: Review → Merge
+- HEA-202: Review → Merge
+- HEA-203: Created in Merge (Fix: locale-sensitive test assertion — fixed inline)
+- HEA-204: Created in Merge (Fix: missing refreshTodayHydration test — fixed inline)
+
+### Inline Fix Verification
+- Unit tests: all pass
+- Bug-hunter: no new issues
+
+<!-- REVIEW COMPLETE -->
+
 ### Continuation Status
 All tasks completed.
+
+---
+
+## Status: COMPLETE
+
+All tasks implemented and reviewed successfully. All Linear issues moved to Merge.
