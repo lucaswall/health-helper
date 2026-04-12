@@ -9,7 +9,6 @@ import com.healthhelper.app.domain.model.readPermission
 import com.healthhelper.app.domain.repository.BloodGlucoseRepository
 import com.healthhelper.app.domain.repository.BloodPressureRepository
 import com.healthhelper.app.domain.repository.FoodScannerHealthRepository
-import com.healthhelper.app.domain.repository.HealthPermissionChecker
 import com.healthhelper.app.domain.repository.HydrationRepository
 import com.healthhelper.app.domain.repository.SettingsRepository
 import java.io.IOException
@@ -27,18 +26,15 @@ class SyncHealthReadingsUseCase @Inject constructor(
     private val hydrationRepository: HydrationRepository,
     private val foodScannerHealthRepository: FoodScannerHealthRepository,
     private val settingsRepository: SettingsRepository,
-    private val permissionChecker: HealthPermissionChecker,
 ) {
     suspend operator fun invoke(): HealthReadingsSyncReport {
         if (!settingsRepository.isConfigured()) return HealthReadingsSyncReport()
 
-        val granted = permissionChecker.getGrantedPermissions()
         val missing = mutableSetOf<String>()
         val skipped = mutableSetOf<HealthSyncType>()
 
         val glucoseWatermark = syncType(
             type = HealthSyncType.GLUCOSE,
-            granted = granted,
             missingSink = missing,
             skippedSink = skipped,
             getReadings = bloodGlucoseRepository::getReadingsResult,
@@ -54,7 +50,6 @@ class SyncHealthReadingsUseCase @Inject constructor(
 
         val bpWatermark = syncType(
             type = HealthSyncType.BLOOD_PRESSURE,
-            granted = granted,
             missingSink = missing,
             skippedSink = skipped,
             getReadings = bloodPressureRepository::getReadingsResult,
@@ -72,7 +67,6 @@ class SyncHealthReadingsUseCase @Inject constructor(
 
         syncType(
             type = HealthSyncType.HYDRATION,
-            granted = granted,
             missingSink = missing,
             skippedSink = skipped,
             getReadings = hydrationRepository::getReadingsResult,
@@ -96,7 +90,6 @@ class SyncHealthReadingsUseCase @Inject constructor(
 
     private suspend fun <T> syncType(
         type: HealthSyncType,
-        granted: Set<String>,
         missingSink: MutableSet<String>,
         skippedSink: MutableSet<HealthSyncType>,
         getReadings: suspend (Instant, Instant) -> ReadingsResult<T>,
@@ -110,15 +103,7 @@ class SyncHealthReadingsUseCase @Inject constructor(
         getTimestamp: (T) -> Long,
     ): Long {
         val watermark = watermarkFlow.first()
-
         val requiredPermission = type.readPermission
-        if (requiredPermission !in granted) {
-            Timber.w("syncType(%s): skipped — read permission %s not granted", type, requiredPermission)
-            missingSink += requiredPermission
-            skippedSink += type
-            // Intentionally NOT setting caughtUp=true. Leave watermark untouched so next run resumes.
-            return watermark
-        }
 
         return try {
             val start = if (watermark == 0L) Instant.EPOCH else Instant.ofEpochMilli(watermark + 1)
@@ -155,9 +140,7 @@ class SyncHealthReadingsUseCase @Inject constructor(
         } catch (e: CancellationException) {
             throw e
         } catch (e: SecurityException) {
-            // Defense in depth: preflight should have caught this, but if HC revoked between
-            // the permission check and the read, treat as a skip rather than a failure.
-            Timber.w(e, "syncType(%s): SecurityException despite preflight — treating as skipped", type)
+            Timber.w(e, "syncType(%s): SecurityException from read — treating as missing permission", type)
             missingSink += requiredPermission
             skippedSink += type
             watermark
