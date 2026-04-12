@@ -108,17 +108,18 @@ class HealthConnectHydrationRepositoryTest {
     }
 
     @Test
-    @DisplayName("getReadings returns empty list on SecurityException")
-    fun getReadingsReturnsEmptyListOnSecurityException() = runTest {
+    @DisplayName("getReadings rethrows SecurityException so use case can report missing permission")
+    fun getReadingsRethrowsSecurityException() = runTest {
         val mockClient = mockk<HealthConnectClient>()
         coEvery { mockClient.readRecords(any<ReadRecordsRequest<HydrationRecord>>()) } throws SecurityException("Permission denied")
 
         val repository = HealthConnectHydrationRepository(mockClient)
-        val result = repository.getReadings(
-            start = Instant.parse("2026-01-01T00:00:00Z"),
-            end = Instant.parse("2026-01-02T00:00:00Z"),
-        )
-        assertTrue(result.isEmpty())
+        assertFailsWith<SecurityException> {
+            repository.getReadings(
+                start = Instant.parse("2026-01-01T00:00:00Z"),
+                end = Instant.parse("2026-01-02T00:00:00Z"),
+            )
+        }
     }
 
     @Test

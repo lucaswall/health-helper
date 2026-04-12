@@ -80,8 +80,8 @@ class HealthConnectHydrationRepository @Inject constructor(
                 .sortedBy { it.timestamp }
             ReadingsResult(readings, truncated = true)
         } catch (e: SecurityException) {
-            Timber.w(e, "getReadings: hydration permission denied")
-            ReadingsResult(emptyList())
+            Timber.w(e, "getReadings: hydration permission denied — rethrowing for use-case reporting")
+            throw e
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             Timber.e(e, "getReadings: failed")
