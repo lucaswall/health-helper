@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.3] - 2026-04-12
+
+### Fixed
+
+- Missing Health Connect read grants (e.g. hydration granted at the Android level but not confirmed inside Health Connect) are now detected during sync and surfaced in the app instead of silently skipping data
+
 ## [1.8.2] - 2026-04-12
 
 ### Fixed
@@ -164,7 +170,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Settings screen for API configuration and sync interval
 - Adaptive launcher icon with health cross design
 
-[Unreleased]: https://github.com/lucaswall/health-helper/compare/v1.8.2...HEAD
+[Unreleased]: https://github.com/lucaswall/health-helper/compare/v1.8.3...HEAD
+[1.8.3]: https://github.com/lucaswall/health-helper/compare/v1.8.2...v1.8.3
 [1.8.2]: https://github.com/lucaswall/health-helper/compare/v1.8.1...v1.8.2
 [1.8.1]: https://github.com/lucaswall/health-helper/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/lucaswall/health-helper/compare/v1.7.0...v1.8.0
