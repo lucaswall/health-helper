@@ -5,13 +5,18 @@ import com.healthhelper.app.data.api.RateLimitException
 import com.healthhelper.app.data.api.ServerException
 import com.healthhelper.app.domain.model.BloodPressureReading
 import com.healthhelper.app.domain.model.GlucoseReading
+import com.healthhelper.app.domain.model.HealthPermissions
+import com.healthhelper.app.domain.model.HealthSyncType
 import com.healthhelper.app.domain.model.HydrationReading
 import com.healthhelper.app.domain.model.ReadingsResult
 import com.healthhelper.app.domain.repository.BloodGlucoseRepository
 import com.healthhelper.app.domain.repository.BloodPressureRepository
 import com.healthhelper.app.domain.repository.FoodScannerHealthRepository
+import com.healthhelper.app.domain.repository.HealthPermissionChecker
 import com.healthhelper.app.domain.repository.HydrationRepository
 import com.healthhelper.app.domain.repository.SettingsRepository
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -36,10 +41,12 @@ class SyncHealthReadingsUseCaseTest {
     private val hydrationRepository = mockk<HydrationRepository>()
     private val foodScannerHealthRepository = mockk<FoodScannerHealthRepository>()
     private val settingsRepository = mockk<SettingsRepository>()
+    private val permissionChecker = mockk<HealthPermissionChecker>()
 
     @BeforeEach
     fun setup() {
         coEvery { settingsRepository.isConfigured() } returns true
+        coEvery { permissionChecker.getGrantedPermissions() } returns HealthPermissions.REQUIRED
         every { settingsRepository.lastGlucoseSyncTimestampFlow } returns flowOf(0L)
         every { settingsRepository.lastBpSyncTimestampFlow } returns flowOf(0L)
         every { settingsRepository.glucoseSyncCountFlow } returns flowOf(0)
@@ -73,6 +80,7 @@ class SyncHealthReadingsUseCaseTest {
         hydrationRepository = hydrationRepository,
         foodScannerHealthRepository = foodScannerHealthRepository,
         settingsRepository = settingsRepository,
+        permissionChecker = permissionChecker,
     )
 
     private fun glucoseReadings(count: Int, startMs: Long = 1_000L): List<GlucoseReading> =
@@ -587,5 +595,63 @@ class SyncHealthReadingsUseCaseTest {
 
         coVerify(exactly = 0) { settingsRepository.setHydrationSyncCaughtUp(true) }
         coVerify { settingsRepository.setHydrationSyncCaughtUp(false) }
+    }
+
+    // =========== PERMISSION PREFLIGHT ===========
+
+    @Test
+    @DisplayName("missing READ_HYDRATION: hydration read skipped, no caughtUp=true, reported as missing")
+    fun missingHydrationPermissionSkipsAndReports() = runTest {
+        coEvery { permissionChecker.getGrantedPermissions() } returns
+            HealthPermissions.REQUIRED - HealthPermissions.READ_HYDRATION
+
+        val report = createUseCase().invoke()
+
+        coVerify(exactly = 0) { hydrationRepository.getReadingsResult(any(), any()) }
+        coVerify(exactly = 0) { settingsRepository.setHydrationSyncCaughtUp(true) }
+        assertTrue(HealthPermissions.READ_HYDRATION in report.missingReadPermissions)
+        assertTrue(HealthSyncType.HYDRATION in report.skippedTypes)
+    }
+
+    @Test
+    @DisplayName("missing READ_BLOOD_GLUCOSE: glucose skipped but BP and hydration still run")
+    fun missingGlucosePermissionDoesNotBlockOthers() = runTest {
+        coEvery { permissionChecker.getGrantedPermissions() } returns
+            HealthPermissions.REQUIRED - HealthPermissions.READ_BLOOD_GLUCOSE
+        coEvery { bloodPressureRepository.getReadingsResult(any(), any()) } returns ReadingsResult(bpReadings(1))
+        coEvery { foodScannerHealthRepository.pushBloodPressureReadings(any()) } returns Result.success(1)
+
+        val report = createUseCase().invoke()
+
+        coVerify(exactly = 0) { bloodGlucoseRepository.getReadingsResult(any(), any()) }
+        coVerify { bloodPressureRepository.getReadingsResult(any(), any()) }
+        coVerify { hydrationRepository.getReadingsResult(any(), any()) }
+        assertEquals(setOf(HealthPermissions.READ_BLOOD_GLUCOSE), report.missingReadPermissions)
+    }
+
+    @Test
+    @DisplayName("when all permissions granted and nothing to sync, report has no missing permissions")
+    fun allGrantedEmptyReport() = runTest {
+        val report = createUseCase().invoke()
+
+        assertTrue(report.missingReadPermissions.isEmpty())
+        assertTrue(report.skippedTypes.isEmpty())
+        assertFalse(report.hasMissingPermissions)
+    }
+
+    @Test
+    @DisplayName("no permissions granted: all three types skipped, watermark NOT advanced")
+    fun noPermissionsAllSkipped() = runTest {
+        coEvery { permissionChecker.getGrantedPermissions() } returns emptySet()
+
+        val report = createUseCase().invoke()
+
+        coVerify(exactly = 0) { bloodGlucoseRepository.getReadingsResult(any(), any()) }
+        coVerify(exactly = 0) { bloodPressureRepository.getReadingsResult(any(), any()) }
+        coVerify(exactly = 0) { hydrationRepository.getReadingsResult(any(), any()) }
+        coVerify(exactly = 0) { settingsRepository.setLastGlucoseSyncTimestamp(any()) }
+        coVerify(exactly = 0) { settingsRepository.setLastBpSyncTimestamp(any()) }
+        coVerify(exactly = 0) { settingsRepository.setLastHydrationSyncTimestamp(any()) }
+        assertEquals(3, report.skippedTypes.size)
     }
 }

@@ -1,6 +1,9 @@
 package com.healthhelper.app.presentation.ui
 
 import android.Manifest
+import android.content.Intent
+import android.os.Build
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -28,6 +31,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -36,12 +40,50 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.PermissionController
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.healthhelper.app.presentation.viewmodel.SyncViewModel
+import timber.log.Timber
+
+private fun humanReadablePermissionLabel(permission: String): String = when (permission) {
+    "android.permission.health.READ_BLOOD_GLUCOSE" -> "Read blood glucose"
+    "android.permission.health.WRITE_BLOOD_GLUCOSE" -> "Write blood glucose"
+    "android.permission.health.READ_BLOOD_PRESSURE" -> "Read blood pressure"
+    "android.permission.health.WRITE_BLOOD_PRESSURE" -> "Write blood pressure"
+    "android.permission.health.READ_HYDRATION" -> "Read hydration"
+    "android.permission.health.WRITE_NUTRITION" -> "Write nutrition"
+    "android.permission.health.READ_HEALTH_DATA_HISTORY" -> "Read history > 30 days"
+    else -> permission.substringAfterLast('.')
+}
+
+private fun openHealthConnectSettings(context: android.content.Context) {
+    val actions = listOf(
+        HealthConnectClient.ACTION_HEALTH_CONNECT_SETTINGS,
+        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+    )
+    for (action in actions) {
+        val intent = Intent(action).apply {
+            if (action == Settings.ACTION_APPLICATION_DETAILS_SETTINGS) {
+                data = android.net.Uri.fromParts("package", context.packageName, null)
+            }
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        try {
+            context.startActivity(intent)
+            return
+        } catch (e: Exception) {
+            Timber.w(e, "openHealthConnectSettings: failed for %s", action)
+        }
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -59,7 +101,12 @@ fun SyncScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
-    var permissionRequested by rememberSaveable { mutableStateOf(false) }
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    // Tracks whether we've auto-launched the HC permission sheet for the current missing set.
+    // rememberSaveable survives rotation; ON_RESUME refreshes permissions and, if still missing
+    // after the user returns from HC, we do NOT auto-prompt again — the banner shows a manual CTA.
+    var autoRequestedFor by rememberSaveable { mutableStateOf<Set<String>>(emptySet()) }
 
     LaunchedEffect(snackbarMessage) {
         if (snackbarMessage != null) {
@@ -71,7 +118,11 @@ fun SyncScreen(
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = PermissionController.createRequestPermissionResultContract(),
     ) { grantedPermissions ->
-        viewModel.onPermissionResult(grantedPermissions.containsAll(SyncViewModel.REQUIRED_HC_PERMISSIONS))
+        val stillMissing = SyncViewModel.REQUIRED_HC_PERMISSIONS - grantedPermissions
+        viewModel.onPermissionResult(
+            grantedAll = stillMissing.isEmpty(),
+            stillMissing = stillMissing,
+        )
     }
 
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
@@ -80,16 +131,41 @@ fun SyncScreen(
         viewModel.onCameraPermissionResult(granted)
     }
 
-    // Request camera permission independently of Health Connect
-    LaunchedEffect(Unit) {
-        cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        Timber.d("POST_NOTIFICATIONS granted=%b", granted)
     }
 
-    // Request HC permissions when available
-    LaunchedEffect(uiState.healthConnectAvailable) {
-        if (uiState.healthConnectAvailable && !permissionRequested) {
-            permissionRequested = true
-            permissionLauncher.launch(SyncViewModel.REQUIRED_HC_PERMISSIONS)
+    LaunchedEffect(Unit) {
+        cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    // Refresh permissions on every resume — the user may have changed grants in HC settings.
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.refreshPermissions()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // Auto-launch the permission sheet the first time we see a given missing set.
+    // If the user returns with the same missing set, we stop auto-prompting to avoid
+    // pestering them — the banner still offers a manual Grant button and HC-settings fallback.
+    LaunchedEffect(uiState.healthConnectAvailable, uiState.missingHealthPermissions) {
+        if (!uiState.healthConnectAvailable) return@LaunchedEffect
+        val missing = uiState.missingHealthPermissions
+        if (missing.isNotEmpty() && autoRequestedFor != missing) {
+            autoRequestedFor = missing
+            permissionLauncher.launch(missing)
+        } else if (missing.isEmpty()) {
+            autoRequestedFor = emptySet()
         }
     }
 
@@ -136,16 +212,42 @@ fun SyncScreen(
                             text = "Health Connect is not available on this device.",
                             color = MaterialTheme.colorScheme.error,
                         )
-                    } else if (!uiState.permissionGranted) {
+                    } else if (uiState.missingHealthPermissions.isNotEmpty()) {
+                        val missingLabels = uiState.missingHealthPermissions
+                            .map { humanReadablePermissionLabel(it) }
+                            .sorted()
                         Text(
-                            text = "Health Connect permissions are required to sync data.",
+                            text = "Health Connect permissions needed:",
                             color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodyMedium,
                         )
+                        missingLabels.forEach { label ->
+                            Text(
+                                text = "• $label",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                         Button(
-                            onClick = { permissionLauncher.launch(SyncViewModel.REQUIRED_HC_PERMISSIONS) },
+                            onClick = {
+                                permissionLauncher.launch(uiState.missingHealthPermissions)
+                            },
                             modifier = Modifier.fillMaxWidth(),
                         ) {
-                            Text("Grant Permission")
+                            Text("Grant in Health Connect")
+                        }
+                        if (uiState.permissionLockoutSuspected) {
+                            Text(
+                                text = "Permission sheet didn't appear? Open Health Connect settings directly.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            OutlinedButton(
+                                onClick = { openHealthConnectSettings(context) },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text("Open Health Connect settings")
+                            }
                         }
                     }
 

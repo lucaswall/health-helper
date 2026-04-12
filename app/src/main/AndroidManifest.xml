@@ -8,6 +8,9 @@
     <!-- Camera for Blood Pressure scanner -->
     <uses-permission android:name="android.permission.CAMERA" />
 
+    <!-- Post notifications (Android 13+) for permission-missing alerts from background sync -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- Camera hardware (required=false: app works without camera) -->
     <uses-feature
         android:name="android.hardware.camera"

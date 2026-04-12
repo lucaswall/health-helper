@@ -23,6 +23,8 @@ interface SettingsRepository {
     val hydrationSyncCaughtUpFlow: Flow<Boolean>
     val hydrationSyncRunTimestampFlow: Flow<Long>
     val lastSyncedMealsFlow: Flow<List<SyncedMealSummary>>
+    val lastPermissionNotificationTimestampFlow: Flow<Long>
+    val missingPermissionsAtLastNotificationFlow: Flow<Set<String>>
 
     suspend fun setApiKey(value: String)
     suspend fun setAnthropicApiKey(value: String)
@@ -43,6 +45,8 @@ interface SettingsRepository {
     suspend fun setHydrationSyncCaughtUp(value: Boolean)
     suspend fun setHydrationSyncRunTimestamp(value: Long)
     suspend fun setLastSyncedMeals(meals: List<SyncedMealSummary>)
+    suspend fun setLastPermissionNotificationTimestamp(value: Long)
+    suspend fun setMissingPermissionsAtLastNotification(permissions: Set<String>)
     suspend fun getETag(date: String): String?
     suspend fun setETag(date: String, etag: String)
     suspend fun isConfigured(): Boolean

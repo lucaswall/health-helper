@@ -18,11 +18,13 @@ import com.healthhelper.app.data.repository.HealthConnectBloodGlucoseRepository
 import com.healthhelper.app.data.repository.HealthConnectBloodPressureRepository
 import com.healthhelper.app.data.repository.HealthConnectHydrationRepository
 import com.healthhelper.app.data.repository.HealthConnectNutritionRepository
+import com.healthhelper.app.data.repository.HealthConnectPermissionChecker
 import com.healthhelper.app.data.sync.SyncScheduler
 import com.healthhelper.app.domain.repository.BloodGlucoseRepository
 import com.healthhelper.app.domain.repository.BloodPressureRepository
 import com.healthhelper.app.domain.repository.FoodLogRepository
 import com.healthhelper.app.domain.repository.FoodScannerHealthRepository
+import com.healthhelper.app.domain.repository.HealthPermissionChecker
 import com.healthhelper.app.domain.repository.HydrationRepository
 import com.healthhelper.app.domain.repository.NutritionRepository
 import com.healthhelper.app.domain.repository.SettingsRepository
@@ -100,6 +102,12 @@ object AppModule {
     fun provideHydrationRepository(
         healthConnectClient: HealthConnectClient?,
     ): HydrationRepository = HealthConnectHydrationRepository(healthConnectClient)
+
+    @Provides
+    @Singleton
+    fun provideHealthPermissionChecker(
+        healthConnectClient: HealthConnectClient?,
+    ): HealthPermissionChecker = HealthConnectPermissionChecker(healthConnectClient)
 
     @Provides
     @Singleton

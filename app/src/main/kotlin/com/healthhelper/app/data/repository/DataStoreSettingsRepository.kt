@@ -68,6 +68,8 @@ class DataStoreSettingsRepository @Inject constructor(
         val DIRECT_PUSHED_GLUCOSE_TIMESTAMPS = stringPreferencesKey("direct_pushed_glucose_timestamps")
         val DIRECT_PUSHED_BP_TIMESTAMPS = stringPreferencesKey("direct_pushed_bp_timestamps")
         val HYDRATION_WATERMARK_RESET_V1 = booleanPreferencesKey("hydration_watermark_reset_v1")
+        val LAST_PERMISSION_NOTIFICATION_TIMESTAMP = longPreferencesKey("last_permission_notification_timestamp")
+        val MISSING_PERMISSIONS_AT_LAST_NOTIFICATION = stringPreferencesKey("missing_permissions_at_last_notification")
         const val DEFAULT_SYNC_INTERVAL = 15
         const val ENCRYPTED_API_KEY = "api_key"
         const val ENCRYPTED_ANTHROPIC_KEY = "anthropic_api_key"
@@ -189,6 +191,20 @@ class DataStoreSettingsRepository @Inject constructor(
 
     override val hydrationSyncRunTimestampFlow: Flow<Long> =
         dataStore.data.map { it[HYDRATION_SYNC_RUN_TIMESTAMP] ?: 0L }
+
+    override val lastPermissionNotificationTimestampFlow: Flow<Long> =
+        dataStore.data.map { it[LAST_PERMISSION_NOTIFICATION_TIMESTAMP] ?: 0L }
+
+    override val missingPermissionsAtLastNotificationFlow: Flow<Set<String>> =
+        dataStore.data.map { prefs ->
+            val json = prefs[MISSING_PERMISSIONS_AT_LAST_NOTIFICATION] ?: return@map emptySet()
+            try {
+                Json.decodeFromString<Set<String>>(json)
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to deserialize missing permissions, returning empty set")
+                emptySet()
+            }
+        }
 
     override val lastSyncedMealsFlow: Flow<List<SyncedMealSummary>> =
         dataStore.data.map { prefs ->
@@ -319,6 +335,14 @@ class DataStoreSettingsRepository @Inject constructor(
         }
         val json = Json.encodeToString(dtos)
         dataStore.edit { it[LAST_SYNCED_MEALS] = json }
+    }
+
+    override suspend fun setLastPermissionNotificationTimestamp(value: Long) {
+        dataStore.edit { it[LAST_PERMISSION_NOTIFICATION_TIMESTAMP] = value }
+    }
+
+    override suspend fun setMissingPermissionsAtLastNotification(permissions: Set<String>) {
+        dataStore.edit { it[MISSING_PERMISSIONS_AT_LAST_NOTIFICATION] = Json.encodeToString(permissions) }
     }
 
     override suspend fun getETag(date: String): String? {

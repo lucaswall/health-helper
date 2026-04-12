@@ -25,7 +25,7 @@ class HealthConnectNutritionRepository @Inject constructor(
             Timber.d("writeNutritionRecords(%s): wrote %d records", date, records.size)
             true
         } catch (e: SecurityException) {
-            Timber.e(e, "writeNutritionRecords(%s): permission denied", date)
+            Timber.w(e, "writeNutritionRecords(%s): permission denied", date)
             false
         } catch (e: Exception) {
             if (e is CancellationException) throw e

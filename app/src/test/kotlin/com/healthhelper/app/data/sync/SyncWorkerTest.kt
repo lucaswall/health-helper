@@ -3,10 +3,14 @@ package com.healthhelper.app.data.sync
 import android.content.Context
 import androidx.work.ListenableWorker
 import androidx.work.WorkerParameters
+import com.healthhelper.app.domain.model.HealthReadingsSyncReport
 import com.healthhelper.app.domain.model.SyncResult
+import com.healthhelper.app.domain.repository.SettingsRepository
 import com.healthhelper.app.domain.usecase.SyncHealthReadingsUseCase
 import com.healthhelper.app.domain.usecase.SyncNutritionUseCase
 import io.mockk.coEvery
+import io.mockk.every
+import kotlinx.coroutines.flow.flowOf
 import io.mockk.coVerify
 import io.mockk.mockk
 import kotlin.coroutines.cancellation.CancellationException
@@ -22,15 +26,19 @@ class SyncWorkerTest {
     private val workerParams = mockk<WorkerParameters>(relaxed = true)
     private val syncNutritionUseCase = mockk<SyncNutritionUseCase>()
     private val syncHealthReadingsUseCase = mockk<SyncHealthReadingsUseCase>()
+    private val settingsRepository = mockk<SettingsRepository>(relaxed = true).also {
+        every { it.missingPermissionsAtLastNotificationFlow } returns flowOf(emptySet())
+        every { it.lastPermissionNotificationTimestampFlow } returns flowOf(0L)
+    }
 
     private fun createWorker(): SyncWorker =
-        SyncWorker(context, workerParams, syncNutritionUseCase, syncHealthReadingsUseCase)
+        SyncWorker(context, workerParams, syncNutritionUseCase, syncHealthReadingsUseCase, settingsRepository)
 
     @Test
     @DisplayName("doWork returns success when sync succeeds")
     fun doWorkReturnsSuccessWhenSyncSucceeds() = runTest {
         coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Success(5, 1)
-        coEvery { syncHealthReadingsUseCase.invoke() } returns Unit
+        coEvery { syncHealthReadingsUseCase.invoke() } returns HealthReadingsSyncReport()
 
         val result = createWorker().doWork()
 
@@ -41,7 +49,7 @@ class SyncWorkerTest {
     @DisplayName("doWork returns retry when sync errors")
     fun doWorkReturnsRetryWhenSyncErrors() = runTest {
         coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Error("fail")
-        coEvery { syncHealthReadingsUseCase.invoke() } returns Unit
+        coEvery { syncHealthReadingsUseCase.invoke() } returns HealthReadingsSyncReport()
 
         val result = createWorker().doWork()
 
@@ -62,7 +70,7 @@ class SyncWorkerTest {
     @DisplayName("health readings sync called after nutrition sync succeeds")
     fun healthReadingsSyncCalledAfterNutritionSync() = runTest {
         coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Success(3, 1)
-        coEvery { syncHealthReadingsUseCase.invoke() } returns Unit
+        coEvery { syncHealthReadingsUseCase.invoke() } returns HealthReadingsSyncReport()
 
         createWorker().doWork()
 
@@ -73,7 +81,7 @@ class SyncWorkerTest {
     @DisplayName("health readings sync called after nutrition sync errors")
     fun healthReadingsSyncCalledAfterNutritionError() = runTest {
         coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Error("fail")
-        coEvery { syncHealthReadingsUseCase.invoke() } returns Unit
+        coEvery { syncHealthReadingsUseCase.invoke() } returns HealthReadingsSyncReport()
 
         createWorker().doWork()
 

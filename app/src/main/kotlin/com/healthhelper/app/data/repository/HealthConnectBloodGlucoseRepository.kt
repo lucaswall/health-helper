@@ -43,7 +43,7 @@ class HealthConnectBloodGlucoseRepository @Inject constructor(
             Timber.e("writeBloodGlucoseRecord: timed out after 10s")
             false
         } catch (e: SecurityException) {
-            Timber.e(e, "writeBloodGlucoseRecord: permission denied")
+            Timber.w(e, "writeBloodGlucoseRecord: permission denied")
             false
         } catch (e: Exception) {
             if (e is CancellationException) throw e
@@ -83,7 +83,7 @@ class HealthConnectBloodGlucoseRepository @Inject constructor(
             Timber.w("getLastReading: timed out after 10s")
             null
         } catch (e: SecurityException) {
-            Timber.e(e, "getLastReading: permission denied")
+            Timber.w(e, "getLastReading: glucose permission denied")
             null
         } catch (e: Exception) {
             if (e is CancellationException) throw e
@@ -155,7 +155,7 @@ class HealthConnectBloodGlucoseRepository @Inject constructor(
                 .sortedBy { it.timestamp }
             ReadingsResult(readings, truncated = true)
         } catch (e: SecurityException) {
-            Timber.e(e, "getReadings: permission denied")
+            Timber.w(e, "getReadings: glucose permission denied")
             ReadingsResult(emptyList())
         } catch (e: Exception) {
             if (e is CancellationException) throw e

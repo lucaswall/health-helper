@@ -3,7 +3,6 @@ package com.healthhelper.app.presentation.viewmodel
 import app.cash.turbine.test
 import androidx.health.connect.client.HealthConnectClient
 import androidx.lifecycle.viewModelScope
-import androidx.health.connect.client.PermissionController
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.BloodPressureRecord
 import androidx.health.connect.client.records.NutritionRecord
@@ -13,6 +12,7 @@ import com.healthhelper.app.domain.model.MealType
 import com.healthhelper.app.domain.model.SyncProgress
 import com.healthhelper.app.domain.model.SyncResult
 import com.healthhelper.app.domain.model.SyncedMealSummary
+import com.healthhelper.app.domain.repository.HealthPermissionChecker
 import com.healthhelper.app.domain.repository.SettingsRepository
 import com.healthhelper.app.domain.model.GlucoseReading
 import com.healthhelper.app.domain.usecase.GetLastBloodPressureReadingUseCase
@@ -55,6 +55,7 @@ class SyncViewModelTest {
     private lateinit var getLastGlucoseReadingUseCase: GetLastGlucoseReadingUseCase
     private lateinit var getTodayHydrationTotalUseCase: GetTodayHydrationTotalUseCase
     private lateinit var syncHealthReadingsUseCase: SyncHealthReadingsUseCase
+    private lateinit var permissionChecker: HealthPermissionChecker
     private lateinit var viewModel: SyncViewModel
 
     @BeforeEach
@@ -67,6 +68,8 @@ class SyncViewModelTest {
         getLastGlucoseReadingUseCase = mockk()
         getTodayHydrationTotalUseCase = mockk()
         syncHealthReadingsUseCase = mockk(relaxed = true)
+        permissionChecker = mockk()
+        coEvery { permissionChecker.getGrantedPermissions() } returns emptySet()
 
         every { settingsRepository.apiKeyFlow } returns flowOf("fsk_test")
         every { settingsRepository.baseUrlFlow } returns flowOf("https://example.com")
@@ -103,7 +106,7 @@ class SyncViewModelTest {
     private val healthConnectClient: HealthConnectClient? = mockk(relaxed = true)
 
     private fun createViewModel(hcClient: HealthConnectClient? = healthConnectClient): SyncViewModel =
-        SyncViewModel(syncNutritionUseCase, syncHealthReadingsUseCase, settingsRepository, syncScheduler, getLastBpReadingUseCase, getLastGlucoseReadingUseCase, getTodayHydrationTotalUseCase, hcClient)
+        SyncViewModel(syncNutritionUseCase, syncHealthReadingsUseCase, settingsRepository, syncScheduler, getLastBpReadingUseCase, getLastGlucoseReadingUseCase, getTodayHydrationTotalUseCase, permissionChecker, hcClient)
 
     /**
      * Wraps [runTest] to cancel viewModelScope after the test body,
@@ -416,10 +419,11 @@ class SyncViewModelTest {
 
     @Test
     fun `onPermissionResult updates permissionGranted state`() = viewModelTest {
+        coEvery { permissionChecker.getGrantedPermissions() } returns SyncViewModel.REQUIRED_HC_PERMISSIONS
         viewModel = createViewModel()
         advanceTimeBy(1_000)
 
-        viewModel.onPermissionResult(true)
+        viewModel.onPermissionResult(true, emptySet())
 
         viewModel.uiState.test {
             val state = awaitItem()
@@ -528,9 +532,7 @@ class SyncViewModelTest {
 
     @Test
     fun `permissionGranted is true on init when permission already granted`() = viewModelTest {
-        val permController = mockk<PermissionController>()
-        every { healthConnectClient!!.permissionController } returns permController
-        coEvery { permController.getGrantedPermissions() } returns SyncViewModel.REQUIRED_HC_PERMISSIONS
+        coEvery { permissionChecker.getGrantedPermissions() } returns SyncViewModel.REQUIRED_HC_PERMISSIONS
 
         viewModel = createViewModel()
         advanceTimeBy(1_000)
@@ -543,9 +545,7 @@ class SyncViewModelTest {
 
     @Test
     fun `permissionGranted stays false on init when permission not granted`() = viewModelTest {
-        val permController = mockk<PermissionController>()
-        every { healthConnectClient!!.permissionController } returns permController
-        coEvery { permController.getGrantedPermissions() } returns emptySet()
+        coEvery { permissionChecker.getGrantedPermissions() } returns emptySet()
 
         viewModel = createViewModel()
         advanceTimeBy(1_000)
@@ -558,9 +558,7 @@ class SyncViewModelTest {
 
     @Test
     fun `permissionGranted stays false when getGrantedPermissions throws`() = viewModelTest {
-        val permController = mockk<PermissionController>()
-        every { healthConnectClient!!.permissionController } returns permController
-        coEvery { permController.getGrantedPermissions() } throws RuntimeException("HC error")
+        coEvery { permissionChecker.getGrantedPermissions() } throws RuntimeException("HC error")
 
         viewModel = createViewModel()
         advanceTimeBy(1_000)
@@ -608,9 +606,7 @@ class SyncViewModelTest {
 
     @Test
     fun `permissionGranted is true only when ALL required HC permissions are granted`() = viewModelTest {
-        val permController = mockk<PermissionController>()
-        every { healthConnectClient!!.permissionController } returns permController
-        coEvery { permController.getGrantedPermissions() } returns SyncViewModel.REQUIRED_HC_PERMISSIONS
+        coEvery { permissionChecker.getGrantedPermissions() } returns SyncViewModel.REQUIRED_HC_PERMISSIONS
 
         viewModel = createViewModel()
         advanceTimeBy(1_000)
@@ -623,9 +619,7 @@ class SyncViewModelTest {
 
     @Test
     fun `permissionGranted is false when only WRITE_NUTRITION is granted`() = viewModelTest {
-        val permController = mockk<PermissionController>()
-        every { healthConnectClient!!.permissionController } returns permController
-        coEvery { permController.getGrantedPermissions() } returns
+        coEvery { permissionChecker.getGrantedPermissions() } returns
             setOf(HealthPermission.getWritePermission(NutritionRecord::class))
 
         viewModel = createViewModel()
@@ -639,9 +633,7 @@ class SyncViewModelTest {
 
     @Test
     fun `permissionGranted is false when only BP permissions are granted`() = viewModelTest {
-        val permController = mockk<PermissionController>()
-        every { healthConnectClient!!.permissionController } returns permController
-        coEvery { permController.getGrantedPermissions() } returns setOf(
+        coEvery { permissionChecker.getGrantedPermissions() } returns setOf(
             HealthPermission.getWritePermission(BloodPressureRecord::class),
             HealthPermission.getReadPermission(BloodPressureRecord::class),
         )

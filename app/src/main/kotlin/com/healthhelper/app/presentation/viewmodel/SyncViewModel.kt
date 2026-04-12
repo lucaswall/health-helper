@@ -1,19 +1,16 @@
 package com.healthhelper.app.presentation.viewmodel
 
 import androidx.health.connect.client.HealthConnectClient
-import androidx.health.connect.client.permission.HealthPermission
-import androidx.health.connect.client.records.BloodGlucoseRecord
-import androidx.health.connect.client.records.BloodPressureRecord
-import androidx.health.connect.client.records.HydrationRecord
-import androidx.health.connect.client.records.NutritionRecord
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.healthhelper.app.data.sync.SyncScheduler
 import com.healthhelper.app.domain.model.BloodPressureReading
 import com.healthhelper.app.domain.model.GlucoseReading
+import com.healthhelper.app.domain.model.HealthPermissions
 import com.healthhelper.app.domain.model.SyncProgress
 import com.healthhelper.app.domain.model.SyncResult
 import com.healthhelper.app.domain.model.SyncedMealSummary
+import com.healthhelper.app.domain.repository.HealthPermissionChecker
 import com.healthhelper.app.domain.repository.SettingsRepository
 import com.healthhelper.app.domain.usecase.GetLastBloodPressureReadingUseCase
 import com.healthhelper.app.domain.usecase.GetLastGlucoseReadingUseCase
@@ -37,7 +34,6 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeout
 import timber.log.Timber
 import javax.inject.Inject
 
@@ -49,7 +45,8 @@ data class SyncUiState(
     val lastSyncedDate: String = "",
     val lastSyncTime: String = "",
     val healthConnectAvailable: Boolean = false,
-    val permissionGranted: Boolean = false,
+    val missingHealthPermissions: Set<String> = emptySet(),
+    val permissionLockoutSuspected: Boolean = false,
     val cameraPermissionGranted: Boolean = false,
     val lastSyncedMeals: List<SyncedMealSummary> = emptyList(),
     val nextSyncTime: String = "",
@@ -64,7 +61,10 @@ data class SyncUiState(
     val hydrationTodayDisplay: String = "",
     val hydrationSyncStatus: String = "",
     val hydrationHistoryStatus: String = "",
-)
+) {
+    val permissionGranted: Boolean
+        get() = healthConnectAvailable && missingHealthPermissions.isEmpty()
+}
 
 @HiltViewModel
 class SyncViewModel @Inject constructor(
@@ -75,19 +75,14 @@ class SyncViewModel @Inject constructor(
     private val getLastBpReadingUseCase: GetLastBloodPressureReadingUseCase,
     private val getLastGlucoseReadingUseCase: GetLastGlucoseReadingUseCase,
     private val getTodayHydrationTotalUseCase: GetTodayHydrationTotalUseCase,
-    private val healthConnectClient: HealthConnectClient?,
+    private val permissionChecker: HealthPermissionChecker,
+    healthConnectClient: HealthConnectClient?,
 ) : ViewModel() {
 
+    private val healthConnectAvailable: Boolean = healthConnectClient != null
+
     companion object {
-        val REQUIRED_HC_PERMISSIONS = setOf(
-            HealthPermission.getWritePermission(NutritionRecord::class),
-            HealthPermission.getWritePermission(BloodPressureRecord::class),
-            HealthPermission.getReadPermission(BloodPressureRecord::class),
-            HealthPermission.getWritePermission(BloodGlucoseRecord::class),
-            HealthPermission.getReadPermission(BloodGlucoseRecord::class),
-            HealthPermission.getReadPermission(HydrationRecord::class),
-            "android.permission.health.READ_HEALTH_DATA_HISTORY",
-        )
+        val REQUIRED_HC_PERMISSIONS: Set<String> = HealthPermissions.REQUIRED
     }
 
     private val _uiState = MutableStateFlow(SyncUiState())
@@ -106,31 +101,13 @@ class SyncViewModel @Inject constructor(
     private var hydrationSyncCaughtUp = false
 
     init {
-        Timber.d("SyncViewModel: init, healthConnectAvailable=%b", healthConnectClient != null)
+        Timber.d("SyncViewModel: init, healthConnectAvailable=%b", healthConnectAvailable)
         _uiState.update {
-            it.copy(healthConnectAvailable = healthConnectClient != null)
+            it.copy(healthConnectAvailable = healthConnectAvailable)
         }
 
-        // Check Health Connect permission on launch
-        if (healthConnectClient != null) {
-            viewModelScope.launch {
-                try {
-                    val startTime = System.currentTimeMillis()
-                    val granted = withTimeout(10_000L) {
-                        healthConnectClient.permissionController.getGrantedPermissions()
-                    }
-                    val elapsed = System.currentTimeMillis() - startTime
-                    Timber.d("getGrantedPermissions() took ${elapsed}ms")
-                    val hasAll = granted.containsAll(REQUIRED_HC_PERMISSIONS)
-                    Timber.d("SyncViewModel: HC permissions granted=%b (have %d/%d)", hasAll, granted.size, REQUIRED_HC_PERMISSIONS.size)
-                    _uiState.update { it.copy(permissionGranted = hasAll) }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    Timber.e(e, "Failed to check Health Connect permissions")
-                    // Leave permissionGranted = false
-                }
-            }
+        if (healthConnectAvailable) {
+            refreshPermissions()
         }
 
         // Load last BP, glucose, and hydration readings on launch
@@ -408,9 +385,46 @@ class SyncViewModel @Inject constructor(
         }
     }
 
-    fun onPermissionResult(granted: Boolean) {
-        Timber.d("SyncViewModel: HC permission result=%b", granted)
-        _uiState.update { it.copy(permissionGranted = granted) }
+    fun refreshPermissions() {
+        if (!healthConnectAvailable) return
+        viewModelScope.launch {
+            val granted = try {
+                permissionChecker.getGrantedPermissions()
+            } catch (e: Exception) {
+                Timber.w(e, "SyncViewModel: refreshPermissions failed")
+                emptySet()
+            }
+            val missing = REQUIRED_HC_PERMISSIONS - granted
+            Timber.d(
+                "SyncViewModel: refreshPermissions — missing=%d/%d",
+                missing.size,
+                REQUIRED_HC_PERMISSIONS.size,
+            )
+            _uiState.update {
+                it.copy(
+                    missingHealthPermissions = missing,
+                    // Clear the lockout flag whenever the set changes; the screen re-evaluates
+                    // it after a permission request returns with still-missing perms.
+                    permissionLockoutSuspected = if (missing.isEmpty()) false else it.permissionLockoutSuspected,
+                )
+            }
+        }
+    }
+
+    fun onPermissionResult(grantedAll: Boolean, stillMissing: Set<String>) {
+        Timber.d(
+            "SyncViewModel: HC permission result — grantedAll=%b, stillMissing=%d",
+            grantedAll,
+            stillMissing.size,
+        )
+        _uiState.update {
+            it.copy(
+                missingHealthPermissions = stillMissing,
+                // If the user saw the request sheet and came back still missing perms,
+                // assume HC's 2-denial lockout may be in effect. The UI offers a settings fallback.
+                permissionLockoutSuspected = stillMissing.isNotEmpty(),
+            )
+        }
     }
 
     fun onCameraPermissionResult(granted: Boolean) {

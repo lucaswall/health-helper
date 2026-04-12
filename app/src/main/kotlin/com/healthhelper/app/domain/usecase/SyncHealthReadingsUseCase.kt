@@ -1,15 +1,15 @@
 package com.healthhelper.app.domain.usecase
 
-import com.healthhelper.app.data.api.AuthenticationException
 import com.healthhelper.app.data.api.RateLimitException
 import com.healthhelper.app.data.api.ServerException
-import com.healthhelper.app.domain.model.BloodPressureReading
-import com.healthhelper.app.domain.model.GlucoseReading
-import com.healthhelper.app.domain.model.HydrationReading
+import com.healthhelper.app.domain.model.HealthReadingsSyncReport
+import com.healthhelper.app.domain.model.HealthSyncType
 import com.healthhelper.app.domain.model.ReadingsResult
+import com.healthhelper.app.domain.model.readPermission
 import com.healthhelper.app.domain.repository.BloodGlucoseRepository
 import com.healthhelper.app.domain.repository.BloodPressureRepository
 import com.healthhelper.app.domain.repository.FoodScannerHealthRepository
+import com.healthhelper.app.domain.repository.HealthPermissionChecker
 import com.healthhelper.app.domain.repository.HydrationRepository
 import com.healthhelper.app.domain.repository.SettingsRepository
 import java.io.IOException
@@ -27,11 +27,20 @@ class SyncHealthReadingsUseCase @Inject constructor(
     private val hydrationRepository: HydrationRepository,
     private val foodScannerHealthRepository: FoodScannerHealthRepository,
     private val settingsRepository: SettingsRepository,
+    private val permissionChecker: HealthPermissionChecker,
 ) {
-    suspend operator fun invoke() {
-        if (!settingsRepository.isConfigured()) return
+    suspend operator fun invoke(): HealthReadingsSyncReport {
+        if (!settingsRepository.isConfigured()) return HealthReadingsSyncReport()
+
+        val granted = permissionChecker.getGrantedPermissions()
+        val missing = mutableSetOf<String>()
+        val skipped = mutableSetOf<HealthSyncType>()
 
         val glucoseWatermark = syncType(
+            type = HealthSyncType.GLUCOSE,
+            granted = granted,
+            missingSink = missing,
+            skippedSink = skipped,
             getReadings = bloodGlucoseRepository::getReadingsResult,
             pushReadings = foodScannerHealthRepository::pushGlucoseReadings,
             watermarkFlow = settingsRepository.lastGlucoseSyncTimestampFlow,
@@ -44,6 +53,10 @@ class SyncHealthReadingsUseCase @Inject constructor(
         )
 
         val bpWatermark = syncType(
+            type = HealthSyncType.BLOOD_PRESSURE,
+            granted = granted,
+            missingSink = missing,
+            skippedSink = skipped,
             getReadings = bloodPressureRepository::getReadingsResult,
             pushReadings = foodScannerHealthRepository::pushBloodPressureReadings,
             watermarkFlow = settingsRepository.lastBpSyncTimestampFlow,
@@ -58,6 +71,10 @@ class SyncHealthReadingsUseCase @Inject constructor(
         settingsRepository.resetHydrationWatermarkIfNeeded()
 
         syncType(
+            type = HealthSyncType.HYDRATION,
+            granted = granted,
+            missingSink = missing,
+            skippedSink = skipped,
             getReadings = hydrationRepository::getReadingsResult,
             pushReadings = foodScannerHealthRepository::pushHydrationReadings,
             watermarkFlow = settingsRepository.lastHydrationSyncTimestampFlow,
@@ -70,9 +87,18 @@ class SyncHealthReadingsUseCase @Inject constructor(
         )
 
         settingsRepository.pruneDirectPushedTimestamps(glucoseWatermark, bpWatermark)
+
+        return HealthReadingsSyncReport(
+            missingReadPermissions = missing.toSet(),
+            skippedTypes = skipped.toSet(),
+        )
     }
 
     private suspend fun <T> syncType(
+        type: HealthSyncType,
+        granted: Set<String>,
+        missingSink: MutableSet<String>,
+        skippedSink: MutableSet<HealthSyncType>,
         getReadings: suspend (Instant, Instant) -> ReadingsResult<T>,
         pushReadings: suspend (List<T>) -> Result<Int>,
         watermarkFlow: Flow<Long>,
@@ -84,6 +110,16 @@ class SyncHealthReadingsUseCase @Inject constructor(
         getTimestamp: (T) -> Long,
     ): Long {
         val watermark = watermarkFlow.first()
+
+        val requiredPermission = type.readPermission
+        if (requiredPermission !in granted) {
+            Timber.w("syncType(%s): skipped — read permission %s not granted", type, requiredPermission)
+            missingSink += requiredPermission
+            skippedSink += type
+            // Intentionally NOT setting caughtUp=true. Leave watermark untouched so next run resumes.
+            return watermark
+        }
+
         return try {
             val start = if (watermark == 0L) Instant.EPOCH else Instant.ofEpochMilli(watermark + 1)
             val end = Instant.now()
@@ -105,9 +141,9 @@ class SyncHealthReadingsUseCase @Inject constructor(
             val caughtUp = readings.size < MAX_READINGS_PER_RUN && !result.truncated
 
             if (toPublish.isNotEmpty()) {
-                val result = pushWithRetry { pushReadings(toPublish) }
-                if (result.isFailure) return watermark
-                setCount(result.getOrNull() ?: toPublish.size)
+                val pushResult = pushWithRetry { pushReadings(toPublish) }
+                if (pushResult.isFailure) return watermark
+                setCount(pushResult.getOrNull() ?: toPublish.size)
             } else {
                 setCount(0)
             }
@@ -118,8 +154,15 @@ class SyncHealthReadingsUseCase @Inject constructor(
             lastBatchTimestamp
         } catch (e: CancellationException) {
             throw e
+        } catch (e: SecurityException) {
+            // Defense in depth: preflight should have caught this, but if HC revoked between
+            // the permission check and the read, treat as a skip rather than a failure.
+            Timber.w(e, "syncType(%s): SecurityException despite preflight — treating as skipped", type)
+            missingSink += requiredPermission
+            skippedSink += type
+            watermark
         } catch (e: Exception) {
-            Timber.w(e, "syncType failed, keeping watermark at %d", watermark)
+            Timber.w(e, "syncType(%s) failed, keeping watermark at %d", type, watermark)
             watermark
         }
     }
