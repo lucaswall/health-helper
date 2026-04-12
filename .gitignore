@@ -36,6 +36,8 @@ Thumbs.db
 # Signing keys
 *.jks
 *.keystore
+# Exception: committed debug keystore so debug APKs are signature-compatible across machines
+!app/debug.keystore
 
 # Google Services (if used)
 google-services.json
