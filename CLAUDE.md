@@ -60,6 +60,10 @@ Tests: `app/src/test/` (unit), `app/src/androidTest/` (instrumented).
 - `ViewPermissionUsageActivity` alias required for privacy policy display
 - Min SDK 28 required
 
+## ADB over WiFi
+
+Phone connect address: `100.125.78.55:39369` (port may rotate between sessions). To re-pair, ask the user for a pair port + 6-digit code (Developer options → Wireless debugging → Pair device with pairing code), then run `adb pair <host:pair-port> <code>` followed by `adb connect <host:connect-port>`.
+
 ## Linear Integration
 
 | Field | Value |
