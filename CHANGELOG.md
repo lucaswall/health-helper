@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.2] - 2026-04-12
+
+### Fixed
+
+- Missing Health Connect permissions are now surfaced in the app instead of silently marking sync as up to date
+- Background sync now posts a notification when it can't proceed due to missing permissions
+- Permission status re-checks every time the app is opened, with an "Open Health Connect settings" fallback when grants are locked out
+
 ## [1.8.1] - 2026-04-10
 
 ### Fixed
@@ -156,7 +164,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Settings screen for API configuration and sync interval
 - Adaptive launcher icon with health cross design
 
-[Unreleased]: https://github.com/lucaswall/health-helper/compare/v1.8.1...HEAD
+[Unreleased]: https://github.com/lucaswall/health-helper/compare/v1.8.2...HEAD
+[1.8.2]: https://github.com/lucaswall/health-helper/compare/v1.8.1...v1.8.2
 [1.8.1]: https://github.com/lucaswall/health-helper/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/lucaswall/health-helper/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/lucaswall/health-helper/compare/v1.6.0...v1.7.0
