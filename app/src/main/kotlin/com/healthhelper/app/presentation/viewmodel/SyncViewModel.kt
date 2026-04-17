@@ -368,7 +368,11 @@ class SyncViewModel @Inject constructor(
                             hydrationReadPermissionMissing = true,
                         )
                     }
-                    TodayHydrationResult.Unavailable -> { /* leave state untouched */ }
+                    TodayHydrationResult.Unavailable -> _uiState.update {
+                        // Preserve last-known good `hydrationTodayDisplay`, but clear the
+                        // permission flag — Unavailable carries no evidence of denial.
+                        it.copy(hydrationReadPermissionMissing = false)
+                    }
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -508,7 +512,11 @@ class SyncViewModel @Inject constructor(
                 try {
                     val interval = settingsRepository.syncIntervalFlow.first()
                     syncScheduler.schedulePeriodic(interval)
-                } catch (_: Exception) { }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Timber.w(e, "triggerSync: failed to reschedule periodic sync")
+                }
             }
         }
     }

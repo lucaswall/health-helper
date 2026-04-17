@@ -1375,4 +1375,34 @@ class SyncViewModelTest {
             cancelAndIgnoreRemainingEvents()
         }
     }
+
+    @Test
+    fun `loadTodayHydration Unavailable clears stale hydrationReadPermissionMissing flag`() = viewModelTest {
+        var callCount = 0
+        coEvery { getTodayHydrationTotalUseCase.invoke() } coAnswers {
+            callCount++
+            if (callCount == 1) TodayHydrationResult.PermissionDenied else TodayHydrationResult.Unavailable
+        }
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val first = awaitItem()
+            assertTrue(first.hydrationReadPermissionMissing, "First load (PermissionDenied) should set the flag")
+            cancelAndIgnoreRemainingEvents()
+        }
+
+        viewModel.refreshTodayHydration()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val second = awaitItem()
+            assertFalse(
+                second.hydrationReadPermissionMissing,
+                "Unavailable carries no evidence of permission denial — stale flag must clear",
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
 }

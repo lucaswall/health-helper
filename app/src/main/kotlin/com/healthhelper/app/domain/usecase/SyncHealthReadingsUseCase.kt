@@ -172,6 +172,13 @@ class SyncHealthReadingsUseCase @Inject constructor(
 
             if (!retryable || attempt >= MAX_RETRIES) return result
 
+            Timber.w(
+                ex,
+                "pushWithRetry: attempt %d failed (%s), retrying after %dms",
+                attempt + 1,
+                ex?.javaClass?.simpleName,
+                delayMs,
+            )
             delay(delayMs)
             delayMs *= 2
             attempt++

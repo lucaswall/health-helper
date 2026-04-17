@@ -1,5 +1,6 @@
 # Implementation Plan
 
+**Status:** COMPLETE
 **Created:** 2026-04-17
 **Source:** Backlog: HEA-205, HEA-206, HEA-207, HEA-208, HEA-209, HEA-210, HEA-211
 **Linear Issues:** [HEA-205](https://linear.app/lw-claude/issue/HEA-205), [HEA-206](https://linear.app/lw-claude/issue/HEA-206), [HEA-207](https://linear.app/lw-claude/issue/HEA-207), [HEA-208](https://linear.app/lw-claude/issue/HEA-208), [HEA-209](https://linear.app/lw-claude/issue/HEA-209), [HEA-210](https://linear.app/lw-claude/issue/HEA-210), [HEA-211](https://linear.app/lw-claude/issue/HEA-211)
@@ -386,3 +387,50 @@
 
 ### Continuation Status
 All tasks completed.
+
+### Review Findings
+
+Summary: 14 finding(s) raised across 3 reviewers (security, reliability, quality), 3 fixed inline, 11 discarded
+- FIXED INLINE: 3 issue(s) — verified via TDD + bug-hunter
+
+**Issues fixed inline:**
+- [MEDIUM] EDGE CASE: `TodayHydrationResult.Unavailable` left `hydrationReadPermissionMissing` untouched, so a stale permission-denied flag would persist through transient HC failures (`app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt:371`) — Unavailable branch now clears the flag while still preserving last-known good `hydrationTodayDisplay`. New test: `loadTodayHydration Unavailable clears stale hydrationReadPermissionMissing flag`.
+- [MEDIUM] ERROR: Empty `catch (_: Exception) { }` in `triggerSync`'s reschedule `finally` block silently discarded WorkManager scheduling failures (`app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt:511`) — added `Timber.w` log + explicit `CancellationException` rethrow guard (caught by bug-hunter post-fix).
+- [MEDIUM] ERROR: `pushWithRetry` retries (up to 3) emitted no per-attempt log — only the final exhausted failure was visible (`app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncHealthReadingsUseCase.kt:175`) — added `Timber.w` per attempt with attempt number, exception class, and delay.
+
+**Discarded findings (not bugs):**
+- [DISCARDED] [MEDIUM] SECURITY: HTTPS not enforced on user-configured `baseUrl` in `FoodScannerHealthRepositoryImpl` — User-configurable URL intentionally supports `http://localhost` for local dev/testing; enforcing HTTPS would break that workflow. Design decision, not a bug.
+- [DISCARDED] [LOW] SECURITY: `syncType` failure log includes watermark epoch + data type — Last-sync timestamps and type names carry no PHI; not a sensitive disclosure.
+- [DISCARDED] [HIGH] EDGE CASE: `count == 0 && !caughtUp && runTimestampMs > 0` formatSyncStatus branch not covered for any of the 3 sync types — Coverage gap, not a bug. Production code branch is correct (`"Pushed 0 readings · $timeStr"` literal); existing tests are not broken.
+- [DISCARDED] [MEDIUM] ERROR: No logging in `FoodScannerHealthRepositoryImpl` — Failures already surface as `Result.failure` to the SyncHealthReadingsUseCase boundary (line 151) which does log. Adding repo-level duration logging is an observability enhancement, not a bug.
+- [DISCARDED] [MEDIUM] EDGE CASE: BP non-empty+truncated test missing — Coverage gap. The production `caughtUp = readings.size < MAX_READINGS_PER_RUN && !result.truncated` line is the same for all three sync types; correctness is verified by glucose + hydration tests.
+- [DISCARDED] [LOW] CONVENTION: `slot<Instant>()` capture inside `coVerify` after `useCase.invoke()` (GetTodayHydrationTotalUseCaseTest) — Valid MockK pattern (retrospective slot capture); style-only.
+- [DISCARDED] [MEDIUM] TIMEOUT: `GetTodayHydrationTotalUseCase` has no `withTimeout` — False positive. `hydrationRepository.getReadings` delegates to `getReadingsResult` in `HealthConnectHydrationRepository.kt:21-22` which has 10s per-page + 120s cumulative `withTimeout` guards.
+- [DISCARDED] [MEDIUM] TIMEOUT: `syncType` `getReadings` has no timeout — Same false positive. The repository implementations all wrap `readRecords` in `withTimeout(10_000L)` per page + 120s cumulative cap.
+- [DISCARDED] [MEDIUM] COROUTINE: `hydrationLoadJob`/`syncJob` are not `@Volatile` — Latent risk only. All access is on `Dispatchers.Main` via `viewModelScope`; no current data race.
+- [DISCARDED] [LOW] CONVENTION: `SyncScreen` references `internal SYNC_STATUS_NEVER_SYNCED` from `SyncViewModel.kt` — Both in same module; works correctly. Coupling concern, not a bug.
+- [DISCARDED] [LOW] EDGE CASE: `firstRunStart` evaluated after glucose/BP sync completes, drifting by elapsed time — Reviewer themselves noted this is "seconds on a 90-day window and is harmless"; computed fresh per `invoke()` (no stale-process risk).
+
+### Linear Updates
+- HEA-205: Review → Merge (original task)
+- HEA-206: Review → Merge (original task)
+- HEA-207: Review → Merge (original task)
+- HEA-208: Review → Merge (original task)
+- HEA-209: Review → Merge (original task)
+- HEA-210: Review → Merge (original task)
+- HEA-211: Review → Merge (original task)
+- [HEA-212](https://linear.app/lw-claude/issue/HEA-212): Created in Merge (Fix: Unavailable hydration result keeps stale permission-denied flag — fixed inline)
+- [HEA-213](https://linear.app/lw-claude/issue/HEA-213): Created in Merge (Fix: triggerSync silently swallows reschedule failures — fixed inline)
+- [HEA-214](https://linear.app/lw-claude/issue/HEA-214): Created in Merge (Fix: pushWithRetry retry attempts emit no log — fixed inline)
+
+### Inline Fix Verification
+- Unit tests: all pass (`./gradlew test` — `BUILD SUCCESSFUL`)
+- Bug-hunter: 1 LOW finding on initial Fix 2 (spurious `CancellationException` warning on normal teardown) — fixed by adding explicit CE rethrow guard. Re-run clean.
+
+<!-- REVIEW COMPLETE -->
+
+---
+
+## Status: COMPLETE
+
+All tasks implemented and reviewed successfully. All Linear issues moved to Merge.
