@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.5] - 2026-04-17
+
+### Fixed
+
+- Hydration readings pushed from Health Connect now preserve the original record's timezone offset instead of substituting the current device offset
+- Hydration sync no longer marks history as caught up when a first-page read times out before any records are returned
+- Hydration card now shows a permission prompt when Health Connect read access is denied instead of displaying "No readings today"
+- Today's hydration total no longer races itself on the 30-second refresh loop, preventing stale values from overwriting fresh reads
+- Hydration card "last run" timestamp now refreshes once caught up, so the relative time stops freezing
+- Background-sync rescheduling failures and push-retry attempts are now logged for production debugging
+
+### Changed
+
+- "No readings today" wording on the hydration card clarified to distinguish between an empty day and a fresh install
+
 ## [1.8.4] - 2026-04-12
 
 ### Fixed
@@ -176,7 +191,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Settings screen for API configuration and sync interval
 - Adaptive launcher icon with health cross design
 
-[Unreleased]: https://github.com/lucaswall/health-helper/compare/v1.8.4...HEAD
+[Unreleased]: https://github.com/lucaswall/health-helper/compare/v1.8.5...HEAD
+[1.8.5]: https://github.com/lucaswall/health-helper/compare/v1.8.4...v1.8.5
 [1.8.4]: https://github.com/lucaswall/health-helper/compare/v1.8.3...v1.8.4
 [1.8.3]: https://github.com/lucaswall/health-helper/compare/v1.8.2...v1.8.3
 [1.8.2]: https://github.com/lucaswall/health-helper/compare/v1.8.1...v1.8.2

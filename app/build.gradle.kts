@@ -15,8 +15,8 @@ android {
         applicationId = "com.healthhelper.app"
         minSdk = 28
         targetSdk = 36
-        versionCode = 19
-        versionName = "1.8.4"
+        versionCode = 20
+        versionName = "1.8.5"
     }
 
     signingConfigs {
