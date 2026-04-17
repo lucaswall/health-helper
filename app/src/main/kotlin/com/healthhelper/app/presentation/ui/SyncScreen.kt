@@ -50,6 +50,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.healthhelper.app.domain.model.HealthPermissions
+import com.healthhelper.app.presentation.viewmodel.SYNC_STATUS_NEVER_SYNCED
 import com.healthhelper.app.presentation.viewmodel.SyncViewModel
 import timber.log.Timber
 
@@ -468,14 +470,34 @@ fun SyncScreen(
                         style = MaterialTheme.typography.titleMedium,
                     )
 
-                    if (uiState.hydrationTodayDisplay.isNotEmpty()) {
+                    if (uiState.hydrationReadPermissionMissing) {
+                        Text(
+                            text = "Health Connect read permission denied for hydration.",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Button(
+                            onClick = {
+                                try {
+                                    permissionLauncher.launch(setOf(HealthPermissions.READ_HYDRATION))
+                                } catch (e: Exception) {
+                                    openHealthConnectSettings(context)
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Grant hydration access")
+                        }
+                    } else if (uiState.hydrationTodayDisplay.isNotEmpty()) {
                         Text(
                             text = "${uiState.hydrationTodayDisplay} today",
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     } else {
+                        val noSyncYet = uiState.hydrationSyncStatus.isEmpty() ||
+                            uiState.hydrationSyncStatus == SYNC_STATUS_NEVER_SYNCED
                         Text(
-                            text = "No readings today",
+                            text = if (noSyncYet) "Waiting for first sync\u2026" else "No water logged yet today",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

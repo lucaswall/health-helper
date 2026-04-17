@@ -113,8 +113,7 @@ class FoodScannerHealthRepositoryImpl @Inject constructor(
         HydrationReadingDto(
             measuredAt = reading.timestamp.toString(),
             volumeMl = reading.volumeMl,
-            zoneOffset = reading.zoneOffset?.toString()?.let { if (it == "Z") "+00:00" else it }
-                ?: zoneOffsetString(reading.timestamp),
+            zoneOffset = reading.zoneOffset?.toString()?.let { if (it == "Z") "+00:00" else it },
         )
 
     private fun zoneOffsetString(timestamp: java.time.Instant): String {

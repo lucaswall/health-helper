@@ -15,6 +15,7 @@ import com.healthhelper.app.domain.repository.SettingsRepository
 import com.healthhelper.app.domain.usecase.GetLastBloodPressureReadingUseCase
 import com.healthhelper.app.domain.usecase.GetLastGlucoseReadingUseCase
 import com.healthhelper.app.domain.usecase.GetTodayHydrationTotalUseCase
+import com.healthhelper.app.domain.usecase.TodayHydrationResult
 import com.healthhelper.app.domain.usecase.SyncHealthReadingsUseCase
 import com.healthhelper.app.domain.usecase.SyncNutritionUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -61,6 +62,7 @@ data class SyncUiState(
     val hydrationTodayDisplay: String = "",
     val hydrationSyncStatus: String = "",
     val hydrationHistoryStatus: String = "",
+    val hydrationReadPermissionMissing: Boolean = false,
 ) {
     val permissionGranted: Boolean
         get() = healthConnectAvailable && missingHealthPermissions.isEmpty()
@@ -89,6 +91,7 @@ class SyncViewModel @Inject constructor(
     val uiState: StateFlow<SyncUiState> = _uiState.asStateFlow()
 
     private var syncJob: Job? = null
+    private var hydrationLoadJob: Job? = null
     private var lastSyncTimestamp = 0L
     private var lastGlucoseSyncTs = 0L
     private var lastBpSyncTs = 0L
@@ -117,9 +120,7 @@ class SyncViewModel @Inject constructor(
         viewModelScope.launch {
             loadLastGlucoseReading()
         }
-        viewModelScope.launch {
-            loadTodayHydration()
-        }
+        loadTodayHydration()
 
         // Observe all settings flows for UI state — isConfigured derived reactively
         viewModelScope.launch {
@@ -171,17 +172,17 @@ class SyncViewModel @Inject constructor(
                 // Refresh hydration daily total
                 loadTodayHydration()
                 // Refresh sync status strings that contain relative timestamps
-                if (lastHydrationSyncTs > 0 && hydrationSyncCount > 0 && !hydrationSyncCaughtUp) {
+                if (lastHydrationSyncTs > 0) {
                     _uiState.update {
                         it.copy(hydrationSyncStatus = formatSyncStatus(hydrationSyncCount, hydrationSyncCaughtUp, lastHydrationSyncTs))
                     }
                 }
-                if (lastGlucoseSyncTs > 0 && glucoseSyncCount > 0 && !glucoseSyncCaughtUp) {
+                if (lastGlucoseSyncTs > 0) {
                     _uiState.update {
                         it.copy(glucoseSyncStatus = formatSyncStatus(glucoseSyncCount, glucoseSyncCaughtUp, lastGlucoseSyncTs))
                     }
                 }
-                if (lastBpSyncTs > 0 && bpSyncCount > 0 && !bpSyncCaughtUp) {
+                if (lastBpSyncTs > 0) {
                     _uiState.update {
                         it.copy(bpSyncStatus = formatSyncStatus(bpSyncCount, bpSyncCaughtUp, lastBpSyncTs))
                     }
@@ -346,29 +347,43 @@ class SyncViewModel @Inject constructor(
         }
     }
 
-    private suspend fun loadTodayHydration() {
-        try {
-            val total = getTodayHydrationTotalUseCase.invoke()
-            _uiState.update {
-                it.copy(
-                    hydrationTodayDisplay = if (total > 0) {
-                        "${NumberFormat.getIntegerInstance().format(total)} mL"
-                    } else {
-                        ""
-                    },
-                )
+    private fun loadTodayHydration() {
+        hydrationLoadJob?.cancel()
+        hydrationLoadJob = viewModelScope.launch {
+            try {
+                when (val result = getTodayHydrationTotalUseCase.invoke()) {
+                    is TodayHydrationResult.Total -> _uiState.update {
+                        it.copy(
+                            hydrationTodayDisplay = if (result.volumeMl > 0) {
+                                "${NumberFormat.getIntegerInstance().format(result.volumeMl)} mL"
+                            } else {
+                                ""
+                            },
+                            hydrationReadPermissionMissing = false,
+                        )
+                    }
+                    TodayHydrationResult.PermissionDenied -> _uiState.update {
+                        it.copy(
+                            hydrationTodayDisplay = "",
+                            hydrationReadPermissionMissing = true,
+                        )
+                    }
+                    TodayHydrationResult.Unavailable -> _uiState.update {
+                        // Preserve last-known good `hydrationTodayDisplay`, but clear the
+                        // permission flag — Unavailable carries no evidence of denial.
+                        it.copy(hydrationReadPermissionMissing = false)
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to load today hydration total")
             }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Timber.e(e, "Failed to load today hydration total")
         }
     }
 
     fun refreshTodayHydration() {
-        viewModelScope.launch {
-            loadTodayHydration()
-        }
+        loadTodayHydration()
     }
 
     private fun formatNextSyncTime(nextSyncMs: Long): String {
@@ -408,6 +423,7 @@ class SyncViewModel @Inject constructor(
                     permissionLockoutSuspected = if (missing.isEmpty()) false else it.permissionLockoutSuspected,
                 )
             }
+            loadTodayHydration()
         }
     }
 
@@ -496,14 +512,20 @@ class SyncViewModel @Inject constructor(
                 try {
                     val interval = settingsRepository.syncIntervalFlow.first()
                     syncScheduler.schedulePeriodic(interval)
-                } catch (_: Exception) { }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Timber.w(e, "triggerSync: failed to reschedule periodic sync")
+                }
             }
         }
     }
 }
 
+internal const val SYNC_STATUS_NEVER_SYNCED = "Not synced to food-scanner"
+
 internal fun formatSyncStatus(count: Int, caughtUp: Boolean, runTimestampMs: Long): String {
-    if (runTimestampMs == 0L) return "Not synced to food-scanner"
+    if (runTimestampMs == 0L) return SYNC_STATUS_NEVER_SYNCED
     val timeStr = formatRelativeTime(runTimestampMs)
     return when {
         count == 0 && caughtUp -> "Up to date · $timeStr"
