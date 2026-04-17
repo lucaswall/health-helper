@@ -20,6 +20,7 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.slot
 import java.io.IOException
 import java.time.Instant
 import kotlin.coroutines.cancellation.CancellationException
@@ -241,6 +242,58 @@ class SyncHealthReadingsUseCaseTest {
 
         coVerify(exactly = 0) { settingsRepository.setHydrationSyncCaughtUp(true) }
         coVerify { settingsRepository.setHydrationSyncCaughtUp(false) }
+    }
+
+    // =========== TRUNCATED EMPTY BATCH ===========
+
+    @Test
+    @DisplayName("syncType does not setCaughtUp when hydration read returns empty + truncated")
+    fun hydrationEmptyTruncatedDoesNotSetCaughtUp() = runTest {
+        coEvery { hydrationRepository.getReadingsResult(any(), any()) } returns
+            ReadingsResult(emptyList(), truncated = true)
+
+        createUseCase().invoke()
+
+        coVerify(exactly = 0) { settingsRepository.setHydrationSyncCaughtUp(any()) }
+        coVerify { settingsRepository.setHydrationSyncRunTimestamp(any()) }
+        coVerify { settingsRepository.setHydrationSyncCount(0) }
+    }
+
+    @Test
+    @DisplayName("syncType does not setCaughtUp when glucose read returns empty + truncated")
+    fun glucoseEmptyTruncatedDoesNotSetCaughtUp() = runTest {
+        coEvery { bloodGlucoseRepository.getReadingsResult(any(), any()) } returns
+            ReadingsResult(emptyList(), truncated = true)
+
+        createUseCase().invoke()
+
+        coVerify(exactly = 0) { settingsRepository.setGlucoseSyncCaughtUp(any()) }
+        coVerify { settingsRepository.setGlucoseSyncRunTimestamp(any()) }
+        coVerify { settingsRepository.setGlucoseSyncCount(0) }
+    }
+
+    @Test
+    @DisplayName("syncType does not setCaughtUp when BP read returns empty + truncated")
+    fun bpEmptyTruncatedDoesNotSetCaughtUp() = runTest {
+        coEvery { bloodPressureRepository.getReadingsResult(any(), any()) } returns
+            ReadingsResult(emptyList(), truncated = true)
+
+        createUseCase().invoke()
+
+        coVerify(exactly = 0) { settingsRepository.setBpSyncCaughtUp(any()) }
+        coVerify { settingsRepository.setBpSyncRunTimestamp(any()) }
+        coVerify { settingsRepository.setBpSyncCount(0) }
+    }
+
+    @Test
+    @DisplayName("syncType sets caughtUp=true when batch is empty and not truncated (hydration regression)")
+    fun hydrationEmptyNotTruncatedSetsCaughtUpTrue() = runTest {
+        coEvery { hydrationRepository.getReadingsResult(any(), any()) } returns
+            ReadingsResult(emptyList(), truncated = false)
+
+        createUseCase().invoke()
+
+        coVerify { settingsRepository.setHydrationSyncCaughtUp(true) }
     }
 
     // =========== LEDGER FILTERING ===========
@@ -619,6 +672,47 @@ class SyncHealthReadingsUseCaseTest {
         coVerify { bloodPressureRepository.getReadingsResult(any(), any()) }
         coVerify { hydrationRepository.getReadingsResult(any(), any()) }
         assertEquals(setOf(HealthPermissions.READ_BLOOD_GLUCOSE), report.missingReadPermissions)
+    }
+
+    // =========== HYDRATION FIRST-RUN WINDOW ===========
+
+    @Test
+    @DisplayName("syncType hydration first run reads from ~90 days ago, not EPOCH")
+    fun hydrationFirstRunReadsFromNDaysAgo() = runTest {
+        every { settingsRepository.lastHydrationSyncTimestampFlow } returns flowOf(0L)
+        val startSlot = slot<Instant>()
+        coEvery { hydrationRepository.getReadingsResult(capture(startSlot), any()) } returns ReadingsResult(emptyList())
+
+        createUseCase().invoke()
+
+        val captured = startSlot.captured
+        val lower = Instant.now().minus(java.time.Duration.ofDays(91))
+        val upper = Instant.now().minus(java.time.Duration.ofDays(89))
+        assertTrue(captured.isAfter(lower), "Expected start after $lower but was $captured")
+        assertTrue(captured.isBefore(upper), "Expected start before $upper but was $captured")
+    }
+
+    @Test
+    @DisplayName("syncType hydration subsequent run reads from watermark+1ms")
+    fun hydrationSubsequentRunReadsFromWatermarkPlus1ms() = runTest {
+        val watermark = 1700000000000L
+        every { settingsRepository.lastHydrationSyncTimestampFlow } returns flowOf(watermark)
+        val startSlot = slot<Instant>()
+        coEvery { hydrationRepository.getReadingsResult(capture(startSlot), any()) } returns ReadingsResult(emptyList())
+
+        createUseCase().invoke()
+
+        assertEquals(Instant.ofEpochMilli(watermark + 1), startSlot.captured)
+    }
+
+    @Test
+    @DisplayName("syncType glucose first run still reads from EPOCH (unchanged)")
+    fun glucoseFirstRunStillReadsFromEpoch() = runTest {
+        every { settingsRepository.lastGlucoseSyncTimestampFlow } returns flowOf(0L)
+
+        createUseCase().invoke()
+
+        coVerify { bloodGlucoseRepository.getReadingsResult(Instant.EPOCH, any()) }
     }
 
     @Test

@@ -12,6 +12,7 @@ import com.healthhelper.app.domain.repository.FoodScannerHealthRepository
 import com.healthhelper.app.domain.repository.HydrationRepository
 import com.healthhelper.app.domain.repository.SettingsRepository
 import java.io.IOException
+import java.time.Duration
 import java.time.Instant
 import javax.inject.Inject
 import kotlin.coroutines.cancellation.CancellationException
@@ -78,6 +79,7 @@ class SyncHealthReadingsUseCase @Inject constructor(
             setRunTimestamp = settingsRepository::setHydrationSyncRunTimestamp,
             getLedger = { emptySet() },
             getTimestamp = { it.timestamp.toEpochMilli() },
+            firstRunStart = Instant.now().minus(Duration.ofDays(FIRST_RUN_LOOKBACK_DAYS)),
         )
 
         settingsRepository.pruneDirectPushedTimestamps(glucoseWatermark, bpWatermark)
@@ -101,12 +103,13 @@ class SyncHealthReadingsUseCase @Inject constructor(
         setRunTimestamp: suspend (Long) -> Unit,
         getLedger: suspend () -> Set<Long>,
         getTimestamp: (T) -> Long,
+        firstRunStart: Instant = Instant.EPOCH,
     ): Long {
         val watermark = watermarkFlow.first()
         val requiredPermission = type.readPermission
 
         return try {
-            val start = if (watermark == 0L) Instant.EPOCH else Instant.ofEpochMilli(watermark + 1)
+            val start = if (watermark == 0L) firstRunStart else Instant.ofEpochMilli(watermark + 1)
             val end = Instant.now()
 
             val result = getReadings(start, end)
@@ -115,7 +118,7 @@ class SyncHealthReadingsUseCase @Inject constructor(
 
             if (batch.isEmpty()) {
                 setCount(0)
-                setCaughtUp(true)
+                if (!result.truncated) setCaughtUp(true)
                 setRunTimestamp(System.currentTimeMillis())
                 return watermark
             }
@@ -179,5 +182,6 @@ class SyncHealthReadingsUseCase @Inject constructor(
         const val MAX_READINGS_PER_RUN = 100
         const val MAX_RETRIES = 3
         const val INITIAL_RETRY_DELAY_MS = 500L
+        const val FIRST_RUN_LOOKBACK_DAYS = 90L
     }
 }
