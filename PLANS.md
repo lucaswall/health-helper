@@ -332,3 +332,57 @@
 - Task 4 changes the `GetTodayHydrationTotalUseCase` public signature (return type). Only one caller (`SyncViewModel`) exists today; confirmed via grep.
 - Task 6 changes visible UI strings that may appear in Sentry breadcrumbs or prior screenshots; minor.
 - Manual UI verification required for Tasks 4 and 7 — Compose test harness is not set up for the hydration card specifically.
+
+---
+
+## Iteration 1
+
+**Implemented:** 2026-04-17
+**Method:** Agent team (3 workers, worktree-isolated)
+
+### Tasks Completed This Iteration
+- Task 1 (HEA-205): Hydration push DTO now passes `zoneOffset` through as-is (null → null, "Z" → "+00:00") — no more faked system offset (worker-1)
+- Task 2 (HEA-206): `SyncHealthReadingsUseCase.syncType` gates `setCaughtUp(true)` on `!result.truncated` in the empty-batch branch (worker-2)
+- Task 3 (HEA-208): `syncType` accepts `firstRunStart: Instant = Instant.EPOCH`; hydration call site passes `Instant.now().minus(Duration.ofDays(90))` (worker-2)
+- Task 4 (HEA-207): Introduced sealed `TodayHydrationResult { Total, PermissionDenied, Unavailable }`; `SyncViewModel` exposes `hydrationReadPermissionMissing`; SyncScreen hydration card shows permission prompt + "Grant hydration access" button (worker-3)
+- Task 5 (HEA-209): `SyncViewModel.loadTodayHydration` serialized via `hydrationLoadJob` cancel-before-launch (worker-3)
+- Task 6 (HEA-210): 30s loop unconditionally re-emits hydration/glucose/BP sync-status strings when `runTimestamp > 0` (worker-3)
+- Task 7 (HEA-211): SyncScreen differentiates "Waiting for first sync…" from "No water logged yet today" (worker-3)
+
+### Files Modified
+- `app/src/main/kotlin/com/healthhelper/app/data/repository/FoodScannerHealthRepositoryImpl.kt` — DTO zoneOffset passthrough
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/SyncHealthReadingsUseCase.kt` — truncated-gated caughtUp + firstRunStart param
+- `app/src/main/kotlin/com/healthhelper/app/domain/usecase/GetTodayHydrationTotalUseCase.kt` — sealed `TodayHydrationResult` return type
+- `app/src/main/kotlin/com/healthhelper/app/presentation/viewmodel/SyncViewModel.kt` — hydrationReadPermissionMissing state, hydrationLoadJob serialization, unconditional status re-emit, `SYNC_STATUS_NEVER_SYNCED` constant, refreshPermissions triggers loadTodayHydration
+- `app/src/main/kotlin/com/healthhelper/app/presentation/ui/SyncScreen.kt` — hydration permission prompt branch, pre-first-sync wording, shared sentinel constant
+- Tests: `FoodScannerHealthRepositoryImplTest`, `SyncHealthReadingsUseCaseTest`, `GetTodayHydrationTotalUseCaseTest`, `SyncViewModelTest` (all extended)
+
+### Linear Updates
+- HEA-205: Todo → In Progress → Review
+- HEA-206: Todo → In Progress → Review
+- HEA-207: Todo → In Progress → Review
+- HEA-208: Todo → In Progress → Review
+- HEA-209: Todo → Review
+- HEA-210: Todo → Review
+- HEA-211: Todo → Review
+
+### Pre-commit Verification
+- bug-hunter: Found 3 bugs — all fixed before commit:
+  - HIGH: `hydrationReadPermissionMissing` stuck on after grant — now cleared by triggering `loadTodayHydration()` from `refreshPermissions()` on ON_RESUME
+  - MEDIUM: `catch (_: CancellationException) { throw CancellationException() }` lost original cause — replaced with `catch (e: CancellationException) { throw e }`
+  - MEDIUM: Duplicate hardcoded `"Not synced to food-scanner"` literal in SyncScreen coupled to `formatSyncStatus` — extracted shared `SYNC_STATUS_NEVER_SYNCED` constant
+- verifier: all unit tests pass, `./gradlew assembleDebug` succeeds, no build warnings
+
+### Work Partition
+- Worker 1: Task 1 (data — hydration DTO)
+- Worker 2: Tasks 2, 3 (domain — `SyncHealthReadingsUseCase`)
+- Worker 3: Tasks 4, 5, 6, 7 (presentation + today use case — `GetTodayHydrationTotalUseCase`, `SyncViewModel`, `SyncScreen`)
+
+### Merge Summary
+- Worker 2: fast-forward
+- Worker 1: ort merge, no conflicts
+- Worker 3: ort merge, no conflicts
+- Build gate after each merge: passing
+
+### Continuation Status
+All tasks completed.

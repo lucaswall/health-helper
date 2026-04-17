@@ -370,8 +370,8 @@ class SyncViewModel @Inject constructor(
                     }
                     TodayHydrationResult.Unavailable -> { /* leave state untouched */ }
                 }
-            } catch (_: CancellationException) {
-                throw CancellationException()
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Timber.e(e, "Failed to load today hydration total")
             }
@@ -419,6 +419,7 @@ class SyncViewModel @Inject constructor(
                     permissionLockoutSuspected = if (missing.isEmpty()) false else it.permissionLockoutSuspected,
                 )
             }
+            loadTodayHydration()
         }
     }
 
@@ -513,8 +514,10 @@ class SyncViewModel @Inject constructor(
     }
 }
 
+internal const val SYNC_STATUS_NEVER_SYNCED = "Not synced to food-scanner"
+
 internal fun formatSyncStatus(count: Int, caughtUp: Boolean, runTimestampMs: Long): String {
-    if (runTimestampMs == 0L) return "Not synced to food-scanner"
+    if (runTimestampMs == 0L) return SYNC_STATUS_NEVER_SYNCED
     val timeStr = formatRelativeTime(runTimestampMs)
     return when {
         count == 0 && caughtUp -> "Up to date · $timeStr"

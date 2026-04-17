@@ -51,6 +51,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.healthhelper.app.domain.model.HealthPermissions
+import com.healthhelper.app.presentation.viewmodel.SYNC_STATUS_NEVER_SYNCED
 import com.healthhelper.app.presentation.viewmodel.SyncViewModel
 import timber.log.Timber
 
@@ -494,7 +495,7 @@ fun SyncScreen(
                         )
                     } else {
                         val noSyncYet = uiState.hydrationSyncStatus.isEmpty() ||
-                            uiState.hydrationSyncStatus == "Not synced to food-scanner"
+                            uiState.hydrationSyncStatus == SYNC_STATUS_NEVER_SYNCED
                         Text(
                             text = if (noSyncYet) "Waiting for first sync\u2026" else "No water logged yet today",
                             style = MaterialTheme.typography.bodyMedium,
