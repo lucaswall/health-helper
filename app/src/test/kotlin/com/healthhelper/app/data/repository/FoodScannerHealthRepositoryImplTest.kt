@@ -3,7 +3,9 @@ package com.healthhelper.app.data.repository
 import com.healthhelper.app.data.api.FoodScannerApiClient
 import com.healthhelper.app.data.api.dto.BloodPressureReadingRequest
 import com.healthhelper.app.data.api.dto.GlucoseReadingRequest
+import com.healthhelper.app.data.api.dto.HydrationReadingRequest
 import com.healthhelper.app.domain.model.BloodPressureReading
+import com.healthhelper.app.domain.model.HydrationReading
 import com.healthhelper.app.domain.model.BodyPosition
 import com.healthhelper.app.domain.model.GlucoseMealType
 import com.healthhelper.app.domain.model.GlucoseReading
@@ -17,6 +19,7 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
 import java.time.Instant
+import java.time.ZoneOffset
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.BeforeEach
@@ -24,6 +27,7 @@ import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class FoodScannerHealthRepositoryImplTest {
@@ -475,5 +479,55 @@ class FoodScannerHealthRepositoryImplTest {
             zoneOffset.matches(Regex("[+-]\\d{2}:\\d{2}")),
             "Expected zone offset in ±HH:MM format, got: $zoneOffset",
         )
+    }
+
+    // --- pushHydrationReadings tests ---
+
+    @Test
+    @DisplayName("pushHydrationReadings serializes non-null zoneOffset normalized")
+    fun pushHydrationReadingsSerializesNonNullZoneOffset() = runTest {
+        val slot = slot<HydrationReadingRequest>()
+        coEvery { apiClient.postHydrationReadings(any(), any(), capture(slot)) } returns Result.success(1)
+        val reading = HydrationReading(
+            volumeMl = 250,
+            timestamp = fixedTimestamp,
+            zoneOffset = ZoneOffset.of("+02:00"),
+        )
+
+        repository.pushHydrationReadings(listOf(reading))
+
+        assertEquals("+02:00", slot.captured.readings[0].zoneOffset)
+    }
+
+    @Test
+    @DisplayName("pushHydrationReadings serializes UTC zoneOffset as +00:00")
+    fun pushHydrationReadingsSerializesUtcZoneOffsetAsPlusZero() = runTest {
+        val slot = slot<HydrationReadingRequest>()
+        coEvery { apiClient.postHydrationReadings(any(), any(), capture(slot)) } returns Result.success(1)
+        val reading = HydrationReading(
+            volumeMl = 250,
+            timestamp = fixedTimestamp,
+            zoneOffset = ZoneOffset.UTC,
+        )
+
+        repository.pushHydrationReadings(listOf(reading))
+
+        assertEquals("+00:00", slot.captured.readings[0].zoneOffset)
+    }
+
+    @Test
+    @DisplayName("pushHydrationReadings serializes null zoneOffset as null")
+    fun pushHydrationReadingsSerializesNullZoneOffsetAsNull() = runTest {
+        val slot = slot<HydrationReadingRequest>()
+        coEvery { apiClient.postHydrationReadings(any(), any(), capture(slot)) } returns Result.success(1)
+        val reading = HydrationReading(
+            volumeMl = 250,
+            timestamp = fixedTimestamp,
+            zoneOffset = null,
+        )
+
+        repository.pushHydrationReadings(listOf(reading))
+
+        assertNull(slot.captured.readings[0].zoneOffset)
     }
 }
