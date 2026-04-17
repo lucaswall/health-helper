@@ -15,6 +15,7 @@ import com.healthhelper.app.domain.repository.SettingsRepository
 import com.healthhelper.app.domain.usecase.GetLastBloodPressureReadingUseCase
 import com.healthhelper.app.domain.usecase.GetLastGlucoseReadingUseCase
 import com.healthhelper.app.domain.usecase.GetTodayHydrationTotalUseCase
+import com.healthhelper.app.domain.usecase.TodayHydrationResult
 import com.healthhelper.app.domain.usecase.SyncHealthReadingsUseCase
 import com.healthhelper.app.domain.usecase.SyncNutritionUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -61,6 +62,7 @@ data class SyncUiState(
     val hydrationTodayDisplay: String = "",
     val hydrationSyncStatus: String = "",
     val hydrationHistoryStatus: String = "",
+    val hydrationReadPermissionMissing: Boolean = false,
 ) {
     val permissionGranted: Boolean
         get() = healthConnectAvailable && missingHealthPermissions.isEmpty()
@@ -89,6 +91,7 @@ class SyncViewModel @Inject constructor(
     val uiState: StateFlow<SyncUiState> = _uiState.asStateFlow()
 
     private var syncJob: Job? = null
+    private var hydrationLoadJob: Job? = null
     private var lastSyncTimestamp = 0L
     private var lastGlucoseSyncTs = 0L
     private var lastBpSyncTs = 0L
@@ -117,9 +120,7 @@ class SyncViewModel @Inject constructor(
         viewModelScope.launch {
             loadLastGlucoseReading()
         }
-        viewModelScope.launch {
-            loadTodayHydration()
-        }
+        loadTodayHydration()
 
         // Observe all settings flows for UI state — isConfigured derived reactively
         viewModelScope.launch {
@@ -171,17 +172,17 @@ class SyncViewModel @Inject constructor(
                 // Refresh hydration daily total
                 loadTodayHydration()
                 // Refresh sync status strings that contain relative timestamps
-                if (lastHydrationSyncTs > 0 && hydrationSyncCount > 0 && !hydrationSyncCaughtUp) {
+                if (lastHydrationSyncTs > 0) {
                     _uiState.update {
                         it.copy(hydrationSyncStatus = formatSyncStatus(hydrationSyncCount, hydrationSyncCaughtUp, lastHydrationSyncTs))
                     }
                 }
-                if (lastGlucoseSyncTs > 0 && glucoseSyncCount > 0 && !glucoseSyncCaughtUp) {
+                if (lastGlucoseSyncTs > 0) {
                     _uiState.update {
                         it.copy(glucoseSyncStatus = formatSyncStatus(glucoseSyncCount, glucoseSyncCaughtUp, lastGlucoseSyncTs))
                     }
                 }
-                if (lastBpSyncTs > 0 && bpSyncCount > 0 && !bpSyncCaughtUp) {
+                if (lastBpSyncTs > 0) {
                     _uiState.update {
                         it.copy(bpSyncStatus = formatSyncStatus(bpSyncCount, bpSyncCaughtUp, lastBpSyncTs))
                     }
@@ -346,29 +347,39 @@ class SyncViewModel @Inject constructor(
         }
     }
 
-    private suspend fun loadTodayHydration() {
-        try {
-            val total = getTodayHydrationTotalUseCase.invoke()
-            _uiState.update {
-                it.copy(
-                    hydrationTodayDisplay = if (total > 0) {
-                        "${NumberFormat.getIntegerInstance().format(total)} mL"
-                    } else {
-                        ""
-                    },
-                )
+    private fun loadTodayHydration() {
+        hydrationLoadJob?.cancel()
+        hydrationLoadJob = viewModelScope.launch {
+            try {
+                when (val result = getTodayHydrationTotalUseCase.invoke()) {
+                    is TodayHydrationResult.Total -> _uiState.update {
+                        it.copy(
+                            hydrationTodayDisplay = if (result.volumeMl > 0) {
+                                "${NumberFormat.getIntegerInstance().format(result.volumeMl)} mL"
+                            } else {
+                                ""
+                            },
+                            hydrationReadPermissionMissing = false,
+                        )
+                    }
+                    TodayHydrationResult.PermissionDenied -> _uiState.update {
+                        it.copy(
+                            hydrationTodayDisplay = "",
+                            hydrationReadPermissionMissing = true,
+                        )
+                    }
+                    TodayHydrationResult.Unavailable -> { /* leave state untouched */ }
+                }
+            } catch (_: CancellationException) {
+                throw CancellationException()
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to load today hydration total")
             }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Timber.e(e, "Failed to load today hydration total")
         }
     }
 
     fun refreshTodayHydration() {
-        viewModelScope.launch {
-            loadTodayHydration()
-        }
+        loadTodayHydration()
     }
 
     private fun formatNextSyncTime(nextSyncMs: Long): String {

@@ -19,6 +19,7 @@ import com.healthhelper.app.domain.usecase.GetLastBloodPressureReadingUseCase
 import com.healthhelper.app.domain.usecase.GetLastGlucoseReadingUseCase
 import com.healthhelper.app.domain.usecase.GetTodayHydrationTotalUseCase
 import com.healthhelper.app.domain.usecase.SyncHealthReadingsUseCase
+import com.healthhelper.app.domain.usecase.TodayHydrationResult
 import com.healthhelper.app.domain.usecase.SyncNutritionUseCase
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -26,6 +27,7 @@ import io.mockk.every
 import io.mockk.mockk
 import java.text.NumberFormat
 import java.time.Instant
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancel
@@ -95,7 +97,7 @@ class SyncViewModelTest {
         every { syncScheduler.getNextSyncTimeFlow() } returns flowOf(null)
         coEvery { getLastBpReadingUseCase.invoke() } returns null
         coEvery { getLastGlucoseReadingUseCase.invoke() } returns null
-        coEvery { getTodayHydrationTotalUseCase.invoke() } returns 0
+        coEvery { getTodayHydrationTotalUseCase.invoke() } returns TodayHydrationResult.Total(0)
     }
 
     @AfterEach
@@ -1050,7 +1052,7 @@ class SyncViewModelTest {
 
     @Test
     fun `hydrationTodayDisplay shows formatted total when use case returns positive value`() = viewModelTest {
-        coEvery { getTodayHydrationTotalUseCase.invoke() } returns 1250
+        coEvery { getTodayHydrationTotalUseCase.invoke() } returns TodayHydrationResult.Total(1250)
 
         viewModel = createViewModel()
         advanceTimeBy(1_000)
@@ -1065,7 +1067,7 @@ class SyncViewModelTest {
 
     @Test
     fun `hydrationTodayDisplay is empty when use case returns 0`() = viewModelTest {
-        coEvery { getTodayHydrationTotalUseCase.invoke() } returns 0
+        coEvery { getTodayHydrationTotalUseCase.invoke() } returns TodayHydrationResult.Total(0)
 
         viewModel = createViewModel()
         advanceTimeBy(1_000)
@@ -1197,7 +1199,7 @@ class SyncViewModelTest {
 
     @Test
     fun `refreshTodayHydration reloads from use case`() = viewModelTest {
-        coEvery { getTodayHydrationTotalUseCase.invoke() } returns 0 andThen 750
+        coEvery { getTodayHydrationTotalUseCase.invoke() } returns TodayHydrationResult.Total(0) andThen TodayHydrationResult.Total(750)
 
         viewModel = createViewModel()
         advanceTimeBy(1_000)
@@ -1209,6 +1211,167 @@ class SyncViewModelTest {
             val state = awaitItem()
             val expected = "${NumberFormat.getIntegerInstance().format(750)} mL"
             assertEquals(expected, state.hydrationTodayDisplay)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    // --- Task 6 (HEA-210): Refresh sync status strings every 30s even when caught up ---
+    // Note: formatRelativeTime uses System.currentTimeMillis() (real clock), so we verify the
+    // loop runs the update path by ensuring the correct value is present in the next emission.
+
+    @Test
+    fun `hydrationSyncStatus is correct in 30s loop tick even when caught up`() = viewModelTest {
+        val positiveTs = System.currentTimeMillis() - 5_000L
+        every { settingsRepository.hydrationSyncCountFlow } returns flowOf(0)
+        every { settingsRepository.hydrationSyncCaughtUpFlow } returns flowOf(true)
+        every { settingsRepository.hydrationSyncRunTimestampFlow } returns flowOf(positiveTs)
+        // Second call returns Total(200) so the loop's loadTodayHydration() causes a state emission
+        coEvery { getTodayHydrationTotalUseCase.invoke() } returns
+            TodayHydrationResult.Total(0) andThen TodayHydrationResult.Total(200)
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            awaitItem() // consume initial state (hydrationTodayDisplay = "")
+
+            advanceTimeBy(30_001)
+
+            // hydrationTodayDisplay changed → StateFlow emits; hydrationSyncStatus co-present
+            val state = awaitItem()
+            assertEquals("200 mL", state.hydrationTodayDisplay)
+            assertTrue(
+                state.hydrationSyncStatus.startsWith("Up to date"),
+                "Expected 'Up to date' in hydrationSyncStatus (caughtUp=true), got: '${state.hydrationSyncStatus}'",
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `glucoseSyncStatus is correct in 30s loop tick even when caught up`() = viewModelTest {
+        val positiveTs = System.currentTimeMillis() - 5_000L
+        every { settingsRepository.glucoseSyncCountFlow } returns flowOf(0)
+        every { settingsRepository.glucoseSyncCaughtUpFlow } returns flowOf(true)
+        every { settingsRepository.glucoseSyncRunTimestampFlow } returns flowOf(positiveTs)
+        coEvery { getTodayHydrationTotalUseCase.invoke() } returns
+            TodayHydrationResult.Total(0) andThen TodayHydrationResult.Total(200)
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            awaitItem()
+            advanceTimeBy(30_001)
+
+            val state = awaitItem()
+            assertTrue(
+                state.glucoseSyncStatus.startsWith("Up to date"),
+                "Expected 'Up to date' in glucoseSyncStatus (caughtUp=true), got: '${state.glucoseSyncStatus}'",
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `bpSyncStatus is correct in 30s loop tick even when caught up`() = viewModelTest {
+        val positiveTs = System.currentTimeMillis() - 5_000L
+        every { settingsRepository.bpSyncCountFlow } returns flowOf(0)
+        every { settingsRepository.bpSyncCaughtUpFlow } returns flowOf(true)
+        every { settingsRepository.bpSyncRunTimestampFlow } returns flowOf(positiveTs)
+        coEvery { getTodayHydrationTotalUseCase.invoke() } returns
+            TodayHydrationResult.Total(0) andThen TodayHydrationResult.Total(200)
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            awaitItem()
+            advanceTimeBy(30_001)
+
+            val state = awaitItem()
+            assertTrue(
+                state.bpSyncStatus.startsWith("Up to date"),
+                "Expected 'Up to date' in bpSyncStatus (caughtUp=true), got: '${state.bpSyncStatus}'",
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    // --- Task 4 (HEA-207): Hydration permission denial ---
+
+    @Test
+    fun `loadTodayHydration PermissionDenied sets hydrationReadPermissionMissing true and clears display`() = viewModelTest {
+        coEvery { getTodayHydrationTotalUseCase.invoke() } returns TodayHydrationResult.PermissionDenied
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertTrue(state.hydrationReadPermissionMissing)
+            assertEquals("", state.hydrationTodayDisplay)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `loadTodayHydration Total(0) sets hydrationReadPermissionMissing false and empty display`() = viewModelTest {
+        coEvery { getTodayHydrationTotalUseCase.invoke() } returns TodayHydrationResult.Total(0)
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertFalse(state.hydrationReadPermissionMissing)
+            assertEquals("", state.hydrationTodayDisplay)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    // --- Task 5 (HEA-209): Serialize loadTodayHydration to prevent stale-value races ---
+
+    @Test
+    fun `rapid loadTodayHydration calls do not emit stale value`() = viewModelTest {
+        val firstDeferred = CompletableDeferred<TodayHydrationResult>()
+        var callCount = 0
+        coEvery { getTodayHydrationTotalUseCase.invoke() } coAnswers {
+            callCount++
+            if (callCount == 1) firstDeferred.await() else TodayHydrationResult.Total(500)
+        }
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        // First call from init already in-flight (suspended on firstDeferred)
+        // Trigger second call which should cancel the first
+        viewModel.refreshTodayHydration()
+        advanceTimeBy(1_000)
+
+        // Complete second call (callCount==2 returns Total(500)) — already done
+        // Now complete first call with stale value — should be ignored since job was cancelled
+        firstDeferred.complete(TodayHydrationResult.Total(100))
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals("500 mL", state.hydrationTodayDisplay)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `loadTodayHydration Total(500) sets display to 500 mL and hydrationReadPermissionMissing false`() = viewModelTest {
+        coEvery { getTodayHydrationTotalUseCase.invoke() } returns TodayHydrationResult.Total(500)
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertFalse(state.hydrationReadPermissionMissing)
+            assertEquals("500 mL", state.hydrationTodayDisplay)
             cancelAndIgnoreRemainingEvents()
         }
     }
