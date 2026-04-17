@@ -12,6 +12,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
+import java.io.IOException
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -30,7 +31,7 @@ class GetTodayHydrationTotalUseCaseTest {
     }
 
     @Test
-    @DisplayName("returns sum of all volumeMl values for multiple readings")
+    @DisplayName("returns Total(sum) for multiple readings")
     fun returnsSumForMultipleReadings() = runTest {
         val readings = listOf(
             HydrationReading(volumeMl = 250),
@@ -39,23 +40,31 @@ class GetTodayHydrationTotalUseCaseTest {
         )
         coEvery { repository.getReadings(any(), any()) } returns readings
         val result = useCase.invoke()
-        assertEquals(1050, result)
+        assertEquals(TodayHydrationResult.Total(1050), result)
     }
 
     @Test
-    @DisplayName("returns 0 when repository returns empty list")
+    @DisplayName("returns Total(0) when repository returns empty list")
     fun returnsZeroForEmptyList() = runTest {
         coEvery { repository.getReadings(any(), any()) } returns emptyList()
         val result = useCase.invoke()
-        assertEquals(0, result)
+        assertEquals(TodayHydrationResult.Total(0), result)
     }
 
     @Test
-    @DisplayName("returns 0 when repository throws exception")
-    fun returnsZeroWhenRepositoryThrows() = runTest {
-        coEvery { repository.getReadings(any(), any()) } throws RuntimeException("HC error")
+    @DisplayName("returns PermissionDenied when repository throws SecurityException")
+    fun returnsPermissionDeniedOnSecurityException() = runTest {
+        coEvery { repository.getReadings(any(), any()) } throws SecurityException("HC denied")
         val result = useCase.invoke()
-        assertEquals(0, result)
+        assertEquals(TodayHydrationResult.PermissionDenied, result)
+    }
+
+    @Test
+    @DisplayName("returns Unavailable when repository throws IOException")
+    fun returnsUnavailableOnIOException() = runTest {
+        coEvery { repository.getReadings(any(), any()) } throws IOException("HC error")
+        val result = useCase.invoke()
+        assertEquals(TodayHydrationResult.Unavailable, result)
     }
 
     @Test
