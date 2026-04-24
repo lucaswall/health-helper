@@ -8,6 +8,7 @@ object HealthPermissions {
     const val READ_HYDRATION = "android.permission.health.READ_HYDRATION"
     const val WRITE_NUTRITION = "android.permission.health.WRITE_NUTRITION"
     const val READ_HEALTH_DATA_HISTORY = "android.permission.health.READ_HEALTH_DATA_HISTORY"
+    const val READ_HEALTH_DATA_IN_BACKGROUND = "android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND"
 
     /**
      * Full set the app needs to function. Used to check runtime grants on app open.
@@ -20,6 +21,7 @@ object HealthPermissions {
         READ_BLOOD_GLUCOSE,
         READ_HYDRATION,
         READ_HEALTH_DATA_HISTORY,
+        READ_HEALTH_DATA_IN_BACKGROUND,
     )
 }
 

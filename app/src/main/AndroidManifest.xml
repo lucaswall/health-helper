@@ -24,6 +24,10 @@
     <uses-permission android:name="android.permission.health.READ_BLOOD_GLUCOSE" />
     <uses-permission android:name="android.permission.health.READ_HYDRATION" />
     <uses-permission android:name="android.permission.health.READ_HEALTH_DATA_HISTORY" />
+    <!-- Required so the periodic SyncWorker can read HC records while the app is not foregrounded;
+         without it, background reads of types the app doesn't also write (e.g. HydrationRecord)
+         fail with SecurityException and sync only succeeds during a foreground "Sync Now". -->
+    <uses-permission android:name="android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND" />
 
     <application
         android:name=".HealthHelperApp"

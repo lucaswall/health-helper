@@ -63,6 +63,7 @@ private fun humanReadablePermissionLabel(permission: String): String = when (per
     "android.permission.health.READ_HYDRATION" -> "Read hydration"
     "android.permission.health.WRITE_NUTRITION" -> "Write nutrition"
     "android.permission.health.READ_HEALTH_DATA_HISTORY" -> "Read history > 30 days"
+    "android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND" -> "Read health data in background"
     else -> permission.substringAfterLast('.')
 }
 
