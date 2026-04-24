@@ -118,6 +118,7 @@ class PermissionNotifier(
         "android.permission.health.READ_HYDRATION" -> "read hydration"
         "android.permission.health.WRITE_NUTRITION" -> "write nutrition"
         "android.permission.health.READ_HEALTH_DATA_HISTORY" -> "read history > 30 days"
+        "android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND" -> "read health data in background"
         else -> permission.substringAfterLast('.').lowercase().replace('_', ' ')
     }
 
