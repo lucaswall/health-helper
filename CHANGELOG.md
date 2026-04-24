@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.6] - 2026-04-23
+
+### Fixed
+
+- Hydration now syncs in the background on its own schedule instead of only when you tap "Sync Now". The app will prompt for a new Health Connect "read data in background" permission on launch — grant it to enable automatic hydration sync
+- Tapping "Sync Now" no longer resets the 15-minute background sync timer, which previously starved the periodic sync for users who synced manually often
+
 ## [1.8.5] - 2026-04-17
 
 ### Fixed
@@ -191,7 +198,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Settings screen for API configuration and sync interval
 - Adaptive launcher icon with health cross design
 
-[Unreleased]: https://github.com/lucaswall/health-helper/compare/v1.8.5...HEAD
+[Unreleased]: https://github.com/lucaswall/health-helper/compare/v1.8.6...HEAD
+[1.8.6]: https://github.com/lucaswall/health-helper/compare/v1.8.5...v1.8.6
 [1.8.5]: https://github.com/lucaswall/health-helper/compare/v1.8.4...v1.8.5
 [1.8.4]: https://github.com/lucaswall/health-helper/compare/v1.8.3...v1.8.4
 [1.8.3]: https://github.com/lucaswall/health-helper/compare/v1.8.2...v1.8.3
