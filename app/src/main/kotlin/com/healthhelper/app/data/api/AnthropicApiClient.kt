@@ -10,6 +10,7 @@ import com.healthhelper.app.data.api.dto.AnthropicToolDefinition
 import com.healthhelper.app.domain.model.BloodPressureParseResult
 import com.healthhelper.app.domain.model.GlucoseParseResult
 import com.healthhelper.app.domain.model.GlucoseUnit
+import com.healthhelper.app.domain.model.ImageParseErrorKind
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.header
@@ -174,7 +175,7 @@ class AnthropicApiClient @Inject constructor(
                 } else {
                     Timber.e("parseBloodPressureImage HTTP %d: %s", status, errorBody)
                 }
-                return BloodPressureParseResult.Error(message)
+                return BloodPressureParseResult.Error(message, httpStatusErrorKind(status))
             }
 
             val messageResponse: AnthropicMessageResponse = response.body()
@@ -190,13 +191,13 @@ class AnthropicApiClient @Inject constructor(
             throw e
         } catch (@Suppress("SwallowedException") e: SecurityException) {
             Timber.e(e, "parseBloodPressureImage security exception")
-            BloodPressureParseResult.Error("Network access denied. Please check app permissions.")
+            BloodPressureParseResult.Error("Network access denied. Please check app permissions.", ImageParseErrorKind.NETWORK)
         } catch (e: SerializationException) {
             Timber.e(e, "parseBloodPressureImage serialization error")
-            BloodPressureParseResult.Error("Failed to parse response")
+            BloodPressureParseResult.Error("Failed to parse response", ImageParseErrorKind.SERVER)
         } catch (e: Exception) {
             Timber.e(e, "parseBloodPressureImage error")
-            BloodPressureParseResult.Error("Failed to analyze image")
+            BloodPressureParseResult.Error("Failed to analyze image", exceptionErrorKind(e))
         }
     }
 
@@ -301,7 +302,7 @@ class AnthropicApiClient @Inject constructor(
                 } else {
                     Timber.e("parseGlucoseImage HTTP %d: %s", status, errorBody)
                 }
-                return GlucoseParseResult.Error(message)
+                return GlucoseParseResult.Error(message, httpStatusErrorKind(status))
             }
 
             val messageResponse: AnthropicMessageResponse = response.body()
@@ -317,13 +318,13 @@ class AnthropicApiClient @Inject constructor(
             throw e
         } catch (@Suppress("SwallowedException") e: SecurityException) {
             Timber.e(e, "parseGlucoseImage security exception")
-            GlucoseParseResult.Error("Network access denied. Please check app permissions.")
+            GlucoseParseResult.Error("Network access denied. Please check app permissions.", ImageParseErrorKind.NETWORK)
         } catch (e: SerializationException) {
             Timber.e(e, "parseGlucoseImage serialization error")
-            GlucoseParseResult.Error("Failed to parse response")
+            GlucoseParseResult.Error("Failed to parse response", ImageParseErrorKind.SERVER)
         } catch (e: Exception) {
             Timber.e(e, "parseGlucoseImage error")
-            GlucoseParseResult.Error("Failed to analyze image")
+            GlucoseParseResult.Error("Failed to analyze image", exceptionErrorKind(e))
         }
     }
 
@@ -358,4 +359,17 @@ class AnthropicApiClient @Inject constructor(
 
         return GlucoseParseResult.Success(value = value, detectedUnit = detectedUnit)
     }
+}
+
+private fun httpStatusErrorKind(status: Int): ImageParseErrorKind = when (status) {
+    401, 403 -> ImageParseErrorKind.AUTH
+    429 -> ImageParseErrorKind.RATE_LIMITED
+    else -> ImageParseErrorKind.SERVER
+}
+
+private fun exceptionErrorKind(e: Exception): ImageParseErrorKind = when (e) {
+    is java.io.IOException,
+    is java.nio.channels.UnresolvedAddressException,
+    -> ImageParseErrorKind.NETWORK
+    else -> ImageParseErrorKind.UNKNOWN
 }

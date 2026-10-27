@@ -3,6 +3,7 @@ package com.healthhelper.app.data.api
 import com.healthhelper.app.domain.model.BloodPressureParseResult
 import com.healthhelper.app.domain.model.GlucoseParseResult
 import com.healthhelper.app.domain.model.GlucoseUnit
+import com.healthhelper.app.domain.model.ImageParseErrorKind
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -108,6 +109,7 @@ class AnthropicApiClientTest {
         val result = client.parseBloodPressureImage(testApiKey, testImageBytes)
 
         assertIs<BloodPressureParseResult.Error>(result)
+        assertEquals(ImageParseErrorKind.AUTH, result.kind)
     }
 
     @Test
@@ -119,6 +121,7 @@ class AnthropicApiClientTest {
         val result = client.parseBloodPressureImage(testApiKey, testImageBytes)
 
         assertIs<BloodPressureParseResult.Error>(result)
+        assertEquals(ImageParseErrorKind.RATE_LIMITED, result.kind)
     }
 
     @Test
@@ -130,6 +133,7 @@ class AnthropicApiClientTest {
         val result = client.parseBloodPressureImage(testApiKey, testImageBytes)
 
         assertIs<BloodPressureParseResult.Error>(result)
+        assertEquals(ImageParseErrorKind.NETWORK, result.kind)
     }
 
     @Test

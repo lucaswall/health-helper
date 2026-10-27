@@ -45,10 +45,9 @@ class GlucoseConfirmationViewModelTest {
     )
 
     private fun createSavedStateHandle(
-        value: Float = 5.6f,
-        unit: String = "mmol/L",
-        detectedUnit: String = "mmol/L",
-    ) = SavedStateHandle(mapOf("value" to value, "unit" to unit, "detectedUnit" to detectedUnit))
+        value: Double = 5.6,
+        unit: GlucoseUnit = GlucoseUnit.MMOL_L,
+    ) = SavedStateHandle(mapOf("value" to value.toString(), "unit" to unit.name))
 
     @BeforeEach
     fun setUp() {
@@ -64,18 +63,18 @@ class GlucoseConfirmationViewModelTest {
     }
 
     private fun createViewModel(
-        value: Float = 5.6f,
-        unit: String = "mmol/L",
-        detectedUnit: String = "mmol/L",
+        value: Double = 5.6,
+        unit: GlucoseUnit = GlucoseUnit.MMOL_L,
+        savedStateHandle: SavedStateHandle = createSavedStateHandle(value, unit),
     ) = GlucoseConfirmationViewModel(
-        createSavedStateHandle(value, unit, detectedUnit),
+        savedStateHandle,
         writeUseCase,
         inferDefaultsUseCase,
     )
 
     @Test
     fun `initial state populated from SavedStateHandle in mmol_L`() = runTest {
-        viewModel = createViewModel(5.6f, "mmol/L", "mmol/L")
+        viewModel = createViewModel(5.6, GlucoseUnit.MMOL_L)
         advanceTimeBy(1_000)
 
         viewModel.uiState.test {
@@ -89,7 +88,7 @@ class GlucoseConfirmationViewModelTest {
 
     @Test
     fun `initial state with mg_dL input uses value directly`() = runTest {
-        viewModel = createViewModel(101f, "mg/dL", "mg/dL")
+        viewModel = createViewModel(101.0, GlucoseUnit.MG_DL)
         advanceTimeBy(1_000)
 
         viewModel.uiState.test {
@@ -103,7 +102,7 @@ class GlucoseConfirmationViewModelTest {
 
     @Test
     fun `initial state displays correct mmol_L for 5_6 mmol_L input`() = runTest {
-        viewModel = createViewModel(5.6f, "mmol/L", "mmol/L")
+        viewModel = createViewModel(5.6, GlucoseUnit.MMOL_L)
         advanceTimeBy(1_000)
 
         viewModel.uiState.test {
@@ -276,7 +275,7 @@ class GlucoseConfirmationViewModelTest {
             healthConnectSuccess = true,
             foodScannerResult = Result.success(Unit),
         )
-        viewModel = createViewModel(5.6f, "mmol/L", "mmol/L")
+        viewModel = createViewModel(5.6, GlucoseUnit.MMOL_L)
         advanceTimeBy(1_000)
 
         viewModel.navigateHome.test {
@@ -315,20 +314,19 @@ class GlucoseConfirmationViewModelTest {
             healthConnectSuccess = false,
             foodScannerResult = Result.success(Unit),
         )
-        viewModel = createViewModel(5.6f, "mmol/L", "mmol/L")
+        viewModel = createViewModel(5.6, GlucoseUnit.MMOL_L)
         advanceTimeBy(1_000)
 
         viewModel.navigateHome.test {
             viewModel.save()
             advanceUntilIdle()
             val msg = awaitItem()
-            assertNotNull(msg)
+            assertEquals("101 mg/dL saved to food-scanner, but could not write to Health Connect", msg)
             cancelAndIgnoreRemainingEvents()
         }
 
         viewModel.uiState.test {
             val state = awaitItem()
-            assertNotNull(state.warning)
             assertNull(state.error)
             assertFalse(state.isSaving)
             cancelAndIgnoreRemainingEvents()
@@ -341,20 +339,19 @@ class GlucoseConfirmationViewModelTest {
             healthConnectSuccess = true,
             foodScannerResult = Result.failure(RuntimeException("sync failed")),
         )
-        viewModel = createViewModel(5.6f, "mmol/L", "mmol/L")
+        viewModel = createViewModel(5.6, GlucoseUnit.MMOL_L)
         advanceTimeBy(1_000)
 
         viewModel.navigateHome.test {
             viewModel.save()
             advanceUntilIdle()
             val msg = awaitItem()
-            assertNotNull(msg)
+            assertEquals("101 mg/dL saved to Health Connect, but could not sync to food-scanner", msg)
             cancelAndIgnoreRemainingEvents()
         }
 
         viewModel.uiState.test {
             val state = awaitItem()
-            assertNotNull(state.warning)
             assertNull(state.error)
             assertFalse(state.isSaving)
             cancelAndIgnoreRemainingEvents()
@@ -446,7 +443,7 @@ class GlucoseConfirmationViewModelTest {
             healthConnectSuccess = true,
             foodScannerResult = Result.success(Unit),
         )
-        viewModel = createViewModel(5.6f, "mmol/L", "mmol/L")
+        viewModel = createViewModel(5.6, GlucoseUnit.MMOL_L)
         advanceTimeBy(1_000)
 
         viewModel.save()
@@ -549,6 +546,149 @@ class GlucoseConfirmationViewModelTest {
             assertEquals(RelationToMeal.UNKNOWN, state.relationToMeal)
             assertEquals(GlucoseMealType.UNKNOWN, state.glucoseMealType)
             assertEquals(SpecimenSource.UNKNOWN, state.specimenSource)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `mmol_L reading shows original mmol_L value as conversion source`() = runTest {
+        viewModel = createViewModel(5.6, GlucoseUnit.MMOL_L)
+        advanceTimeBy(1_000)
+
+        assertEquals("5.6", viewModel.uiState.value.originalMmolL)
+    }
+
+    @Test
+    fun `mg_dL reading has no conversion note`() = runTest {
+        viewModel = createViewModel(101.0, GlucoseUnit.MG_DL)
+        advanceTimeBy(1_000)
+
+        assertEquals("", viewModel.uiState.value.originalMmolL)
+    }
+
+    @Test
+    fun `out-of-range initial value shows validation error immediately`() = runTest {
+        viewModel = createViewModel(1000.0, GlucoseUnit.MG_DL)
+        advanceTimeBy(1_000)
+
+        val state = viewModel.uiState.value
+        assertFalse(state.isSaveEnabled)
+        assertEquals("Value must be between 18 and 720 mg/dL", state.validationError)
+    }
+
+    @Test
+    fun `updateValue with NaN does not crash and disables save`() = runTest {
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.updateValue("NaN")
+
+        val state = viewModel.uiState.value
+        assertFalse(state.isSaveEnabled)
+        assertNotNull(state.validationError)
+    }
+
+    @Test
+    fun `updateValue strips non-numeric characters`() = runTest {
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.updateValue("1e2d")
+
+        assertEquals("12", viewModel.uiState.value.valueMgDl)
+    }
+
+    @Test
+    fun `save message uses rounded saved value not raw input`() = runTest {
+        coEvery { writeUseCase.invoke(any()) } returns HealthDataWriteResult(
+            healthConnectSuccess = true,
+            foodScannerResult = Result.success(Unit),
+        )
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+        viewModel.updateValue("100.6")
+
+        viewModel.navigateHome.test {
+            viewModel.save()
+            advanceUntilIdle()
+            assertEquals("101 mg/dL saved", awaitItem())
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `switching relation to FASTING resets meal type and saves UNKNOWN meal type`() = runTest {
+        coEvery { inferDefaultsUseCase.invoke(any()) } returns GlucoseDefaults(
+            relationToMeal = RelationToMeal.AFTER_MEAL,
+            glucoseMealType = GlucoseMealType.LUNCH,
+            specimenSource = SpecimenSource.CAPILLARY_BLOOD,
+        )
+        coEvery { writeUseCase.invoke(any()) } returns HealthDataWriteResult(
+            healthConnectSuccess = true,
+            foodScannerResult = Result.success(Unit),
+        )
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.updateRelationToMeal(RelationToMeal.FASTING)
+        assertEquals(GlucoseMealType.UNKNOWN, viewModel.uiState.value.glucoseMealType)
+
+        viewModel.save()
+        advanceUntilIdle()
+
+        coVerify {
+            writeUseCase.invoke(
+                match { reading ->
+                    reading.relationToMeal == RelationToMeal.FASTING &&
+                        reading.glucoseMealType == GlucoseMealType.UNKNOWN
+                },
+            )
+        }
+    }
+
+    @Test
+    fun `edits survive process death via SavedStateHandle`() = runTest {
+        coEvery { inferDefaultsUseCase.invoke(any()) } returns unknownDefaults
+        val handle = createSavedStateHandle(5.6, GlucoseUnit.MMOL_L)
+        viewModel = createViewModel(savedStateHandle = handle)
+        advanceTimeBy(1_000)
+
+        viewModel.updateValue("130")
+        viewModel.updateRelationToMeal(RelationToMeal.BEFORE_MEAL)
+        viewModel.updateGlucoseMealType(GlucoseMealType.DINNER)
+        viewModel.updateSpecimenSource(SpecimenSource.INTERSTITIAL_FLUID)
+
+        // Recreate with the same handle (simulates restore after process death)
+        coEvery { inferDefaultsUseCase.invoke(any()) } returns GlucoseDefaults(
+            relationToMeal = RelationToMeal.FASTING,
+            glucoseMealType = GlucoseMealType.UNKNOWN,
+            specimenSource = SpecimenSource.CAPILLARY_BLOOD,
+        )
+        val restored = createViewModel(savedStateHandle = handle)
+        advanceTimeBy(1_000)
+
+        val state = restored.uiState.value
+        assertEquals("130", state.valueMgDl)
+        assertEquals(RelationToMeal.BEFORE_MEAL, state.relationToMeal)
+        assertEquals(GlucoseMealType.DINNER, state.glucoseMealType)
+        assertEquals(SpecimenSource.INTERSTITIAL_FLUID, state.specimenSource)
+        assertTrue(state.mealTypeVisible)
+    }
+
+    @Test
+    fun `navigateHome event is buffered until a collector subscribes`() = runTest {
+        coEvery { writeUseCase.invoke(any()) } returns HealthDataWriteResult(
+            healthConnectSuccess = true,
+            foodScannerResult = Result.success(Unit),
+        )
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.save()
+        advanceUntilIdle()
+
+        viewModel.navigateHome.test {
+            assertEquals("101 mg/dL saved", awaitItem())
             cancelAndIgnoreRemainingEvents()
         }
     }

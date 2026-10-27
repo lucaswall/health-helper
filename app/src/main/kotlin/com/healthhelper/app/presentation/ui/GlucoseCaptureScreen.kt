@@ -29,10 +29,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.healthhelper.app.domain.model.GlucoseUnit
+import com.healthhelper.app.presentation.image.ImageTooLargeException
+import com.healthhelper.app.presentation.image.MAX_IMAGE_BYTES
+import com.healthhelper.app.presentation.image.readBytesLimited
 import com.healthhelper.app.presentation.viewmodel.GlucoseCaptureViewModel
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -42,12 +49,10 @@ import kotlinx.coroutines.withContext
 import timber.log.Timber
 import java.io.File
 
-private const val MAX_IMAGE_BYTES = 20 * 1024 * 1024 // 20MB
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GlucoseCaptureScreen(
-    onNavigateToConfirmation: (Double, String, String) -> Unit,
+    onNavigateToConfirmation: (Double, GlucoseUnit) -> Unit,
     onNavigateBack: () -> Unit,
     onNavigateBackWithError: (String) -> Unit = {},
     sharedImagePath: String? = null,
@@ -58,10 +63,12 @@ fun GlucoseCaptureScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var cameraLaunched by rememberSaveable { mutableStateOf(false) }
+    // One-shot guard: the nav arg survives rotation/back-stack restore, but the file is deleted after the first read.
+    var sharedImageConsumed by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        viewModel.navigateToConfirmation.collect { (value, unit, detectedUnit) ->
-            onNavigateToConfirmation(value, unit, detectedUnit)
+        viewModel.navigateToConfirmation.collect { (value, unit) ->
+            onNavigateToConfirmation(value, unit)
         }
     }
 
@@ -101,7 +108,7 @@ fun GlucoseCaptureScreen(
                 }
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: IllegalArgumentException) {
+            } catch (e: ImageTooLargeException) {
                 Timber.e(e, "Image too large")
                 viewModel.onCaptureError("Image is too large. Please choose a smaller photo.")
             } catch (e: Exception) {
@@ -116,7 +123,8 @@ fun GlucoseCaptureScreen(
 
     // Handle shared image — go straight to processing
     LaunchedEffect(sharedImagePath) {
-        if (sharedImagePath != null) {
+        if (sharedImagePath != null && !sharedImageConsumed) {
+            sharedImageConsumed = true
             try {
                 val bytes = withContext(Dispatchers.IO) {
                     val file = File(sharedImagePath)
@@ -125,14 +133,14 @@ fun GlucoseCaptureScreen(
                 viewModel.onPhotoCaptured(bytes)
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: IllegalArgumentException) {
+            } catch (e: ImageTooLargeException) {
                 Timber.e(e, "Shared image too large")
                 viewModel.onCaptureError("Image is too large. Please choose a smaller photo.")
             } catch (e: Exception) {
                 Timber.e(e, "Failed to read shared image")
                 viewModel.onCaptureError("Could not read shared image.")
             } finally {
-                withContext(Dispatchers.IO) { File(sharedImagePath).delete() }
+                withContext(NonCancellable + Dispatchers.IO) { File(sharedImagePath).delete() }
             }
         }
     }
@@ -154,7 +162,7 @@ fun GlucoseCaptureScreen(
                 takePictureLauncher.launch(uri)
             } catch (e: Exception) {
                 Timber.e(e, "Failed to launch camera")
-                withContext(Dispatchers.IO) { viewModel.tempFilePath.value?.let { File(it).delete() } }
+                withContext(NonCancellable + Dispatchers.IO) { viewModel.tempFilePath.value?.let { File(it).delete() } }
                 viewModel.clearTempFilePath()
                 viewModel.onCaptureError("Could not open camera.")
             }
@@ -184,6 +192,7 @@ fun GlucoseCaptureScreen(
         ) {
             if (uiState.isProcessing) {
                 Column(
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
                 ) {
@@ -197,20 +206,4 @@ fun GlucoseCaptureScreen(
             }
         }
     }
-}
-
-private fun readBytesLimited(inputStream: java.io.InputStream, maxSize: Int): ByteArray {
-    val buffer = ByteArray(8192)
-    var totalRead = 0
-    val output = java.io.ByteArrayOutputStream()
-    while (true) {
-        val bytesRead = inputStream.read(buffer)
-        if (bytesRead == -1) break
-        totalRead += bytesRead
-        if (totalRead > maxSize) {
-            throw IllegalArgumentException("Image exceeds maximum size of ${maxSize / (1024 * 1024)}MB")
-        }
-        output.write(buffer, 0, bytesRead)
-    }
-    return output.toByteArray()
 }

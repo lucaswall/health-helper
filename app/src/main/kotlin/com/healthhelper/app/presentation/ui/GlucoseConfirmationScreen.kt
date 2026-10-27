@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -35,6 +36,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -79,8 +83,9 @@ fun GlucoseConfirmationScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(16.dp)
-                .verticalScroll(rememberScrollState()),
+                .imePadding()
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
@@ -88,9 +93,9 @@ fun GlucoseConfirmationScreen(
                 style = MaterialTheme.typography.headlineMedium,
             )
 
-            if (uiState.detectedUnit == GlucoseUnit.MG_DL && uiState.originalValue.isNotEmpty()) {
+            if (uiState.detectedUnit == GlucoseUnit.MMOL_L && uiState.originalMmolL.isNotEmpty()) {
                 Text(
-                    text = "Converted from ${uiState.originalValue} mg/dL",
+                    text = "Converted from ${uiState.originalMmolL} mmol/L",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -103,8 +108,21 @@ fun GlucoseConfirmationScreen(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
-                supportingText = if (uiState.displayMmolL.isNotEmpty()) {
-                    { Text("${uiState.displayMmolL} mmol/L") }
+                isError = uiState.validationError != null,
+                supportingText = if (uiState.displayMmolL.isNotEmpty() || uiState.validationError != null) {
+                    {
+                        Column {
+                            if (uiState.displayMmolL.isNotEmpty()) {
+                                Text("${uiState.displayMmolL} mmol/L")
+                            }
+                            uiState.validationError?.let { validationError ->
+                                Text(
+                                    text = validationError,
+                                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                                )
+                            }
+                        }
+                    }
                 } else {
                     null
                 },
@@ -127,27 +145,12 @@ fun GlucoseConfirmationScreen(
                 onSelected = viewModel::updateSpecimenSource,
             )
 
-            uiState.validationError?.let { validationError ->
-                Text(
-                    text = validationError,
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-
-            uiState.warning?.let { warning ->
-                Text(
-                    text = warning,
-                    color = MaterialTheme.colorScheme.tertiary,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-
             uiState.error?.let { error ->
                 Text(
                     text = error,
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
                 )
             }
 
@@ -161,7 +164,7 @@ fun GlucoseConfirmationScreen(
                     onClick = onCancel,
                     modifier = Modifier.weight(1f),
                 ) {
-                    Text("Retake")
+                    Text("Cancel")
                 }
                 Button(
                     onClick = viewModel::save,
