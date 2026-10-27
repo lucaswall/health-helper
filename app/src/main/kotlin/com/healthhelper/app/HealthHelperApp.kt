@@ -36,9 +36,6 @@ class HealthHelperApp : Application(), Configuration.Provider {
                 minBreadcrumbLevel = SentryLevel.INFO,
             ),
         )
-
-        Sentry.configureScope { scope ->
-            scope.setTag("environment", if (BuildConfig.DEBUG) "debug" else "release")
-        }
+        // Sentry environment is set per build type via the io.sentry.environment manifest meta-data.
     }
 }

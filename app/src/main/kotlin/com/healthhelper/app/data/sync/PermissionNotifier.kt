@@ -11,16 +11,18 @@ import androidx.core.app.NotificationManagerCompat
 import com.healthhelper.app.MainActivity
 import com.healthhelper.app.R
 import com.healthhelper.app.domain.repository.SettingsRepository
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.first
 import timber.log.Timber
+import javax.inject.Inject
 
 /**
  * Posts a notification when background sync detects missing Health Connect permissions.
  * Throttles so the user isn't spammed every sync tick: only posts if the missing set
  * changed OR >24h since the last post.
  */
-class PermissionNotifier(
-    private val context: Context,
+class PermissionNotifier @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val settingsRepository: SettingsRepository,
 ) {
     suspend fun notifyIfNeeded(missingPermissions: Set<String>) {
@@ -32,10 +34,7 @@ class PermissionNotifier(
         val previousSet = settingsRepository.missingPermissionsAtLastNotificationFlow.first()
         val previousTs = settingsRepository.lastPermissionNotificationTimestampFlow.first()
         val now = System.currentTimeMillis()
-        val setChanged = previousSet != missingPermissions
-        val stale = now - previousTs > THROTTLE_WINDOW_MS
-
-        if (!setChanged && !stale) {
+        if (!shouldPost(missingPermissions, previousSet, previousTs, now)) {
             Timber.d("PermissionNotifier: suppressed (set unchanged, last=%dms ago)", now - previousTs)
             return
         }
@@ -91,13 +90,21 @@ class PermissionNotifier(
         )
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_stat_health)
             .setContentTitle("Health Connect permission needed")
             .setContentText("Sync paused: $missingSummary")
             .setStyle(NotificationCompat.BigTextStyle().bigText("Sync paused until you grant: $missingSummary. Tap to fix."))
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(
+                NotificationCompat.Builder(context, CHANNEL_ID)
+                    .setSmallIcon(R.drawable.ic_stat_health)
+                    .setContentTitle("Health Connect permission needed")
+                    .setContentText("Sync paused. Tap to fix.")
+                    .build(),
+            )
             .build()
 
         return try {
@@ -126,6 +133,22 @@ class PermissionNotifier(
         const val CHANNEL_ID = "permissions_required"
         const val NOTIFICATION_ID = 1001
         private const val PENDING_INTENT_REQUEST_CODE = 100
-        private const val THROTTLE_WINDOW_MS = 24L * 60 * 60 * 1000
+        internal const val THROTTLE_WINDOW_MS = 24L * 60 * 60 * 1000
+
+        /**
+         * Throttle decision: post only when the missing set changed since the last posted
+         * notification, or the last post is older than [THROTTLE_WINDOW_MS].
+         */
+        internal fun shouldPost(
+            missing: Set<String>,
+            previousSet: Set<String>,
+            previousTimestampMs: Long,
+            nowMs: Long,
+        ): Boolean {
+            if (missing.isEmpty()) return false
+            val setChanged = previousSet != missing
+            val stale = nowMs - previousTimestampMs > THROTTLE_WINDOW_MS
+            return setChanged || stale
+        }
     }
 }

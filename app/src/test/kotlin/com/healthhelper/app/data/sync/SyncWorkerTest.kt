@@ -5,12 +5,12 @@ import androidx.work.ListenableWorker
 import androidx.work.WorkerParameters
 import com.healthhelper.app.domain.model.HealthReadingsSyncReport
 import com.healthhelper.app.domain.model.SyncResult
-import com.healthhelper.app.domain.repository.SettingsRepository
 import com.healthhelper.app.domain.usecase.SyncHealthReadingsUseCase
 import com.healthhelper.app.domain.usecase.SyncNutritionUseCase
 import io.mockk.coEvery
-import io.mockk.every
-import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runCurrent
 import io.mockk.coVerify
 import io.mockk.mockk
 import kotlin.coroutines.cancellation.CancellationException
@@ -26,13 +26,18 @@ class SyncWorkerTest {
     private val workerParams = mockk<WorkerParameters>(relaxed = true)
     private val syncNutritionUseCase = mockk<SyncNutritionUseCase>()
     private val syncHealthReadingsUseCase = mockk<SyncHealthReadingsUseCase>()
-    private val settingsRepository = mockk<SettingsRepository>(relaxed = true).also {
-        every { it.missingPermissionsAtLastNotificationFlow } returns flowOf(emptySet())
-        every { it.lastPermissionNotificationTimestampFlow } returns flowOf(0L)
-    }
+    private val permissionNotifier = mockk<PermissionNotifier>(relaxed = true)
+    private val syncCoordinator = SyncCoordinator()
 
     private fun createWorker(): SyncWorker =
-        SyncWorker(context, workerParams, syncNutritionUseCase, syncHealthReadingsUseCase, settingsRepository)
+        SyncWorker(
+            context,
+            workerParams,
+            syncNutritionUseCase,
+            syncHealthReadingsUseCase,
+            permissionNotifier,
+            syncCoordinator,
+        )
 
     @Test
     @DisplayName("doWork returns success when sync succeeds")
@@ -119,5 +124,68 @@ class SyncWorkerTest {
         assertFailsWith<CancellationException> {
             createWorker().doWork()
         }
+    }
+
+    @Test
+    @DisplayName("notifyIfNeeded receives the missing read permissions from the health report")
+    fun notifierReceivesMissingPermissions() = runTest {
+        val missing = setOf("android.permission.health.READ_HYDRATION")
+        coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Success(1, 1)
+        coEvery { syncHealthReadingsUseCase.invoke() } returns
+            HealthReadingsSyncReport(missingReadPermissions = missing)
+
+        createWorker().doWork()
+
+        coVerify(exactly = 1) { permissionNotifier.notifyIfNeeded(missing) }
+    }
+
+    @Test
+    @DisplayName("notifyIfNeeded is called with empty set when all permissions are granted")
+    fun notifierCalledWithEmptySetWhenGranted() = runTest {
+        coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Success(1, 1)
+        coEvery { syncHealthReadingsUseCase.invoke() } returns HealthReadingsSyncReport()
+
+        createWorker().doWork()
+
+        coVerify(exactly = 1) { permissionNotifier.notifyIfNeeded(emptySet()) }
+    }
+
+    @Test
+    @DisplayName("failed health readings sync does not touch the permission notification")
+    fun failedHealthSyncSkipsNotifier() = runTest {
+        coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Success(1, 1)
+        coEvery { syncHealthReadingsUseCase.invoke() } throws RuntimeException("boom")
+
+        createWorker().doWork()
+
+        coVerify(exactly = 0) { permissionNotifier.notifyIfNeeded(any()) }
+    }
+
+    @Test
+    @DisplayName("notifier failure does not affect worker result")
+    fun notifierFailureIsNonFatal() = runTest {
+        coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Success(1, 1)
+        coEvery { syncHealthReadingsUseCase.invoke() } returns HealthReadingsSyncReport()
+        coEvery { permissionNotifier.notifyIfNeeded(any()) } throws IllegalStateException("nm")
+
+        val result = createWorker().doWork()
+
+        assertEquals(ListenableWorker.Result.success(), result)
+    }
+
+    @Test
+    @DisplayName("doWork skips sync and returns success when another sync is already running")
+    fun skipsWhenAnotherSyncRunning() = runTest {
+        val release = CompletableDeferred<Unit>()
+        val holder = launch { syncCoordinator.runIfIdle { release.await() } }
+        runCurrent()
+
+        val result = createWorker().doWork()
+
+        assertEquals(ListenableWorker.Result.success(), result)
+        coVerify(exactly = 0) { syncNutritionUseCase.invoke(any()) }
+        coVerify(exactly = 0) { syncHealthReadingsUseCase.invoke() }
+        release.complete(Unit)
+        holder.join()
     }
 }

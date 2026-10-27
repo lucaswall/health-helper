@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.BloodPressureRecord
 import androidx.health.connect.client.records.NutritionRecord
+import com.healthhelper.app.data.sync.SyncCoordinator
 import com.healthhelper.app.data.sync.SyncScheduler
 import com.healthhelper.app.domain.model.BloodPressureReading
 import com.healthhelper.app.domain.model.MealType
@@ -108,7 +109,7 @@ class SyncViewModelTest {
     private val healthConnectClient: HealthConnectClient? = mockk(relaxed = true)
 
     private fun createViewModel(hcClient: HealthConnectClient? = healthConnectClient): SyncViewModel =
-        SyncViewModel(syncNutritionUseCase, syncHealthReadingsUseCase, settingsRepository, syncScheduler, getLastBpReadingUseCase, getLastGlucoseReadingUseCase, getTodayHydrationTotalUseCase, permissionChecker, hcClient)
+        SyncViewModel(syncNutritionUseCase, syncHealthReadingsUseCase, settingsRepository, syncScheduler, getLastBpReadingUseCase, getLastGlucoseReadingUseCase, getTodayHydrationTotalUseCase, permissionChecker, hcClient, SyncCoordinator())
 
     /**
      * Wraps [runTest] to cancel viewModelScope after the test body,
@@ -155,6 +156,42 @@ class SyncViewModelTest {
             assertFalse(state.isSyncing)
             cancelAndIgnoreRemainingEvents()
         }
+    }
+
+    @Test
+    fun `triggerSync skips and reports when background sync already running`() = viewModelTest {
+        coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Success(3, 1)
+        val coordinator = SyncCoordinator()
+        assertTrue(coordinator.tryAcquire())
+
+        viewModel = SyncViewModel(syncNutritionUseCase, syncHealthReadingsUseCase, settingsRepository, syncScheduler, getLastBpReadingUseCase, getLastGlucoseReadingUseCase, getTodayHydrationTotalUseCase, permissionChecker, healthConnectClient, coordinator)
+        advanceTimeBy(1_000)
+
+        viewModel.triggerSync()
+        advanceTimeBy(1_000)
+
+        coVerify(exactly = 0) { syncNutritionUseCase.invoke(any()) }
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertFalse(state.isSyncing)
+            assertEquals("Sync already running", state.lastSyncResult)
+            cancelAndIgnoreRemainingEvents()
+        }
+        coordinator.release()
+    }
+
+    @Test
+    fun `triggerSync releases sync lock when finished`() = viewModelTest {
+        coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Success(3, 1)
+        val coordinator = SyncCoordinator()
+
+        viewModel = SyncViewModel(syncNutritionUseCase, syncHealthReadingsUseCase, settingsRepository, syncScheduler, getLastBpReadingUseCase, getLastGlucoseReadingUseCase, getTodayHydrationTotalUseCase, permissionChecker, healthConnectClient, coordinator)
+        advanceTimeBy(1_000)
+
+        viewModel.triggerSync()
+        advanceTimeBy(1_000)
+
+        assertFalse(coordinator.isSyncing)
     }
 
     @Test

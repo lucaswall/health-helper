@@ -76,6 +76,13 @@
     public static *** d(...);
     public static *** i(...);
 }
+# Kotlin call sites (Timber.d(...)) compile to instance calls on the companion Timber$Forest
+# in Timber 5.x, so the static rule above alone never matches them.
+-assumenosideeffects class timber.log.Timber$Forest {
+    public *** v(...);
+    public *** d(...);
+    public *** i(...);
+}
 
 # ============================================================
 # Android & Kotlin standard

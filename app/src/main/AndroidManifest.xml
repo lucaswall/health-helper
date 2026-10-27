@@ -78,11 +78,23 @@
             </intent-filter>
         </activity-alias>
 
-        <!-- Health Connect privacy policy intent -->
+        <!-- Health Connect privacy policy / permissions rationale (Android 13 and lower).
+             Without an activity handling this action, the Health Connect APK's permission
+             request finishes immediately and grants nothing. -->
+        <activity
+            android:name=".PrivacyPolicyActivity"
+            android:exported="true"
+            android:label="Privacy policy">
+            <intent-filter>
+                <action android:name="androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE" />
+            </intent-filter>
+        </activity>
+
+        <!-- Health Connect privacy policy intent (Android 14+) -->
         <activity-alias
             android:name="ViewPermissionUsageActivity"
             android:exported="true"
-            android:targetActivity=".MainActivity"
+            android:targetActivity=".PrivacyPolicyActivity"
             android:permission="android.permission.START_VIEW_PERMISSION_USAGE">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW_PERMISSION_USAGE" />
@@ -92,7 +104,8 @@
 
         <!-- Sentry crash reporting -->
         <meta-data android:name="io.sentry.dsn" android:value="https://2ce7da0da96c55aa5a06a5be24b837df@o4510966037086208.ingest.us.sentry.io/4510966055108608" />
-        <meta-data android:name="io.sentry.traces-sample-rate" android:value="1.0" />
+        <meta-data android:name="io.sentry.traces-sample-rate" android:value="0.1" />
+        <meta-data android:name="io.sentry.environment" android:value="${sentryEnvironment}" />
         <meta-data android:name="io.sentry.anr.enable" android:value="true" />
         <meta-data android:name="io.sentry.session-tracking.enable" android:value="true" />
 
@@ -107,12 +120,18 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
-        <!-- Remove default WorkManager initializer -->
+        <!-- Remove only the default WorkManager initializer (HealthHelperApp provides a Hilt-aware
+             Configuration). Keep the provider so other androidx.startup initializers
+             (ProcessLifecycleOwner, ProfileInstaller, EmojiCompat) still run. -->
         <provider
             android:name="androidx.startup.InitializationProvider"
             android:authorities="${applicationId}.androidx-startup"
             android:exported="false"
-            tools:node="remove">
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
         </provider>
 
     </application>
