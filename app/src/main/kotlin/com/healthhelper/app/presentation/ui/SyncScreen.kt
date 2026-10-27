@@ -97,6 +97,16 @@ private fun openHealthConnectSettings(context: android.content.Context) {
     }
 }
 
+/**
+ * Whether the HC permission sheet should be auto-launched for [missing]. Only permissions that
+ * haven't been auto-requested yet trigger it: after a partial grant/denial the remaining set is a
+ * subset of what the user just saw, and re-launching the sheet for it would pester them.
+ */
+internal fun shouldAutoRequestHcPermissions(
+    missing: Set<String>,
+    alreadyAutoRequested: Set<String>,
+): Boolean = missing.isNotEmpty() && !alreadyAutoRequested.containsAll(missing)
+
 @Composable
 private fun SectionTitle(text: String) {
     Text(
@@ -203,8 +213,8 @@ fun SyncScreen(
         }
     }
 
-    // Auto-launch the permission sheet the first time we see a given missing set.
-    // If the user returns with the same missing set, we stop auto-prompting to avoid
+    // Auto-launch the permission sheet the first time a permission shows up as missing.
+    // If the user returns with the same (or a smaller) missing set, we stop auto-prompting to avoid
     // pestering them — the banner still offers a manual Grant button and HC-settings fallback.
     // The notification permission is requested only when no HC sheet is pending, because
     // Android allows a single permission request at a time.
@@ -216,8 +226,8 @@ fun SyncScreen(
         if (uiState.healthConnectAvailable) {
             if (!uiState.permissionsChecked) return@LaunchedEffect
             val missing = uiState.missingHealthPermissions
-            if (missing.isNotEmpty() && autoRequestedFor != missing) {
-                autoRequestedFor = missing
+            if (pendingHcRequest == null && shouldAutoRequestHcPermissions(missing, autoRequestedFor)) {
+                autoRequestedFor = autoRequestedFor + missing
                 launchHcPermissionRequest(missing)
                 return@LaunchedEffect
             } else if (missing.isEmpty()) {
