@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.healthhelper.app.domain.model.MealType
 import com.healthhelper.app.domain.model.SyncedMealSummary
+import com.healthhelper.app.domain.repository.SecureStorageUnavailableException
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
@@ -334,21 +335,150 @@ class DataStoreSettingsRepositoryTest {
     }
 
     @Test
-    @DisplayName("setApiKey is no-op when encryptedPrefs is null")
-    fun setApiKeyIsNoOpWhenEncryptedPrefsNull() = testScope.runTest {
+    @DisplayName("setApiKey throws SecureStorageUnavailableException when encryptedPrefs is null")
+    fun setApiKeyThrowsWhenEncryptedPrefsNull() = testScope.runTest {
         val repoNullPrefs = DataStoreSettingsRepository(dataStore, null)
-        // Should not throw
-        repoNullPrefs.setApiKey("should-be-ignored")
+        assertFailsWith<SecureStorageUnavailableException> {
+            repoNullPrefs.setApiKey("cannot-be-stored")
+        }
         assertEquals("", repoNullPrefs.apiKeyFlow.first())
     }
 
     @Test
-    @DisplayName("setAnthropicApiKey is no-op when encryptedPrefs is null")
-    fun setAnthropicApiKeyIsNoOpWhenEncryptedPrefsNull() = testScope.runTest {
+    @DisplayName("setAnthropicApiKey throws SecureStorageUnavailableException when encryptedPrefs is null")
+    fun setAnthropicApiKeyThrowsWhenEncryptedPrefsNull() = testScope.runTest {
         val repoNullPrefs = DataStoreSettingsRepository(dataStore, null)
-        // Should not throw
-        repoNullPrefs.setAnthropicApiKey("should-be-ignored")
+        assertFailsWith<SecureStorageUnavailableException> {
+            repoNullPrefs.setAnthropicApiKey("cannot-be-stored")
+        }
         assertEquals("", repoNullPrefs.anthropicApiKeyFlow.first())
+    }
+
+    @Test
+    @DisplayName("setting an empty key when encryptedPrefs is null is a no-op, not a failure")
+    fun setEmptyKeyIsNoOpWhenEncryptedPrefsNull() = testScope.runTest {
+        val repoNullPrefs = DataStoreSettingsRepository(dataStore, null)
+        repoNullPrefs.setApiKey("")
+        repoNullPrefs.setAnthropicApiKey("")
+        assertEquals("", repoNullPrefs.apiKeyFlow.first())
+    }
+
+    @Test
+    @DisplayName("setApiKey throws when encrypted prefs commit returns false")
+    fun setApiKeyThrowsWhenCommitFails() = testScope.runTest {
+        every { encryptedEditor.commit() } returns false
+        assertFailsWith<SecureStorageUnavailableException> {
+            repository.setApiKey("fsk_abc123")
+        }
+    }
+
+    @Test
+    @DisplayName("setAnthropicApiKey throws when encrypted prefs commit returns false")
+    fun setAnthropicApiKeyThrowsWhenCommitFails() = testScope.runTest {
+        every { encryptedEditor.commit() } returns false
+        assertFailsWith<SecureStorageUnavailableException> {
+            repository.setAnthropicApiKey("sk-ant-abc")
+        }
+    }
+
+    // --- isConfigured validation (settings-3 / security-privacy-11) ---
+
+    @Test
+    @DisplayName("isConfigured returns false when base URL is not https")
+    fun notConfiguredWithHttpBaseUrl() = testScope.runTest {
+        repository.setApiKey("fsk_abc123")
+        repository.setBaseUrl("http://food.example.com")
+        assertFalse(repository.isConfigured())
+    }
+
+    @Test
+    @DisplayName("isConfigured returns false when API key is blank")
+    fun notConfiguredWithBlankApiKey() = testScope.runTest {
+        repository.setApiKey("   ")
+        repository.setBaseUrl("https://food.example.com")
+        assertFalse(repository.isConfigured())
+    }
+
+    // --- sync state reset on server change (sync-pipeline-6) ---
+
+    private suspend fun seedSyncState() {
+        repository.setLastSyncedDate("2026-10-01")
+        repository.setETag(java.time.LocalDate.now().toString(), "etag-1")
+        repository.setLastGlucoseSyncTimestamp(111L)
+        repository.setLastBpSyncTimestamp(222L)
+        repository.setLastHydrationSyncTimestamp(333L)
+        repository.setGlucoseSyncCaughtUp(true)
+        repository.setHydrationSyncCount(5)
+        repository.addDirectPushedGlucoseTimestamp(444L)
+        repository.addDirectPushedBpTimestamp(555L)
+    }
+
+    @Test
+    @DisplayName("setBaseUrl to a different server resets sync state")
+    fun setBaseUrlResetsSyncStateOnServerChange() = testScope.runTest {
+        repository.setBaseUrl("https://old.example.com")
+        seedSyncState()
+        assertEquals("etag-1", repository.getETag(java.time.LocalDate.now().toString()))
+
+        repository.setBaseUrl("https://new.example.com")
+
+        assertEquals("https://new.example.com", repository.baseUrlFlow.first())
+        assertEquals("", repository.lastSyncedDateFlow.first())
+        assertNull(repository.getETag(java.time.LocalDate.now().toString()))
+        assertEquals(0L, repository.lastGlucoseSyncTimestampFlow.first())
+        assertEquals(0L, repository.lastBpSyncTimestampFlow.first())
+        assertEquals(0L, repository.lastHydrationSyncTimestampFlow.first())
+        assertFalse(repository.glucoseSyncCaughtUpFlow.first())
+        assertEquals(0, repository.hydrationSyncCountFlow.first())
+        assertTrue(repository.getDirectPushedGlucoseTimestamps().isEmpty())
+        assertTrue(repository.getDirectPushedBpTimestamps().isEmpty())
+    }
+
+    @Test
+    @DisplayName("setBaseUrl with the same server (ignoring trailing slash) keeps sync state")
+    fun setBaseUrlKeepsSyncStateForSameServer() = testScope.runTest {
+        repository.setBaseUrl("https://same.example.com")
+        seedSyncState()
+
+        repository.setBaseUrl("https://same.example.com/")
+
+        assertEquals("2026-10-01", repository.lastSyncedDateFlow.first())
+        assertEquals(111L, repository.lastGlucoseSyncTimestampFlow.first())
+    }
+
+    @Test
+    @DisplayName("clearing then restoring the same base URL keeps sync state")
+    fun clearingAndRestoringSameBaseUrlKeepsSyncState() = testScope.runTest {
+        repository.setBaseUrl("https://same.example.com")
+        seedSyncState()
+
+        repository.setBaseUrl("")
+        repository.setBaseUrl("https://same.example.com")
+
+        assertEquals("2026-10-01", repository.lastSyncedDateFlow.first())
+        assertEquals(333L, repository.lastHydrationSyncTimestampFlow.first())
+    }
+
+    @Test
+    @DisplayName("first base URL configuration does not touch sync state")
+    fun firstBaseUrlDoesNotResetSyncState() = testScope.runTest {
+        seedSyncState()
+
+        repository.setBaseUrl("https://first.example.com")
+
+        assertEquals("2026-10-01", repository.lastSyncedDateFlow.first())
+    }
+
+    @Test
+    @DisplayName("setApiKey change does not reset sync state")
+    fun setApiKeyDoesNotResetSyncState() = testScope.runTest {
+        repository.setBaseUrl("https://same.example.com")
+        repository.setApiKey("old-key")
+        seedSyncState()
+
+        repository.setApiKey("rotated-key")
+
+        assertEquals("2026-10-01", repository.lastSyncedDateFlow.first())
     }
 
     @Test
