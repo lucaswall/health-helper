@@ -702,6 +702,21 @@ class AnthropicApiClientTest {
     }
 
     @Test
+    @DisplayName("timeouts are not retried and report a timeout message")
+    fun timeoutIsNotRetried() = runTest {
+        var calls = 0
+        val engine = MockEngine {
+            calls++
+            throw java.net.SocketTimeoutException("read timed out")
+        }
+        val result = createClient(engine).parseGlucoseImage(testApiKey, testImageBytes)
+
+        assertIs<GlucoseParseResult.Error>(result)
+        assertEquals("Request timed out", result.message)
+        assertEquals(1, calls)
+    }
+
+    @Test
     @DisplayName("retry-after header is honored but capped")
     fun retryAfterHonoredAndCapped() = runTest {
         var calls = 0

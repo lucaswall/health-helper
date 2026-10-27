@@ -381,8 +381,17 @@ class AnthropicApiClient @Inject constructor(
         } catch (e: Exception) {
             when {
                 ApiErrors.isParseError(e) -> {
-                    Timber.e(e, "%s parse error", tag)
+                    // Decode error messages embed a snippet of the JSON body (which may contain the
+                    // extracted health values), so only the exception type reaches Sentry.
+                    Timber.d(e, "%s parse error detail", tag)
+                    Timber.e("%s parse error (%s)", tag, e::class.simpleName)
                     AttemptOutcome.Done(ToolCallOutcome.Failure("Failed to parse response"))
+                }
+                ApiErrors.isNetworkError(e) && ApiErrors.isTimeout(e) -> {
+                    // A timeout already cost the user up to the full request timeout; retrying
+                    // (and re-uploading the image) would multiply that wait.
+                    Timber.w(e, "%s timed out", tag)
+                    AttemptOutcome.Done(ToolCallOutcome.Failure("Request timed out"))
                 }
                 ApiErrors.isNetworkError(e) -> {
                     Timber.w(e, "%s network error", tag)
