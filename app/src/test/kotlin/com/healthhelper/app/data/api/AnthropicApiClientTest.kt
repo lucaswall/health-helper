@@ -473,4 +473,286 @@ class AnthropicApiClientTest {
         assertIs<GlucoseParseResult.Error>(result)
         assertTrue(result.message.contains("Network access denied"))
     }
+
+    // --- Tool input helpers ---
+
+    private fun toolUseResponse(toolName: String, inputJson: String): String = """
+        {
+            "id": "msg_test",
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "toolu_test", "name": "$toolName", "input": $inputJson}
+            ]
+        }
+    """.trimIndent()
+
+    // --- JSON null in error field ---
+
+    @Test
+    @DisplayName("BP: explicit \"error\": null is treated as no error")
+    fun bpErrorNullIsSuccess() = runTest {
+        val engine = MockEngine {
+            respond(
+                content = toolUseResponse("blood_pressure_reading", """{"systolic":120,"diastolic":80,"error":null}"""),
+                headers = jsonHeaders,
+            )
+        }
+        val result = createClient(engine).parseBloodPressureImage(testApiKey, testImageBytes)
+
+        assertIs<BloodPressureParseResult.Success>(result)
+        assertEquals(120, result.systolic)
+    }
+
+    @Test
+    @DisplayName("glucose: explicit \"error\": null is treated as no error")
+    fun glucoseErrorNullIsSuccess() = runTest {
+        val engine = MockEngine {
+            respond(
+                content = toolUseResponse("glucose_reading", """{"value":5.6,"unit":"mmol/L","error":null}"""),
+                headers = jsonHeaders,
+            )
+        }
+        val result = createClient(engine).parseGlucoseImage(testApiKey, testImageBytes)
+
+        assertIs<GlucoseParseResult.Success>(result)
+        assertEquals(5.6, result.value)
+    }
+
+    @Test
+    @DisplayName("glucose: JSON null unit is reported as missing, not as unit \"null\"")
+    fun glucoseNullUnitIsMissing() = runTest {
+        val engine = MockEngine {
+            respond(
+                content = toolUseResponse("glucose_reading", """{"value":5.6,"unit":null}"""),
+                headers = jsonHeaders,
+            )
+        }
+        val result = createClient(engine).parseGlucoseImage(testApiKey, testImageBytes)
+
+        assertIs<GlucoseParseResult.Error>(result)
+        assertEquals("Missing glucose values in response", result.message)
+    }
+
+    // --- Glucose unit normalization ---
+
+    @Test
+    @DisplayName("glucose: unit variants in different case/spacing are accepted")
+    fun glucoseUnitVariantsAccepted() = runTest {
+        val cases = listOf(
+            "mg/dl" to GlucoseUnit.MG_DL,
+            "MG/DL" to GlucoseUnit.MG_DL,
+            " mg / dL " to GlucoseUnit.MG_DL,
+            "mmol/l" to GlucoseUnit.MMOL_L,
+            "MMOL/L" to GlucoseUnit.MMOL_L,
+        )
+        cases.forEach { (unit, expected) ->
+            val value = if (expected == GlucoseUnit.MG_DL) 101.0 else 5.6
+            val engine = MockEngine { respond(content = glucoseSuccessResponse(value, unit), headers = jsonHeaders) }
+            val result = createClient(engine).parseGlucoseImage(testApiKey, testImageBytes)
+            assertIs<GlucoseParseResult.Success>(result, "unit '$unit'")
+            assertEquals(expected, result.detectedUnit)
+        }
+    }
+
+    @Test
+    @DisplayName("glucose: tool schema constrains unit with an enum")
+    fun glucoseSchemaHasUnitEnum() = runTest {
+        var capturedBody: String? = null
+        val engine = MockEngine { request ->
+            capturedBody = (request.body as io.ktor.http.content.TextContent).text
+            respond(content = glucoseSuccessResponse(5.6, "mmol/L"), headers = jsonHeaders)
+        }
+        createClient(engine).parseGlucoseImage(testApiKey, testImageBytes)
+
+        assertTrue(capturedBody!!.contains("\"enum\":[\"mmol/L\",\"mg/dL\"]"))
+    }
+
+    // --- Glucose plausible range ---
+
+    @Test
+    @DisplayName("glucose: values within unit range bounds are accepted")
+    fun glucoseRangeBoundsAccepted() = runTest {
+        listOf(0.5 to "mmol/L", 40.0 to "mmol/L", 10.0 to "mg/dL", 720.0 to "mg/dL").forEach { (value, unit) ->
+            val engine = MockEngine { respond(content = glucoseSuccessResponse(value, unit), headers = jsonHeaders) }
+            val result = createClient(engine).parseGlucoseImage(testApiKey, testImageBytes)
+            assertIs<GlucoseParseResult.Success>(result, "$value $unit")
+        }
+    }
+
+    @Test
+    @DisplayName("glucose: values implausible for the stated unit are rejected")
+    fun glucoseOutOfRangeRejected() = runTest {
+        listOf(0.4 to "mmol/L", 110.0 to "mmol/L", 5.6 to "mg/dL", 721.0 to "mg/dL").forEach { (value, unit) ->
+            val engine = MockEngine { respond(content = glucoseSuccessResponse(value, unit), headers = jsonHeaders) }
+            val result = createClient(engine).parseGlucoseImage(testApiKey, testImageBytes)
+            assertIs<GlucoseParseResult.Error>(result, "$value $unit")
+            assertTrue(result.message.contains("out of valid range"))
+        }
+    }
+
+    // --- Error messages do not carry health values ---
+
+    @Test
+    @DisplayName("BP: out-of-range error message does not include the numeric reading")
+    fun bpOutOfRangeMessageHasNoValue() = runTest {
+        val engine = MockEngine { respond(content = successResponse(301, 80), headers = jsonHeaders) }
+        val result = createClient(engine).parseBloodPressureImage(testApiKey, testImageBytes)
+
+        assertIs<BloodPressureParseResult.Error>(result)
+        assertTrue(!result.message.contains("301"))
+    }
+
+    // --- Parse errors (Ktor 3 JsonConvertException) ---
+
+    @Test
+    @DisplayName("malformed JSON body maps to 'Failed to parse response' for both methods")
+    fun malformedJsonMapsToParseError() = runTest {
+        val engine = MockEngine { respond(content = "{not json", headers = jsonHeaders) }
+        val client = createClient(engine)
+
+        val bp = client.parseBloodPressureImage(testApiKey, testImageBytes)
+        val glucose = client.parseGlucoseImage(testApiKey, testImageBytes)
+
+        assertIs<BloodPressureParseResult.Error>(bp)
+        assertEquals("Failed to parse response", bp.message)
+        assertIs<GlucoseParseResult.Error>(glucose)
+        assertEquals("Failed to parse response", glucose.message)
+    }
+
+    @Test
+    @DisplayName("200 text/html body maps to 'Failed to parse response' and is not retried")
+    fun htmlBodyMapsToParseError() = runTest {
+        var calls = 0
+        val engine = MockEngine {
+            calls++
+            respond(content = "<html></html>", headers = headersOf(HttpHeaders.ContentType, "text/html"))
+        }
+        val result = createClient(engine).parseBloodPressureImage(testApiKey, testImageBytes)
+
+        assertIs<BloodPressureParseResult.Error>(result)
+        assertEquals("Failed to parse response", result.message)
+        assertEquals(1, calls)
+    }
+
+    // --- Retry behaviour ---
+
+    @Test
+    @DisplayName("529 overloaded is retried and succeeds on a later attempt")
+    fun overloadedIsRetried() = runTest {
+        var calls = 0
+        val engine = MockEngine {
+            calls++
+            if (calls == 1) {
+                respond(
+                    content = """{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}""",
+                    status = HttpStatusCode.fromValue(529),
+                    headers = jsonHeaders,
+                )
+            } else {
+                respond(content = successResponse(120, 80), headers = jsonHeaders)
+            }
+        }
+        val result = createClient(engine).parseBloodPressureImage(testApiKey, testImageBytes)
+
+        assertIs<BloodPressureParseResult.Success>(result)
+        assertEquals(2, calls)
+    }
+
+    @Test
+    @DisplayName("persistent 529 gives up after bounded retries with an overloaded message")
+    fun overloadedExhaustsRetries() = runTest {
+        var calls = 0
+        val engine = MockEngine {
+            calls++
+            respond(content = "", status = HttpStatusCode.fromValue(529), headers = jsonHeaders)
+        }
+        val result = createClient(engine).parseGlucoseImage(testApiKey, testImageBytes)
+
+        assertIs<GlucoseParseResult.Error>(result)
+        assertEquals("Anthropic is overloaded", result.message)
+        assertEquals(1 + AnthropicApiClient.MAX_RETRIES, calls)
+    }
+
+    @Test
+    @DisplayName("503 and IOException are retried; 401 and 400 are not")
+    fun retryClassification() = runTest {
+        val cases = listOf(
+            HttpStatusCode.ServiceUnavailable to 1 + AnthropicApiClient.MAX_RETRIES,
+            HttpStatusCode.Unauthorized to 1,
+            HttpStatusCode.BadRequest to 1,
+        )
+        for ((code, expected) in cases) {
+            var calls = 0
+            val engine = MockEngine {
+                calls++
+                respondError(code)
+            }
+            createClient(engine).parseBloodPressureImage(testApiKey, testImageBytes)
+            assertEquals(expected, calls, "status $code")
+        }
+
+        var ioCalls = 0
+        val ioEngine = MockEngine {
+            ioCalls++
+            throw java.io.IOException("offline")
+        }
+        createClient(ioEngine).parseBloodPressureImage(testApiKey, testImageBytes)
+        assertEquals(1 + AnthropicApiClient.MAX_RETRIES, ioCalls)
+    }
+
+    @Test
+    @DisplayName("timeouts are not retried and report a timeout message")
+    fun timeoutIsNotRetried() = runTest {
+        var calls = 0
+        val engine = MockEngine {
+            calls++
+            throw java.net.SocketTimeoutException("read timed out")
+        }
+        val result = createClient(engine).parseGlucoseImage(testApiKey, testImageBytes)
+
+        assertIs<GlucoseParseResult.Error>(result)
+        assertEquals("Request timed out", result.message)
+        assertEquals(1, calls)
+    }
+
+    @Test
+    @DisplayName("retry-after header is honored but capped")
+    fun retryAfterHonoredAndCapped() = runTest {
+        var calls = 0
+        val engine = MockEngine {
+            calls++
+            if (calls == 1) {
+                respond(
+                    content = "",
+                    status = HttpStatusCode.TooManyRequests,
+                    headers = headersOf("retry-after", "3600"),
+                )
+            } else {
+                respond(content = successResponse(120, 80), headers = jsonHeaders)
+            }
+        }
+        val start = testScheduler.currentTime
+        val result = createClient(engine).parseBloodPressureImage(testApiKey, testImageBytes)
+
+        assertIs<BloodPressureParseResult.Success>(result)
+        val waited = testScheduler.currentTime - start
+        assertTrue(waited in 1..4_000, "waited $waited ms")
+    }
+
+    // --- API key normalization ---
+
+    @Test
+    @DisplayName("API key with surrounding whitespace/newline is trimmed before sending")
+    fun apiKeyTrimmed() = runTest {
+        var capturedApiKey: String? = null
+        val engine = MockEngine { request ->
+            capturedApiKey = request.headers["x-api-key"]
+            respond(content = successResponse(120, 80), headers = jsonHeaders)
+        }
+        val result = createClient(engine).parseBloodPressureImage(" $testApiKey\n", testImageBytes)
+
+        assertIs<BloodPressureParseResult.Success>(result)
+        assertEquals(testApiKey, capturedApiKey)
+    }
 }

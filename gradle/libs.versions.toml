@@ -6,14 +6,13 @@ hilt = "2.59.2"
 hiltNavCompose = "1.2.0"
 composeBom = "2025.12.00"
 healthConnect = "1.1.0"
-coreKtx = "1.15.0"
-lifecycleRuntime = "2.8.7"
+coreKtx = "1.16.0"
+lifecycleRuntime = "2.9.4"
 activityCompose = "1.9.3"
 junit5 = "5.11.4"
 coroutines = "1.10.1"
 mockk = "1.14.2"
 timber = "5.0.1"
-junitPlatformLauncher = "1.11.4"
 turbine = "1.2.0"
 ktor = "3.1.1"
 kotlinxSerializationJson = "1.8.1"
@@ -21,7 +20,7 @@ datastore = "1.1.4"
 workRuntime = "2.10.1"
 hiltWork = "1.2.0"
 navigationCompose = "2.8.5"
-securityCrypto = "1.1.0-alpha06"
+securityCrypto = "1.1.0"
 sentry = "8.33.0"
 sentryGradlePlugin = "6.1.0"
 
@@ -40,17 +39,18 @@ hilt-android = { group = "com.google.dagger", name = "hilt-android", version.ref
 hilt-compiler = { group = "com.google.dagger", name = "hilt-compiler", version.ref = "hilt" }
 hilt-navigation-compose = { group = "androidx.hilt", name = "hilt-navigation-compose", version.ref = "hiltNavCompose" }
 health-connect = { group = "androidx.health.connect", name = "connect-client", version.ref = "healthConnect" }
-junit5-api = { group = "org.junit.jupiter", name = "junit-jupiter-api", version.ref = "junit5" }
-junit5-engine = { group = "org.junit.jupiter", name = "junit-jupiter-engine", version.ref = "junit5" }
-junit5-params = { group = "org.junit.jupiter", name = "junit-jupiter-params", version.ref = "junit5" }
+junit-bom = { group = "org.junit", name = "junit-bom", version.ref = "junit5" }
+junit5-api = { group = "org.junit.jupiter", name = "junit-jupiter-api" }
+junit5-engine = { group = "org.junit.jupiter", name = "junit-jupiter-engine" }
+junit5-params = { group = "org.junit.jupiter", name = "junit-jupiter-params" }
 mockk = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
 coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
 timber = { group = "com.jakewharton.timber", name = "timber", version.ref = "timber" }
 androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycleRuntime" }
-junit-platform-launcher = { group = "org.junit.platform", name = "junit-platform-launcher", version.ref = "junitPlatformLauncher" }
+junit-platform-launcher = { group = "org.junit.platform", name = "junit-platform-launcher" }
 turbine = { group = "app.cash.turbine", name = "turbine", version.ref = "turbine" }
 ktor-client-core = { group = "io.ktor", name = "ktor-client-core", version.ref = "ktor" }
-ktor-client-cio = { group = "io.ktor", name = "ktor-client-cio", version.ref = "ktor" }
+ktor-client-okhttp = { group = "io.ktor", name = "ktor-client-okhttp", version.ref = "ktor" }
 ktor-client-content-negotiation = { group = "io.ktor", name = "ktor-client-content-negotiation", version.ref = "ktor" }
 ktor-serialization-kotlinx-json = { group = "io.ktor", name = "ktor-serialization-kotlinx-json", version.ref = "ktor" }
 ktor-client-mock = { group = "io.ktor", name = "ktor-client-mock", version.ref = "ktor" }

@@ -82,7 +82,7 @@ dependencies {
 
     // Ktor HTTP client
     implementation(libs.ktor.client.core)
-    implementation(libs.ktor.client.cio)
+    implementation(libs.ktor.client.okhttp)
     implementation(libs.ktor.client.content.negotiation)
     implementation(libs.ktor.serialization.kotlinx.json)
 
@@ -107,6 +107,8 @@ dependencies {
 
     // Testing
     testImplementation(kotlin("test"))
+    testImplementation(platform(libs.junit.bom))
+    testRuntimeOnly(platform(libs.junit.bom))
     testImplementation(libs.junit5.api)
     testRuntimeOnly(libs.junit5.engine)
     testImplementation(libs.junit5.params)
