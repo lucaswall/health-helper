@@ -29,11 +29,19 @@ class BloodPressureReadingTest {
     }
 
     @Test
-    @DisplayName("systolic above 300 throws IllegalArgumentException")
+    @DisplayName("systolic above 200 (Health Connect max) throws IllegalArgumentException")
     fun systolicAboveMaxThrows() {
         assertThrows<IllegalArgumentException> {
-            BloodPressureReading(systolic = 301, diastolic = 80)
+            BloodPressureReading(systolic = 201, diastolic = 100)
         }
+    }
+
+    @Test
+    @DisplayName("systolic 200 and diastolic 180 (Health Connect max) are accepted")
+    fun healthConnectUpperBoundsAccepted() {
+        val reading = BloodPressureReading(systolic = 200, diastolic = 180)
+        assertEquals(200, reading.systolic)
+        assertEquals(180, reading.diastolic)
     }
 
     @Test
@@ -45,10 +53,10 @@ class BloodPressureReadingTest {
     }
 
     @Test
-    @DisplayName("diastolic above 200 throws IllegalArgumentException")
+    @DisplayName("diastolic above 180 (Health Connect max) throws IllegalArgumentException")
     fun diastolicAboveMaxThrows() {
         assertThrows<IllegalArgumentException> {
-            BloodPressureReading(systolic = 210, diastolic = 201)
+            BloodPressureReading(systolic = 190, diastolic = 181)
         }
     }
 

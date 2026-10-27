@@ -1,6 +1,5 @@
 package com.healthhelper.app.domain.usecase
 
-import com.healthhelper.app.domain.model.HydrationReading
 import com.healthhelper.app.domain.repository.HydrationRepository
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -31,30 +30,33 @@ class GetTodayHydrationTotalUseCaseTest {
     }
 
     @Test
-    @DisplayName("returns Total(sum) for multiple readings")
-    fun returnsSumForMultipleReadings() = runTest {
-        val readings = listOf(
-            HydrationReading(volumeMl = 250),
-            HydrationReading(volumeMl = 500),
-            HydrationReading(volumeMl = 300),
-        )
-        coEvery { repository.getReadings(any(), any()) } returns readings
+    @DisplayName("returns Total with the repository's aggregated volume")
+    fun returnsAggregatedTotal() = runTest {
+        coEvery { repository.getTotalVolumeMl(any(), any()) } returns 1050
         val result = useCase.invoke()
         assertEquals(TodayHydrationResult.Total(1050), result)
     }
 
     @Test
-    @DisplayName("returns Total(0) when repository returns empty list")
-    fun returnsZeroForEmptyList() = runTest {
-        coEvery { repository.getReadings(any(), any()) } returns emptyList()
+    @DisplayName("returns Total(0) when repository reports zero volume")
+    fun returnsZeroWhenNoVolume() = runTest {
+        coEvery { repository.getTotalVolumeMl(any(), any()) } returns 0
         val result = useCase.invoke()
         assertEquals(TodayHydrationResult.Total(0), result)
     }
 
     @Test
+    @DisplayName("returns Unavailable (not Total(0)) when repository cannot read the total")
+    fun returnsUnavailableWhenTotalNull() = runTest {
+        coEvery { repository.getTotalVolumeMl(any(), any()) } returns null
+        val result = useCase.invoke()
+        assertEquals(TodayHydrationResult.Unavailable, result)
+    }
+
+    @Test
     @DisplayName("returns PermissionDenied when repository throws SecurityException")
     fun returnsPermissionDeniedOnSecurityException() = runTest {
-        coEvery { repository.getReadings(any(), any()) } throws SecurityException("HC denied")
+        coEvery { repository.getTotalVolumeMl(any(), any()) } throws SecurityException("HC denied")
         val result = useCase.invoke()
         assertEquals(TodayHydrationResult.PermissionDenied, result)
     }
@@ -62,7 +64,7 @@ class GetTodayHydrationTotalUseCaseTest {
     @Test
     @DisplayName("returns Unavailable when repository throws IOException")
     fun returnsUnavailableOnIOException() = runTest {
-        coEvery { repository.getReadings(any(), any()) } throws IOException("HC error")
+        coEvery { repository.getTotalVolumeMl(any(), any()) } throws IOException("HC error")
         val result = useCase.invoke()
         assertEquals(TodayHydrationResult.Unavailable, result)
     }
@@ -70,7 +72,7 @@ class GetTodayHydrationTotalUseCaseTest {
     @Test
     @DisplayName("rethrows CancellationException")
     fun rethrowsCancellationException() = runTest {
-        coEvery { repository.getReadings(any(), any()) } throws CancellationException("cancelled")
+        coEvery { repository.getTotalVolumeMl(any(), any()) } throws CancellationException("cancelled")
         assertThrows<CancellationException> {
             useCase.invoke()
         }
@@ -79,7 +81,7 @@ class GetTodayHydrationTotalUseCaseTest {
     @Test
     @DisplayName("calls repository with start of today to now")
     fun callsRepositoryWithCorrectTimeRange() = runTest {
-        coEvery { repository.getReadings(any(), any()) } returns emptyList()
+        coEvery { repository.getTotalVolumeMl(any(), any()) } returns 0
 
         val beforeInvoke = Instant.now()
         useCase.invoke()
@@ -87,7 +89,7 @@ class GetTodayHydrationTotalUseCaseTest {
 
         val startSlot = slot<Instant>()
         val endSlot = slot<Instant>()
-        coVerify { repository.getReadings(capture(startSlot), capture(endSlot)) }
+        coVerify { repository.getTotalVolumeMl(capture(startSlot), capture(endSlot)) }
 
         val expectedStart = LocalDate.now()
             .atStartOfDay(ZoneId.systemDefault())

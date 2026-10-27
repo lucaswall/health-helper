@@ -22,9 +22,10 @@ class GetTodayHydrationTotalUseCase @Inject constructor(
             .atStartOfDay(ZoneId.systemDefault())
             .toInstant()
         val now = Instant.now()
-        TodayHydrationResult.Total(
-            hydrationRepository.getReadings(startOfToday, now).sumOf { it.volumeMl },
-        )
+        // Aggregated total: Health Connect de-duplicates overlapping sources by the user's
+        // data-source priority. Null means the read failed or timed out — never report 0 then.
+        val total = hydrationRepository.getTotalVolumeMl(startOfToday, now)
+        if (total == null) TodayHydrationResult.Unavailable else TodayHydrationResult.Total(total)
     } catch (e: CancellationException) {
         throw e
     } catch (e: SecurityException) {

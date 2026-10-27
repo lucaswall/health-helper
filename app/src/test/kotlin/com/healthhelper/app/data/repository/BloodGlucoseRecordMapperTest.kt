@@ -318,4 +318,23 @@ class BloodGlucoseRecordMapperTest {
         val reading = mapToGlucoseReading(record)
         assertEquals(SpecimenSource.UNKNOWN, reading.specimenSource)
     }
+
+    @Test
+    @DisplayName("mapToGlucoseReading keeps the record's zoneOffset")
+    fun readMapperKeepsZoneOffset() {
+        val record = BloodGlucoseRecord(
+            time = testTimestamp,
+            zoneOffset = ZoneOffset.ofHours(9),
+            level = BloodGlucose.milligramsPerDeciliter(100.0),
+            metadata = Metadata.manualEntry(),
+        )
+        assertEquals(ZoneOffset.ofHours(9), mapToGlucoseReading(record).zoneOffset)
+    }
+
+    @Test
+    @DisplayName("mapToBloodGlucoseRecord prefers the reading's own zoneOffset over the system default")
+    fun writeMapperUsesReadingZoneOffset() {
+        val reading = GlucoseReading(valueMgDl = 100, timestamp = testTimestamp, zoneOffset = ZoneOffset.ofHours(-3))
+        assertEquals(ZoneOffset.ofHours(-3), mapToBloodGlucoseRecord(reading).zoneOffset)
+    }
 }

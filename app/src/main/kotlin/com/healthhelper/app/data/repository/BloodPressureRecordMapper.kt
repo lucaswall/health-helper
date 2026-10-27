@@ -10,7 +10,7 @@ import java.time.ZoneId
 import kotlin.math.roundToInt
 
 fun mapToBloodPressureRecord(reading: BloodPressureReading): BloodPressureRecord {
-    val zoneOffset = ZoneId.systemDefault().rules.getOffset(reading.timestamp)
+    val zoneOffset = reading.zoneOffset ?: ZoneId.systemDefault().rules.getOffset(reading.timestamp)
 
     val bodyPositionInt = when (reading.bodyPosition) {
         BodyPosition.STANDING_UP -> BloodPressureRecord.BODY_POSITION_STANDING_UP
@@ -64,5 +64,6 @@ fun mapToBloodPressureReading(record: BloodPressureRecord): BloodPressureReading
         bodyPosition = bodyPosition,
         measurementLocation = measurementLocation,
         timestamp = record.time,
+        zoneOffset = record.zoneOffset,
     )
 }

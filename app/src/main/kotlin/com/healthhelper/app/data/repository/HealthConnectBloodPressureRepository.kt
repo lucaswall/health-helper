@@ -20,7 +20,7 @@ import javax.inject.Inject
 
 class HealthConnectBloodPressureRepository @Inject constructor(
     private val healthConnectClient: HealthConnectClient?,
-    @ApplicationContext private val context: Context,
+    @param:ApplicationContext private val context: Context,
 ) : BloodPressureRepository {
 
     override suspend fun writeBloodPressureRecord(reading: BloodPressureReading): Boolean {
@@ -59,6 +59,9 @@ class HealthConnectBloodPressureRepository @Inject constructor(
         }
         return try {
             val startMs = System.currentTimeMillis()
+            // Newest first: the default ascending order would return the oldest page of the
+            // 30-day window. Reads from all origins on purpose so a reading logged by another
+            // app (e.g. a meter's companion app) still shows as the latest one.
             val response = withTimeout(10_000L) {
                 healthConnectClient.readRecords(
                     ReadRecordsRequest(
@@ -66,15 +69,23 @@ class HealthConnectBloodPressureRepository @Inject constructor(
                         timeRangeFilter = TimeRangeFilter.after(
                             Instant.now().minus(30, ChronoUnit.DAYS),
                         ),
+                        ascendingOrder = false,
+                        pageSize = LAST_READING_PAGE_SIZE,
                     ),
                 )
             }
             Timber.d(
-                "getLastReading: read %d records in %dms",
+                "getLastReading: read %d BP records in %dms",
                 response.records.size,
                 System.currentTimeMillis() - startMs,
             )
-            response.records.maxByOrNull { it.time }?.let { mapToBloodPressureReading(it) }
+            response.records
+                .sortedByDescending { it.time }
+                .firstNotNullOfOrNull { record ->
+                    runCatching { mapToBloodPressureReading(record) }
+                        .onFailure { Timber.w(it, "getLastReading: skipping unmappable BP record") }
+                        .getOrNull()
+                }
         } catch (e: TimeoutCancellationException) {
             Timber.w("getLastReading: timed out after 10s")
             null
@@ -91,76 +102,29 @@ class HealthConnectBloodPressureRepository @Inject constructor(
     override suspend fun getReadings(start: Instant, end: Instant): List<BloodPressureReading> =
         getReadingsResult(start, end).readings
 
-    override suspend fun getReadingsResult(start: Instant, end: Instant): ReadingsResult<BloodPressureReading> {
-        if (healthConnectClient == null) {
+    override suspend fun getReadingsResult(
+        start: Instant,
+        end: Instant,
+        limit: Int,
+    ): ReadingsResult<BloodPressureReading> {
+        val client = healthConnectClient ?: run {
             Timber.w("getReadings: Health Connect not available")
-            return ReadingsResult(emptyList())
+            throw IllegalStateException("Health Connect not available")
         }
-        val allRecords = mutableListOf<BloodPressureRecord>()
-        var truncated = false
-        return try {
-            val startMs = System.currentTimeMillis()
-            var pageToken: String? = null
-            do {
-                val elapsed = System.currentTimeMillis() - startMs
-                if (elapsed > CUMULATIVE_TIMEOUT_MS) {
-                    Timber.w(
-                        "getReadings: cumulative timeout (>%ds), returning %d partial BP records",
-                        CUMULATIVE_TIMEOUT_MS / 1000,
-                        allRecords.size,
-                    )
-                    truncated = true
-                    break
-                }
-                val response = withTimeout(10_000L) {
-                    healthConnectClient.readRecords(
-                        ReadRecordsRequest(
-                            recordType = BloodPressureRecord::class,
-                            timeRangeFilter = TimeRangeFilter.between(start, end),
-                            dataOriginFilter = setOf(DataOrigin(context.packageName)),
-                            pageToken = pageToken,
-                        ),
-                    )
-                }
-                allRecords.addAll(response.records)
-                pageToken = response.pageToken
-            } while (pageToken != null)
-            if (!truncated) {
-                Timber.d(
-                    "getReadings: read %d BP records in %dms",
-                    allRecords.size,
-                    System.currentTimeMillis() - startMs,
-                )
-            }
-            val readings = allRecords
-                .mapNotNull { record ->
-                    runCatching { mapToBloodPressureReading(record) }
-                        .onFailure { Timber.w(it, "getReadings: failed to map BP record") }
-                        .getOrNull()
-                }
-                .sortedBy { it.timestamp }
-            ReadingsResult(readings, truncated)
-        } catch (e: TimeoutCancellationException) {
-            Timber.w("getReadings: per-page timeout, returning %d partial BP records", allRecords.size)
-            val readings = allRecords
-                .mapNotNull { record ->
-                    runCatching { mapToBloodPressureReading(record) }
-                        .onFailure { Timber.w(it, "getReadings: failed to map BP record") }
-                        .getOrNull()
-                }
-                .sortedBy { it.timestamp }
-            ReadingsResult(readings, truncated = true)
-        } catch (e: SecurityException) {
-            Timber.w(e, "getReadings: BP permission denied — rethrowing for use-case reporting")
-            throw e
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            Timber.e(e, "getReadings: failed")
-            ReadingsResult(emptyList())
-        }
+        // Only this app's own records are synced; other apps' BP data is not pushed.
+        return client.readReadingsPaged(
+            recordType = BloodPressureRecord::class,
+            start = start,
+            end = end,
+            dataOriginFilter = setOf(DataOrigin(context.packageName)),
+            limit = limit,
+            label = "BP",
+            map = ::mapToBloodPressureReading,
+            timestamp = { it.timestamp },
+        )
     }
 
-    companion object {
-        private const val CUMULATIVE_TIMEOUT_MS = 120_000L
+    private companion object {
+        const val LAST_READING_PAGE_SIZE = 20
     }
 }

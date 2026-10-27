@@ -8,6 +8,14 @@ interface BloodGlucoseRepository {
     suspend fun writeBloodGlucoseRecord(reading: GlucoseReading): Boolean
     suspend fun getLastReading(): GlucoseReading?
     suspend fun getReadings(start: Instant, end: Instant): List<GlucoseReading>
-    suspend fun getReadingsResult(start: Instant, end: Instant): ReadingsResult<GlucoseReading> =
-        ReadingsResult(getReadings(start, end))
+
+    /**
+     * Reads this app's glucose records in [start, end), sorted ascending. See
+     * [HydrationRepository.getReadingsResult] for the [limit] / truncation and error contract.
+     */
+    suspend fun getReadingsResult(
+        start: Instant,
+        end: Instant,
+        limit: Int = Int.MAX_VALUE,
+    ): ReadingsResult<GlucoseReading>
 }

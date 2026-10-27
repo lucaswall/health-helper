@@ -9,4 +9,5 @@ fun mapToHydrationReading(record: HydrationRecord): HydrationReading =
         volumeMl = record.volume.inMilliliters.roundToInt(),
         timestamp = record.startTime,
         zoneOffset = record.startZoneOffset,
+        lastModified = record.metadata.lastModifiedTime,
     )

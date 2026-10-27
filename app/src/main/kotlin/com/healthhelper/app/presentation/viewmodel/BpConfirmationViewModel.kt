@@ -166,11 +166,13 @@ class BpConfirmationViewModel @Inject constructor(
             if (systolic == null || diastolic == null) {
                 return Pair(false, "Please enter valid numbers")
             }
-            if (systolic !in 60..300) {
-                return Pair(false, "Systolic must be between 60 and 300")
+            val systolicRange = BloodPressureReading.SYSTOLIC_RANGE
+            val diastolicRange = BloodPressureReading.DIASTOLIC_RANGE
+            if (systolic !in systolicRange) {
+                return Pair(false, "Systolic must be between ${systolicRange.first} and ${systolicRange.last}")
             }
-            if (diastolic !in 30..200) {
-                return Pair(false, "Diastolic must be between 30 and 200")
+            if (diastolic !in diastolicRange) {
+                return Pair(false, "Diastolic must be between ${diastolicRange.first} and ${diastolicRange.last}")
             }
             if (systolic <= diastolic) {
                 return Pair(false, "Systolic must be greater than diastolic")
