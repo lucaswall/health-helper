@@ -121,7 +121,7 @@ class SyncHealthReadingsUseCase @Inject constructor(
             // Read failures throw (caught below) so the watermark and status stay unchanged.
             val result = getReadings(start, end, MAX_READINGS_PER_RUN)
             val readings = result.readings
-            val batch = selectBatch(readings, getTimestamp)
+            val batch = selectBatch(readings, result.truncated, getTimestamp)
             val late = getLateReadings(watermark)
 
             if (batch.isEmpty() && late.isEmpty()) {
@@ -170,9 +170,17 @@ class SyncHealthReadingsUseCase @Inject constructor(
      * timestamp across runs: the next run starts at watermark + 1ms, so a tie left behind would be
      * skipped forever. If every candidate shares the boundary timestamp, the whole tie group is
      * pushed instead so the sync cannot stall.
+     *
+     * A truncated result with no more than [MAX_READINGS_PER_RUN] readings was cut short by a
+     * timeout, so its trailing tie group may be incomplete: leave it for the next run (unless it is
+     * the whole result, to avoid stalling).
      */
-    private fun <T> selectBatch(readings: List<T>, getTimestamp: (T) -> Long): List<T> {
-        if (readings.size <= MAX_READINGS_PER_RUN) return readings
+    private fun <T> selectBatch(readings: List<T>, truncated: Boolean, getTimestamp: (T) -> Long): List<T> {
+        if (readings.size <= MAX_READINGS_PER_RUN) {
+            if (!truncated || readings.isEmpty()) return readings
+            val lastTs = getTimestamp(readings.last())
+            return readings.dropLastWhile { getTimestamp(it) == lastTs }.ifEmpty { readings }
+        }
         val boundary = getTimestamp(readings[MAX_READINGS_PER_RUN])
         val beforeBoundary = readings.takeWhile { getTimestamp(it) < boundary }
         return beforeBoundary.ifEmpty { readings.takeWhile { getTimestamp(it) <= boundary } }

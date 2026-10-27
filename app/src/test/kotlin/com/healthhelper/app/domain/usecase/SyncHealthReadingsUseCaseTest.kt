@@ -248,6 +248,40 @@ class SyncHealthReadingsUseCaseTest {
     }
 
     @Test
+    @DisplayName("timeout-truncated result: trailing tie group is left for the next run so it is not split")
+    fun truncatedTrailingTieGroupDeferred() = runTest {
+        val distinct = glucoseReadings(10, startMs = 1_000L)
+        val tieTs = 1_000L + 10 * 1000L
+        val tied = (0 until 2).map { GlucoseReading(valueMgDl = 120 + it, timestamp = Instant.ofEpochMilli(tieTs)) }
+        coEvery { bloodGlucoseRepository.getReadingsResult(any(), any(), any()) } returns
+            ReadingsResult(distinct + tied, truncated = true)
+        val pushed = slot<List<GlucoseReading>>()
+        coEvery { foodScannerHealthRepository.pushGlucoseReadings(capture(pushed)) } returns Result.success(10)
+
+        createUseCase().invoke()
+
+        assertEquals(distinct, pushed.captured)
+        coVerify { settingsRepository.setLastGlucoseSyncTimestamp(distinct.last().timestamp.toEpochMilli()) }
+        coVerify(exactly = 0) { settingsRepository.setLastGlucoseSyncTimestamp(tieTs) }
+        coVerify { settingsRepository.setGlucoseSyncCaughtUp(false) }
+    }
+
+    @Test
+    @DisplayName("timeout-truncated result where every reading ties is still pushed so sync cannot stall")
+    fun truncatedAllTiedStillPushed() = runTest {
+        val ts = 7_000L
+        val tied = (0 until 3).map { GlucoseReading(valueMgDl = 100 + it, timestamp = Instant.ofEpochMilli(ts)) }
+        coEvery { bloodGlucoseRepository.getReadingsResult(any(), any(), any()) } returns
+            ReadingsResult(tied, truncated = true)
+        coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns Result.success(3)
+
+        createUseCase().invoke()
+
+        coVerify { foodScannerHealthRepository.pushGlucoseReadings(match { it.size == 3 }) }
+        coVerify { settingsRepository.setLastGlucoseSyncTimestamp(ts) }
+    }
+
+    @Test
     @DisplayName("when every candidate shares one timestamp, the whole tie group is pushed so sync cannot stall")
     fun allTiedReadingsPushedTogether() = runTest {
         val ts = 5_000L
