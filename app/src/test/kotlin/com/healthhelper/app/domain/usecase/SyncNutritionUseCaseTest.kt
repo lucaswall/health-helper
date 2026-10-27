@@ -11,12 +11,14 @@ import com.healthhelper.app.domain.repository.NutritionRepository
 import com.healthhelper.app.domain.repository.SettingsRepository
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.coVerifyOrder
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import java.io.IOException
+import java.time.Clock
 import java.time.Instant
 import java.time.LocalTime
 import java.time.ZoneId
@@ -25,7 +27,9 @@ import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class SyncNutritionUseCaseTest {
@@ -34,6 +38,9 @@ class SyncNutritionUseCaseTest {
     private lateinit var nutritionRepository: NutritionRepository
     private lateinit var settingsRepository: SettingsRepository
     private lateinit var useCase: SyncNutritionUseCase
+
+    // Fixed clock so tests never straddle midnight between the test's and the use case's "today"
+    private val clock: Clock = Clock.fixed(Instant.parse("2026-03-15T15:00:00Z"), ZoneId.systemDefault())
 
     private val testEntry = FoodLogEntry(
         id = 1,
@@ -57,14 +64,16 @@ class SyncNutritionUseCaseTest {
         foodLogRepository = mockk()
         nutritionRepository = mockk()
         settingsRepository = mockk()
-        useCase = SyncNutritionUseCase(foodLogRepository, nutritionRepository, settingsRepository)
+        useCase = SyncNutritionUseCase(foodLogRepository, nutritionRepository, settingsRepository, clock)
     }
+
+    private fun dateStr(date: LocalDate): String = date.format(DateTimeFormatter.ISO_LOCAL_DATE)
 
     private fun configureSettings(
         configured: Boolean = true,
         apiKey: String = "fsk_test",
         baseUrl: String = "https://food.example.com",
-        lastSyncedDate: String = LocalDate.now().minusDays(1).format(DateTimeFormatter.ISO_LOCAL_DATE),
+        lastSyncedDate: String = LocalDate.now(clock).minusDays(1).format(DateTimeFormatter.ISO_LOCAL_DATE),
     ) {
         coEvery { settingsRepository.isConfigured() } returns configured
         every { settingsRepository.apiKeyFlow } returns flowOf(apiKey)
@@ -77,6 +86,10 @@ class SyncNutritionUseCaseTest {
         coEvery { settingsRepository.setLastSyncedMeals(any()) } returns Unit
         coEvery { settingsRepository.getETag(any()) } returns null
         coEvery { settingsRepository.setETag(any(), any()) } returns Unit
+        // Defaults (more specific stubs declared later in a test take precedence): days a test
+        // doesn't care about — e.g. the trailing re-check window — are unchanged (304).
+        coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } returns Result.success(FoodLogResult.NotModified)
+        coEvery { nutritionRepository.deleteStaleNutritionRecords(any(), any()) } returns true
     }
 
     @Test
@@ -92,8 +105,8 @@ class SyncNutritionUseCaseTest {
     @Test
     @DisplayName("single day sync fetches and writes records")
     fun singleDaySync() = runTest {
-        val today = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE)
-        configureSettings(lastSyncedDate = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE))
+        val today = LocalDate.now(clock).format(DateTimeFormatter.ISO_LOCAL_DATE)
+        configureSettings(lastSyncedDate = LocalDate.now(clock).format(DateTimeFormatter.ISO_LOCAL_DATE))
         coEvery { foodLogRepository.getFoodLog(any(), any(), today) } returns Result.success(FoodLogResult.Data(listOf(testEntry)))
         coEvery { nutritionRepository.writeNutritionRecords(today, any()) } returns true
 
@@ -101,13 +114,14 @@ class SyncNutritionUseCaseTest {
 
         assertTrue(result is SyncResult.Success)
         assertEquals(1, (result as SyncResult.Success).recordsSynced)
-        assertEquals(1, (result as SyncResult.Success).daysProcessed)
+        // today + 7-day re-check window (unchanged days count as processed)
+        assertEquals(8, (result as SyncResult.Success).daysProcessed)
     }
 
     @Test
     @DisplayName("multi-day sync aggregates record count")
     fun multiDaySync() = runTest {
-        val today = LocalDate.now()
+        val today = LocalDate.now(clock)
         val yesterday = today.minusDays(1)
         configureSettings(lastSyncedDate = yesterday.minusDays(1).format(DateTimeFormatter.ISO_LOCAL_DATE))
         coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } returns Result.success(FoodLogResult.Data(listOf(testEntry)))
@@ -123,7 +137,7 @@ class SyncNutritionUseCaseTest {
     @Test
     @DisplayName("API error on one day continues syncing other days")
     fun apiErrorContinues() = runTest {
-        val today = LocalDate.now()
+        val today = LocalDate.now(clock)
         val yesterday = today.minusDays(1)
         configureSettings(lastSyncedDate = yesterday.minusDays(1).format(DateTimeFormatter.ISO_LOCAL_DATE))
 
@@ -144,14 +158,15 @@ class SyncNutritionUseCaseTest {
     @Test
     @DisplayName("HC write failure on one day continues other days")
     fun hcWriteFailureContinues() = runTest {
-        val today = LocalDate.now()
+        val today = LocalDate.now(clock)
         val yesterday = today.minusDays(1)
         configureSettings(lastSyncedDate = yesterday.minusDays(1).format(DateTimeFormatter.ISO_LOCAL_DATE))
 
         val todayStr = today.format(DateTimeFormatter.ISO_LOCAL_DATE)
         val yesterdayStr = yesterday.format(DateTimeFormatter.ISO_LOCAL_DATE)
 
-        coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } returns Result.success(FoodLogResult.Data(listOf(testEntry)))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), todayStr) } returns Result.success(FoodLogResult.Data(listOf(testEntry), "\"etag-today\""))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), yesterdayStr) } returns Result.success(FoodLogResult.Data(listOf(testEntry), "\"etag-yesterday\""))
         coEvery { nutritionRepository.writeNutritionRecords(todayStr, any()) } returns false
         coEvery { nutritionRepository.writeNutritionRecords(yesterdayStr, any()) } returns true
 
@@ -159,13 +174,17 @@ class SyncNutritionUseCaseTest {
 
         assertTrue(result is SyncResult.Success)
         assertEquals(1, (result as SyncResult.Success).recordsSynced)
+        // Failed day's ETag must not be committed (so it is re-fetched, not 304'd); written day's is
+        coVerify(exactly = 0) { settingsRepository.setETag(todayStr, any()) }
+        coVerify(exactly = 1) { settingsRepository.setETag(yesterdayStr, "\"etag-yesterday\"") }
+        coVerify { settingsRepository.setLastSyncedDate(yesterdayStr) }
     }
 
     @Test
     @DisplayName("empty food log skips HC write")
     fun emptyFoodLogSkipsWrite() = runTest {
-        val today = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE)
-        configureSettings(lastSyncedDate = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE))
+        val today = LocalDate.now(clock).format(DateTimeFormatter.ISO_LOCAL_DATE)
+        configureSettings(lastSyncedDate = LocalDate.now(clock).format(DateTimeFormatter.ISO_LOCAL_DATE))
         coEvery { foodLogRepository.getFoodLog(any(), any(), today) } returns Result.success(FoodLogResult.Data(emptyList()))
 
         val result = useCase.invoke()
@@ -178,7 +197,7 @@ class SyncNutritionUseCaseTest {
     @Test
     @DisplayName("emits progress updates")
     fun emitsProgress() = runTest {
-        configureSettings(lastSyncedDate = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE))
+        configureSettings(lastSyncedDate = LocalDate.now(clock).format(DateTimeFormatter.ISO_LOCAL_DATE))
         coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } returns Result.success(FoodLogResult.Data(listOf(testEntry)))
         coEvery { nutritionRepository.writeNutritionRecords(any(), any()) } returns true
 
@@ -186,14 +205,15 @@ class SyncNutritionUseCaseTest {
         useCase.invoke { progressUpdates.add(it) }
 
         assertTrue(progressUpdates.isNotEmpty())
-        assertEquals(1, progressUpdates.last().completedDays)
-        assertEquals(1, progressUpdates.last().totalDays)
+        // today + 7-day re-check window
+        assertEquals(8, progressUpdates.last().completedDays)
+        assertEquals(8, progressUpdates.last().totalDays)
     }
 
     @Test
     @DisplayName("all days fail returns Error")
     fun allDaysFailReturnsError() = runTest {
-        configureSettings(lastSyncedDate = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE))
+        configureSettings(lastSyncedDate = LocalDate.now(clock).format(DateTimeFormatter.ISO_LOCAL_DATE))
         coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } returns Result.failure(Exception("fail"))
 
         val result = useCase.invoke()
@@ -205,7 +225,7 @@ class SyncNutritionUseCaseTest {
     @DisplayName("intermediate date failure does not advance lastSyncedDate past the gap")
     fun intermediateFailureDoesNotAdvancePastGap() = runTest {
         // Setup: 3 past dates to sync (today + 3 past days)
-        val today = LocalDate.now()
+        val today = LocalDate.now(clock)
         val day1 = today.minusDays(1) // newest past
         val day2 = today.minusDays(2)
         val day3 = today.minusDays(3) // oldest past
@@ -233,7 +253,7 @@ class SyncNutritionUseCaseTest {
     @Test
     @DisplayName("all past dates succeed sets lastSyncedDate to newest past date")
     fun allPastDatesSucceedSetsNewestDate() = runTest {
-        val today = LocalDate.now()
+        val today = LocalDate.now(clock)
         val yesterday = today.minusDays(1)
         val dayBefore = today.minusDays(2)
         configureSettings(lastSyncedDate = today.minusDays(3).format(DateTimeFormatter.ISO_LOCAL_DATE))
@@ -250,7 +270,7 @@ class SyncNutritionUseCaseTest {
     @Test
     @DisplayName("newest past date fails does not update lastSyncedDate if no older dates to sync")
     fun newestPastDateFailsNoUpdate() = runTest {
-        val today = LocalDate.now()
+        val today = LocalDate.now(clock)
         val yesterday = today.minusDays(1)
         configureSettings(lastSyncedDate = today.minusDays(2).format(DateTimeFormatter.ISO_LOCAL_DATE))
 
@@ -268,9 +288,9 @@ class SyncNutritionUseCaseTest {
     }
 
     @Test
-    @DisplayName("respects lastSyncedDate — does not re-sync already synced dates except today")
+    @DisplayName("respects lastSyncedDate — only today and the 7-day re-check window are fetched")
     fun respectsLastSyncedDate() = runTest {
-        val today = LocalDate.now()
+        val today = LocalDate.now(clock)
         val todayStr = today.format(DateTimeFormatter.ISO_LOCAL_DATE)
         // lastSyncedDate = yesterday → only today needs syncing
         configureSettings(lastSyncedDate = today.minusDays(1).format(DateTimeFormatter.ISO_LOCAL_DATE))
@@ -280,16 +300,19 @@ class SyncNutritionUseCaseTest {
 
         useCase.invoke()
 
-        // Only today should be fetched (yesterday already synced)
-        coVerify(exactly = 1) { foodLogRepository.getFoodLog(any(), any(), any()) }
+        // Today plus the trailing re-check window (today-7..today-1); nothing older
+        coVerify(exactly = 8) { foodLogRepository.getFoodLog(any(), any(), any()) }
         coVerify { foodLogRepository.getFoodLog(any(), any(), todayStr) }
+        coVerify { foodLogRepository.getFoodLog(any(), any(), dateStr(today.minusDays(1))) }
+        coVerify { foodLogRepository.getFoodLog(any(), any(), dateStr(today.minusDays(7))) }
+        coVerify(exactly = 0) { foodLogRepository.getFoodLog(any(), any(), dateStr(today.minusDays(8))) }
     }
 
     @Test
     @DisplayName("caps at 365 days back from today")
     fun capsAt365Days() = runTest {
         // Set lastSyncedDate to 400 days ago → should only sync back 365 days
-        configureSettings(lastSyncedDate = LocalDate.now().minusDays(400).format(DateTimeFormatter.ISO_LOCAL_DATE))
+        configureSettings(lastSyncedDate = LocalDate.now(clock).minusDays(400).format(DateTimeFormatter.ISO_LOCAL_DATE))
 
         coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } returns Result.success(FoodLogResult.Data(emptyList()))
 
@@ -303,8 +326,8 @@ class SyncNutritionUseCaseTest {
     @Test
     @DisplayName("API succeeds with entries but all HC writes fail returns Error")
     fun allHcWritesFailReturnsError() = runTest {
-        val today = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE)
-        configureSettings(lastSyncedDate = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE))
+        val today = LocalDate.now(clock).format(DateTimeFormatter.ISO_LOCAL_DATE)
+        configureSettings(lastSyncedDate = LocalDate.now(clock).format(DateTimeFormatter.ISO_LOCAL_DATE))
         coEvery { foodLogRepository.getFoodLog(any(), any(), today) } returns Result.success(FoodLogResult.Data(listOf(testEntry)))
         coEvery { nutritionRepository.writeNutritionRecords(any(), any()) } returns false
 
@@ -317,14 +340,15 @@ class SyncNutritionUseCaseTest {
     @Test
     @DisplayName("API succeeds with entries, some HC writes succeed returns Success with partial count")
     fun partialHcWriteSuccess() = runTest {
-        val today = LocalDate.now()
+        val today = LocalDate.now(clock)
         val yesterday = today.minusDays(1)
         configureSettings(lastSyncedDate = yesterday.minusDays(1).format(DateTimeFormatter.ISO_LOCAL_DATE))
 
         val todayStr = today.format(DateTimeFormatter.ISO_LOCAL_DATE)
         val yesterdayStr = yesterday.format(DateTimeFormatter.ISO_LOCAL_DATE)
 
-        coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } returns Result.success(FoodLogResult.Data(listOf(testEntry)))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), todayStr) } returns Result.success(FoodLogResult.Data(listOf(testEntry), "\"etag-today\""))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), yesterdayStr) } returns Result.success(FoodLogResult.Data(listOf(testEntry), "\"etag-yesterday\""))
         coEvery { nutritionRepository.writeNutritionRecords(todayStr, any()) } returns true
         coEvery { nutritionRepository.writeNutritionRecords(yesterdayStr, any()) } returns false
 
@@ -333,13 +357,17 @@ class SyncNutritionUseCaseTest {
         // Partial success — some records written
         assertTrue(result is SyncResult.Success)
         assertEquals(1, (result as SyncResult.Success).recordsSynced)
+        // Yesterday's write failed: its ETag is not kept and lastSyncedDate does not move past it
+        coVerify(exactly = 0) { settingsRepository.setETag(yesterdayStr, any()) }
+        coVerify(exactly = 1) { settingsRepository.setETag(todayStr, "\"etag-today\"") }
+        coVerify(exactly = 0) { settingsRepository.setLastSyncedDate(any()) }
     }
 
     @Test
     @DisplayName("invoke sets lastSyncTimestamp on successful sync")
     fun invokeSetsLastSyncTimestampOnSuccess() = runTest {
-        val today = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE)
-        configureSettings(lastSyncedDate = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE))
+        val today = LocalDate.now(clock).format(DateTimeFormatter.ISO_LOCAL_DATE)
+        configureSettings(lastSyncedDate = LocalDate.now(clock).format(DateTimeFormatter.ISO_LOCAL_DATE))
         coEvery { foodLogRepository.getFoodLog(any(), any(), today) } returns Result.success(FoodLogResult.Data(listOf(testEntry)))
         coEvery { nutritionRepository.writeNutritionRecords(today, any()) } returns true
 
@@ -351,7 +379,7 @@ class SyncNutritionUseCaseTest {
     @Test
     @DisplayName("invoke does not set lastSyncTimestamp when all days fail")
     fun invokeDoesNotSetLastSyncTimestampOnError() = runTest {
-        configureSettings(lastSyncedDate = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE))
+        configureSettings(lastSyncedDate = LocalDate.now(clock).format(DateTimeFormatter.ISO_LOCAL_DATE))
         coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } returns Result.failure(Exception("fail"))
 
         useCase.invoke()
@@ -364,7 +392,7 @@ class SyncNutritionUseCaseTest {
     fun malformedLastSyncedDateFallsBack() = runTest {
         // A corrupt date string that cannot be parsed as ISO_LOCAL_DATE
         configureSettings(lastSyncedDate = "not-a-date")
-        val today = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE)
+        val today = LocalDate.now(clock).format(DateTimeFormatter.ISO_LOCAL_DATE)
 
         // API returns empty list so we get a clean Success(0) result
         coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } returns Result.success(FoodLogResult.Data(emptyList()))
@@ -406,7 +434,7 @@ class SyncNutritionUseCaseTest {
     @Test
     @DisplayName("all API calls succeed but all HC writes fail: setLastSyncTimestamp NOT called")
     fun allHcWritesFailDoesNotSetTimestamp() = runTest {
-        val today = LocalDate.now()
+        val today = LocalDate.now(clock)
         val yesterday = today.minusDays(1)
         configureSettings(lastSyncedDate = yesterday.minusDays(1).format(DateTimeFormatter.ISO_LOCAL_DATE))
 
@@ -422,14 +450,15 @@ class SyncNutritionUseCaseTest {
     @Test
     @DisplayName("some HC writes succeed (totalRecordsSynced > 0): setLastSyncTimestamp IS called")
     fun someHcWritesSucceedSetsTimestamp() = runTest {
-        val today = LocalDate.now()
+        val today = LocalDate.now(clock)
         val yesterday = today.minusDays(1)
         configureSettings(lastSyncedDate = yesterday.minusDays(1).format(DateTimeFormatter.ISO_LOCAL_DATE))
 
         val todayStr = today.format(DateTimeFormatter.ISO_LOCAL_DATE)
         val yesterdayStr = yesterday.format(DateTimeFormatter.ISO_LOCAL_DATE)
 
-        coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } returns Result.success(FoodLogResult.Data(listOf(testEntry)))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), todayStr) } returns Result.success(FoodLogResult.Data(listOf(testEntry), "\"etag-today\""))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), yesterdayStr) } returns Result.success(FoodLogResult.Data(listOf(testEntry), "\"etag-yesterday\""))
         coEvery { nutritionRepository.writeNutritionRecords(todayStr, any()) } returns true
         coEvery { nutritionRepository.writeNutritionRecords(yesterdayStr, any()) } returns false
 
@@ -444,7 +473,7 @@ class SyncNutritionUseCaseTest {
     @Test
     @DisplayName("invoke persists last 3 meals sorted by date descending then time descending")
     fun persistsLast3MealsSortedByDateThenTime() = runTest {
-        val today = LocalDate.now()
+        val today = LocalDate.now(clock)
         val yesterday = today.minusDays(1)
         configureSettings(lastSyncedDate = today.minusDays(2).format(DateTimeFormatter.ISO_LOCAL_DATE))
 
@@ -478,7 +507,7 @@ class SyncNutritionUseCaseTest {
     @Test
     @DisplayName("invoke persists fewer than 3 meals when fewer were synced")
     fun persistsFewerThan3MealsWhenFewerSynced() = runTest {
-        val today = LocalDate.now()
+        val today = LocalDate.now(clock)
         val todayStr = today.format(DateTimeFormatter.ISO_LOCAL_DATE)
         configureSettings(lastSyncedDate = today.format(DateTimeFormatter.ISO_LOCAL_DATE))
 
@@ -499,7 +528,7 @@ class SyncNutritionUseCaseTest {
     @Test
     @DisplayName("invoke does not call setLastSyncedMeals when no records synced")
     fun doesNotSetMealsWhenNoRecordsSynced() = runTest {
-        val today = LocalDate.now()
+        val today = LocalDate.now(clock)
         val todayStr = today.format(DateTimeFormatter.ISO_LOCAL_DATE)
         configureSettings(lastSyncedDate = today.format(DateTimeFormatter.ISO_LOCAL_DATE))
 
@@ -513,7 +542,7 @@ class SyncNutritionUseCaseTest {
     @Test
     @DisplayName("invoke maps FoodLogEntry to SyncedMealSummary correctly")
     fun mapsFoodLogEntryToSyncedMealSummaryCorrectly() = runTest {
-        val today = LocalDate.now()
+        val today = LocalDate.now(clock)
         val todayStr = today.format(DateTimeFormatter.ISO_LOCAL_DATE)
         configureSettings(lastSyncedDate = today.format(DateTimeFormatter.ISO_LOCAL_DATE))
 
@@ -544,22 +573,22 @@ class SyncNutritionUseCaseTest {
     @Test
     @DisplayName("NotModified for today skips HC write, returns Success with 0 records and 1 day")
     fun notModifiedForTodaySkipsHcWrite() = runTest {
-        val todayStr = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE)
-        configureSettings(lastSyncedDate = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE))
+        val todayStr = LocalDate.now(clock).format(DateTimeFormatter.ISO_LOCAL_DATE)
+        configureSettings(lastSyncedDate = LocalDate.now(clock).format(DateTimeFormatter.ISO_LOCAL_DATE))
         coEvery { foodLogRepository.getFoodLog(any(), any(), todayStr) } returns Result.success(FoodLogResult.NotModified)
 
         val result = useCase.invoke()
 
         assertTrue(result is SyncResult.Success)
         assertEquals(0, (result as SyncResult.Success).recordsSynced)
-        assertEquals(1, result.daysProcessed)
+        assertEquals(8, result.daysProcessed)
         coVerify(exactly = 0) { nutritionRepository.writeNutritionRecords(any(), any()) }
     }
 
     @Test
     @DisplayName("NotModified for a past date counts as successful in contiguous watermark")
     fun notModifiedCountsAsSuccessfulInContiguousWatermark() = runTest {
-        val today = LocalDate.now()
+        val today = LocalDate.now(clock)
         val day1 = today.minusDays(1)
         val day2 = today.minusDays(2) // middle — NotModified
         val day3 = today.minusDays(3) // oldest
@@ -585,7 +614,7 @@ class SyncNutritionUseCaseTest {
     @Test
     @DisplayName("mix of Data and NotModified: HC write called only for Data dates")
     fun mixedDataAndNotModified() = runTest {
-        val today = LocalDate.now()
+        val today = LocalDate.now(clock)
         val yesterday = today.minusDays(1)
         configureSettings(lastSyncedDate = today.minusDays(2).format(DateTimeFormatter.ISO_LOCAL_DATE))
 
@@ -608,7 +637,7 @@ class SyncNutritionUseCaseTest {
     @Test
     @DisplayName("all dates return NotModified: setLastSyncedMeals is NOT called")
     fun allNotModifiedPreservesExistingMeals() = runTest {
-        val today = LocalDate.now()
+        val today = LocalDate.now(clock)
         val yesterday = today.minusDays(1)
         configureSettings(lastSyncedDate = today.minusDays(2).format(DateTimeFormatter.ISO_LOCAL_DATE))
 
@@ -625,7 +654,7 @@ class SyncNutritionUseCaseTest {
     @DisplayName("5 consecutive API failures aborts the sync loop — getFoodLog called exactly 5 times")
     fun fiveConsecutiveFailuresAborts() = runTest {
         // Setup: 10 dates to sync (today + 9 past days), all fail
-        val today = LocalDate.now()
+        val today = LocalDate.now(clock)
         configureSettings(lastSyncedDate = today.minusDays(10).format(DateTimeFormatter.ISO_LOCAL_DATE))
 
         coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } returns Result.failure(Exception("503"))
@@ -639,7 +668,7 @@ class SyncNutritionUseCaseTest {
     @Test
     @DisplayName("success after 4 consecutive failures resets counter — sync continues through all dates")
     fun successAfter4FailuresResets() = runTest {
-        val today = LocalDate.now()
+        val today = LocalDate.now(clock)
         // 6 dates: today + 5 past days
         configureSettings(lastSyncedDate = today.minusDays(6).format(DateTimeFormatter.ISO_LOCAL_DATE))
 
@@ -657,14 +686,15 @@ class SyncNutritionUseCaseTest {
 
         useCase.invoke()
 
-        // All 6 dates should be processed (4 fail + success resets counter + remaining succeed)
-        coVerify(exactly = 6) { foodLogRepository.getFoodLog(any(), any(), any()) }
+        // All 8 dates (today-6 widened to the 7-day re-check window) should be processed
+        // (4 fail + success resets counter + remaining succeed)
+        coVerify(exactly = 8) { foodLogRepository.getFoodLog(any(), any(), any()) }
     }
 
     @Test
     @DisplayName("intermittent failures (fail, succeed, fail, succeed) never trigger abort")
     fun intermittentFailuresNeverAbort() = runTest {
-        val today = LocalDate.now()
+        val today = LocalDate.now(clock)
         // 8 dates: today + 7 past days
         configureSettings(lastSyncedDate = today.minusDays(8).format(DateTimeFormatter.ISO_LOCAL_DATE))
 
@@ -688,7 +718,7 @@ class SyncNutritionUseCaseTest {
     @Test
     @DisplayName("abort with no prior successes returns SyncResult.Error")
     fun abortWithNoSuccessesReturnsError() = runTest {
-        val today = LocalDate.now()
+        val today = LocalDate.now(clock)
         configureSettings(lastSyncedDate = today.minusDays(10).format(DateTimeFormatter.ISO_LOCAL_DATE))
 
         coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } returns Result.failure(Exception("503"))
@@ -701,7 +731,7 @@ class SyncNutritionUseCaseTest {
     @Test
     @DisplayName("abort with some prior successes returns SyncResult.Success with partial count")
     fun abortWithSomeSuccessesReturnsPartialSuccess() = runTest {
-        val today = LocalDate.now()
+        val today = LocalDate.now(clock)
         // 10 dates: today + 9 past days
         configureSettings(lastSyncedDate = today.minusDays(10).format(DateTimeFormatter.ISO_LOCAL_DATE))
 
@@ -729,7 +759,7 @@ class SyncNutritionUseCaseTest {
     @DisplayName("existing apiErrorContinues test still passes — single failure does not abort")
     fun singleFailureDoesNotAbort() = runTest {
         // This is conceptually the same as apiErrorContinues but explicit about abort
-        val today = LocalDate.now()
+        val today = LocalDate.now(clock)
         val yesterday = today.minusDays(1)
         configureSettings(lastSyncedDate = yesterday.minusDays(1).format(DateTimeFormatter.ISO_LOCAL_DATE))
 
@@ -742,8 +772,8 @@ class SyncNutritionUseCaseTest {
 
         val result = useCase.invoke()
 
-        // Both dates should be called — single failure doesn't abort
-        coVerify(exactly = 2) { foodLogRepository.getFoodLog(any(), any(), any()) }
+        // All dates (today + 7-day re-check window) should be called — single failure doesn't abort
+        coVerify(exactly = 8) { foodLogRepository.getFoodLog(any(), any(), any()) }
         assertTrue(result is SyncResult.Success)
     }
 
@@ -752,7 +782,7 @@ class SyncNutritionUseCaseTest {
     @Test
     @DisplayName("synced meal summaries include timestamp derived from entry date + time")
     fun syncedMealSummariesIncludeTimestamp() = runTest {
-        val today = LocalDate.now()
+        val today = LocalDate.now(clock)
         val todayStr = today.format(DateTimeFormatter.ISO_LOCAL_DATE)
         configureSettings(lastSyncedDate = today.format(DateTimeFormatter.ISO_LOCAL_DATE))
 
@@ -776,7 +806,7 @@ class SyncNutritionUseCaseTest {
     @Test
     @DisplayName("synced meal summaries with null time get timestamp at noon of the entry date")
     fun syncedMealSummariesWithNullTimeDefaultToNoon() = runTest {
-        val today = LocalDate.now()
+        val today = LocalDate.now(clock)
         val todayStr = today.format(DateTimeFormatter.ISO_LOCAL_DATE)
         configureSettings(lastSyncedDate = today.format(DateTimeFormatter.ISO_LOCAL_DATE))
 
@@ -800,7 +830,7 @@ class SyncNutritionUseCaseTest {
     @Test
     @DisplayName("some Data with entries, others NotModified: setLastSyncedMeals IS called with Data entries only")
     fun someDataSomeNotModifiedCallsSetMeals() = runTest {
-        val today = LocalDate.now()
+        val today = LocalDate.now(clock)
         val yesterday = today.minusDays(1)
         configureSettings(lastSyncedDate = today.minusDays(2).format(DateTimeFormatter.ISO_LOCAL_DATE))
 
@@ -822,5 +852,258 @@ class SyncNutritionUseCaseTest {
                 },
             )
         }
+    }
+
+    // --- ETag commit / HC write failure tests ---
+
+    @Test
+    @DisplayName("ETag is committed after a successful HC write")
+    fun etagCommittedAfterSuccessfulWrite() = runTest {
+        val todayStr = dateStr(LocalDate.now(clock))
+        configureSettings()
+        coEvery { foodLogRepository.getFoodLog(any(), any(), todayStr) } returns
+            Result.success(FoodLogResult.Data(listOf(testEntry), "\"e1\""))
+        coEvery { nutritionRepository.writeNutritionRecords(todayStr, any()) } returns true
+
+        useCase.invoke()
+
+        coVerifyOrder {
+            nutritionRepository.writeNutritionRecords(todayStr, any())
+            settingsRepository.setETag(todayStr, "\"e1\"")
+        }
+    }
+
+    @Test
+    @DisplayName("HC write failure: ETag not committed and the day is not counted as successful")
+    fun hcWriteFailureDoesNotCommitEtag() = runTest {
+        val today = LocalDate.now(clock)
+        val todayStr = dateStr(today)
+        val yesterdayStr = dateStr(today.minusDays(1))
+        // yesterday is unsynced
+        configureSettings(lastSyncedDate = dateStr(today.minusDays(2)))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), yesterdayStr) } returns
+            Result.success(FoodLogResult.Data(listOf(testEntry), "\"e-y\""))
+        coEvery { nutritionRepository.writeNutritionRecords(yesterdayStr, any()) } returns false
+
+        val result = useCase.invoke()
+
+        assertTrue(result is SyncResult.Error)
+        coVerify(exactly = 0) { settingsRepository.setETag(any(), any()) }
+        coVerify(exactly = 0) { settingsRepository.setLastSyncedDate(any()) }
+        coVerify(exactly = 0) { nutritionRepository.deleteStaleNutritionRecords(yesterdayStr, any()) }
+        coVerify(exactly = 0) { nutritionRepository.writeNutritionRecords(todayStr, any()) }
+    }
+
+    @Test
+    @DisplayName("Data with no ETag does not call setETag")
+    fun dataWithoutEtagDoesNotCommit() = runTest {
+        val todayStr = dateStr(LocalDate.now(clock))
+        configureSettings()
+        coEvery { foodLogRepository.getFoodLog(any(), any(), todayStr) } returns
+            Result.success(FoodLogResult.Data(listOf(testEntry)))
+        coEvery { nutritionRepository.writeNutritionRecords(todayStr, any()) } returns true
+
+        useCase.invoke()
+
+        coVerify(exactly = 0) { settingsRepository.setETag(any(), any()) }
+    }
+
+    @Test
+    @DisplayName("setETag throwing does not fail the sync")
+    fun setEtagFailureIsNonFatal() = runTest {
+        val todayStr = dateStr(LocalDate.now(clock))
+        configureSettings()
+        coEvery { settingsRepository.setETag(any(), any()) } throws IOException("disk full")
+        coEvery { foodLogRepository.getFoodLog(any(), any(), todayStr) } returns
+            Result.success(FoodLogResult.Data(listOf(testEntry), "\"e1\""))
+        coEvery { nutritionRepository.writeNutritionRecords(todayStr, any()) } returns true
+
+        val result = useCase.invoke()
+
+        assertTrue(result is SyncResult.Success)
+    }
+
+    // --- Stale record reconciliation tests ---
+
+    @Test
+    @DisplayName("successful write reconciles stale HC records with the fetched entries")
+    fun successfulWriteReconcilesStaleRecords() = runTest {
+        val todayStr = dateStr(LocalDate.now(clock))
+        configureSettings()
+        val entries = listOf(testEntry, testEntry.copy(id = 2))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), todayStr) } returns
+            Result.success(FoodLogResult.Data(entries, "\"e1\""))
+        coEvery { nutritionRepository.writeNutritionRecords(todayStr, any()) } returns true
+
+        useCase.invoke()
+
+        coVerifyOrder {
+            nutritionRepository.writeNutritionRecords(todayStr, entries)
+            nutritionRepository.deleteStaleNutritionRecords(todayStr, entries)
+        }
+    }
+
+    @Test
+    @DisplayName("empty Data (all meals deleted on server) reconciles with an empty list and commits ETag")
+    fun emptyDataReconcilesAndCommitsEtag() = runTest {
+        val todayStr = dateStr(LocalDate.now(clock))
+        configureSettings()
+        coEvery { foodLogRepository.getFoodLog(any(), any(), todayStr) } returns
+            Result.success(FoodLogResult.Data(emptyList(), "\"empty\""))
+
+        useCase.invoke()
+
+        coVerify(exactly = 1) { nutritionRepository.deleteStaleNutritionRecords(todayStr, emptyList()) }
+        coVerify(exactly = 1) { settingsRepository.setETag(todayStr, "\"empty\"") }
+    }
+
+    @Test
+    @DisplayName("NotModified and API errors never reconcile (never delete because the API failed)")
+    fun notModifiedOrApiErrorDoesNotReconcile() = runTest {
+        val today = LocalDate.now(clock)
+        configureSettings()
+        coEvery { foodLogRepository.getFoodLog(any(), any(), dateStr(today)) } returns
+            Result.failure(IOException("network"))
+
+        useCase.invoke()
+
+        coVerify(exactly = 0) { nutritionRepository.deleteStaleNutritionRecords(any(), any()) }
+    }
+
+    @Test
+    @DisplayName("reconcile failure is logged but the day still counts and its ETag is committed")
+    fun reconcileFailureIsNonFatal() = runTest {
+        val todayStr = dateStr(LocalDate.now(clock))
+        configureSettings()
+        coEvery { foodLogRepository.getFoodLog(any(), any(), todayStr) } returns
+            Result.success(FoodLogResult.Data(listOf(testEntry), "\"e1\""))
+        coEvery { nutritionRepository.writeNutritionRecords(todayStr, any()) } returns true
+        coEvery { nutritionRepository.deleteStaleNutritionRecords(todayStr, any()) } returns false
+
+        val result = useCase.invoke()
+
+        assertTrue(result is SyncResult.Success)
+        assertEquals(1, (result as SyncResult.Success).recordsSynced)
+        coVerify(exactly = 1) { settingsRepository.setETag(todayStr, "\"e1\"") }
+    }
+
+    // --- Re-check window tests ---
+
+    @Test
+    @DisplayName("meals added to an already-synced past day within the window are synced")
+    fun recheckWindowPicksUpLateEdits() = runTest {
+        val today = LocalDate.now(clock)
+        val threeDaysAgo = dateStr(today.minusDays(3))
+        configureSettings(lastSyncedDate = dateStr(today.minusDays(1)))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), threeDaysAgo) } returns
+            Result.success(FoodLogResult.Data(listOf(testEntry), "\"new\""))
+        coEvery { nutritionRepository.writeNutritionRecords(threeDaysAgo, any()) } returns true
+
+        val result = useCase.invoke()
+
+        assertTrue(result is SyncResult.Success)
+        coVerify(exactly = 1) { nutritionRepository.writeNutritionRecords(threeDaysAgo, any()) }
+        // Re-checked days at/before the watermark never move it
+        coVerify(exactly = 0) { settingsRepository.setLastSyncedDate(any()) }
+    }
+
+    @Test
+    @DisplayName("failure on an already-synced re-check day does not block advancing the watermark")
+    fun recheckFailureDoesNotBlockWatermark() = runTest {
+        val today = LocalDate.now(clock)
+        val yesterdayStr = dateStr(today.minusDays(1))
+        configureSettings(lastSyncedDate = dateStr(today.minusDays(2)))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), dateStr(today.minusDays(5))) } returns
+            Result.failure(IOException("transient"))
+
+        useCase.invoke()
+
+        coVerify(exactly = 1) { settingsRepository.setLastSyncedDate(yesterdayStr) }
+    }
+
+    // --- Backfill ordering / checkpoint tests ---
+
+    @Test
+    @DisplayName("fetches today first, then past dates oldest to newest")
+    fun fetchOrderTodayThenOldestFirst() = runTest {
+        val today = LocalDate.now(clock)
+        configureSettings(lastSyncedDate = dateStr(today.minusDays(10)))
+        val fetched = mutableListOf<String>()
+        coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } answers {
+            fetched.add(thirdArg())
+            Result.success(FoodLogResult.NotModified)
+        }
+
+        useCase.invoke()
+
+        val expected = listOf(dateStr(today)) + (9 downTo 1).map { dateStr(today.minusDays(it.toLong())) }
+        assertEquals(expected, fetched)
+    }
+
+    @Test
+    @DisplayName("lastSyncedDate is checkpointed per day, so an interrupted backfill keeps its progress")
+    fun interruptedBackfillKeepsCheckpoint() = runTest {
+        val today = LocalDate.now(clock)
+        configureSettings(lastSyncedDate = dateStr(today.minusDays(10)))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), dateStr(today.minusDays(5))) } throws
+            CancellationException("worker stopped")
+
+        assertFailsWith<CancellationException> { useCase.invoke() }
+
+        coVerifyOrder {
+            settingsRepository.setLastSyncedDate(dateStr(today.minusDays(9)))
+            settingsRepository.setLastSyncedDate(dateStr(today.minusDays(8)))
+            settingsRepository.setLastSyncedDate(dateStr(today.minusDays(7)))
+            settingsRepository.setLastSyncedDate(dateStr(today.minusDays(6)))
+        }
+        coVerify(exactly = 0) { settingsRepository.setLastSyncedDate(dateStr(today.minusDays(5))) }
+    }
+
+    @Test
+    @DisplayName("setLastSyncedDate throwing does not escape invoke")
+    fun setLastSyncedDateFailureIsNonFatal() = runTest {
+        val today = LocalDate.now(clock)
+        configureSettings(lastSyncedDate = dateStr(today.minusDays(2)))
+        coEvery { settingsRepository.setLastSyncedDate(any()) } throws IOException("DataStore write failed")
+
+        val result = useCase.invoke()
+
+        assertTrue(result is SyncResult.Success)
+        coVerify { settingsRepository.setLastSyncTimestamp(any()) }
+    }
+
+    // --- lastSyncTimestamp tests ---
+
+    @Test
+    @DisplayName("successful sync with no new meals (all 304) still updates lastSyncTimestamp")
+    fun successWithNoNewMealsSetsTimestamp() = runTest {
+        configureSettings()
+
+        val result = useCase.invoke()
+
+        assertTrue(result is SyncResult.Success)
+        coVerify(exactly = 1) { settingsRepository.setLastSyncTimestamp(clock.millis()) }
+    }
+
+    @Test
+    @DisplayName("CancellationException from setLastSyncTimestamp propagates")
+    fun cancellationFromTimestampWritePropagates() = runTest {
+        configureSettings()
+        coEvery { settingsRepository.setLastSyncTimestamp(any()) } throws CancellationException("cancelled")
+
+        assertFailsWith<CancellationException> { useCase.invoke() }
+    }
+
+    @Test
+    @DisplayName("CancellationException from setLastSyncedMeals propagates")
+    fun cancellationFromMealsWritePropagates() = runTest {
+        val todayStr = dateStr(LocalDate.now(clock))
+        configureSettings()
+        coEvery { foodLogRepository.getFoodLog(any(), any(), todayStr) } returns
+            Result.success(FoodLogResult.Data(listOf(testEntry)))
+        coEvery { nutritionRepository.writeNutritionRecords(todayStr, any()) } returns true
+        coEvery { settingsRepository.setLastSyncedMeals(any()) } throws CancellationException("cancelled")
+
+        assertFailsWith<CancellationException> { useCase.invoke() }
     }
 }

@@ -14,18 +14,26 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import timber.log.Timber
+import java.time.Clock
 import java.time.LocalDate
 import java.time.LocalTime
-import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 import javax.inject.Inject
 
-class SyncNutritionUseCase @Inject constructor(
+class SyncNutritionUseCase internal constructor(
     private val foodLogRepository: FoodLogRepository,
     private val nutritionRepository: NutritionRepository,
     private val settingsRepository: SettingsRepository,
+    private val clock: Clock,
 ) {
+    @Inject
+    constructor(
+        foodLogRepository: FoodLogRepository,
+        nutritionRepository: NutritionRepository,
+        settingsRepository: SettingsRepository,
+    ) : this(foodLogRepository, nutritionRepository, settingsRepository, Clock.systemDefaultZone())
+
     suspend fun invoke(onProgress: (SyncProgress) -> Unit = {}): SyncResult {
         val apiKey: String
         val baseUrl: String
@@ -44,16 +52,25 @@ class SyncNutritionUseCase @Inject constructor(
             return SyncResult.Error(e.message ?: "Failed to read settings")
         }
 
-        val today = LocalDate.now()
-        val maxPastDate = today.minusDays(365)
-        val startDate = parseSyncStartDate(lastSyncedDate, maxPastDate)
+        val today = LocalDate.now(clock)
+        val maxPastDate = today.minusDays(MAX_PAST_DAYS)
+        // Always re-check a trailing window so meals added/edited/deleted on a past day after its
+        // first fetch still reach Health Connect. Unchanged days are cheap 304s thanks to the
+        // stored ETags (the window fits inside the ETag retention period).
+        val startDate = minOf(
+            parseSyncStartDate(lastSyncedDate, maxPastDate),
+            today.minusDays(RECHECK_WINDOW_DAYS),
+        )
+        // Watermark: every past date up to and including it has been synced at least once.
+        var watermark = parseLastSyncedDate(lastSyncedDate)
 
-        // Build date list: today first (always re-sync), then backwards
+        // Today first (what the user cares about most), then past dates oldest → newest so the
+        // watermark can be checkpointed after every day and an interrupted backfill resumes.
         val dates = mutableListOf(today)
-        var d = today.minusDays(1)
-        while (!d.isBefore(startDate)) {
+        var d = startDate
+        while (d.isBefore(today)) {
             dates.add(d)
-            d = d.minusDays(1)
+            d = d.plusDays(1)
         }
 
         val totalDays = dates.size
@@ -68,67 +85,81 @@ class SyncNutritionUseCase @Inject constructor(
         var totalRecordsSynced = 0
         var totalEntriesFetched = 0
         var successfulDays = 0
-        // Track per-date success for contiguous lastSyncedDate calculation
-        val pastDateResults = mutableMapOf<LocalDate, Boolean>()
+        // Once an unsynced past date fails, the watermark must not advance past it
+        var gapSeen = false
         // Accumulate synced entries with their date for meal summary
         val syncedEntries = mutableListOf<Pair<String, FoodLogEntry>>()
         // Consecutive failure tracking for abort/backoff
         var consecutiveFailures = 0
-        var currentDelay = 500L
+        var currentDelay = INITIAL_DELAY_MS
         var lastErrorMessage: String? = null
 
         for (date in dates) {
             val dateStr = date.format(DateTimeFormatter.ISO_LOCAL_DATE)
             val result = foodLogRepository.getFoodLog(baseUrl, apiKey, dateStr)
 
-            if (result.isSuccess) {
+            val dayOk = if (result.isSuccess) {
                 when (val foodLogResult = result.getOrThrow()) {
                     is FoodLogResult.Data -> {
                         val entries = foodLogResult.entries
-                        if (entries.isNotEmpty()) {
+                        val written = if (entries.isNotEmpty()) {
                             totalEntriesFetched += entries.size
-                            val written = nutritionRepository.writeNutritionRecords(dateStr, entries)
-                            if (written) {
+                            nutritionRepository.writeNutritionRecords(dateStr, entries)
+                        } else {
+                            true
+                        }
+                        if (written) {
+                            if (entries.isNotEmpty()) {
                                 totalRecordsSynced += entries.size
                                 entries.forEach { entry -> syncedEntries.add(Pair(dateStr, entry)) }
                                 Timber.d("SyncNutrition: %s → wrote %d entries to HC", dateStr, entries.size)
                             } else {
-                                Timber.w("SyncNutrition: %s → HC write failed for %d entries", dateStr, entries.size)
+                                Timber.d("SyncNutrition: %s → no entries from API", dateStr)
                             }
+                            // Remove records for entries deleted/moved on the server. Best effort:
+                            // a failure here does not fail the day (it would otherwise re-download
+                            // and re-insert the day on every run if HC reads keep failing).
+                            if (!nutritionRepository.deleteStaleNutritionRecords(dateStr, entries)) {
+                                Timber.w("SyncNutrition: %s → failed to remove stale HC records", dateStr)
+                            }
+                            // Commit the ETag only now that the day is in Health Connect, so a
+                            // failed write is re-fetched (not 304'd) on the next sync.
+                            foodLogResult.etag?.let { commitETag(dateStr, it) }
+                            true
                         } else {
-                            Timber.d("SyncNutrition: %s → no entries from API", dateStr)
+                            lastErrorMessage = HC_WRITE_FAILED_MESSAGE
+                            Timber.w("SyncNutrition: %s → HC write failed for %d entries", dateStr, entries.size)
+                            false
                         }
-                        Unit
                     }
                     is FoodLogResult.NotModified -> {
                         Timber.d("SyncNutrition: %s → ETag match, skipping HC write", dateStr)
+                        true
                     }
-                }.let {}
-                successfulDays++
-                consecutiveFailures = 0
-                currentDelay = 500L
-                if (date != today) {
-                    pastDateResults[date] = true
                 }
             } else {
                 lastErrorMessage = result.exceptionOrNull()?.message
                 Timber.w("SyncNutrition: %s → API error: %s", dateStr, lastErrorMessage)
+                false
+            }
+
+            if (dayOk) {
+                successfulDays++
+                consecutiveFailures = 0
+                currentDelay = INITIAL_DELAY_MS
+            } else {
                 consecutiveFailures++
-                if (date != today) {
-                    pastDateResults[date] = false
-                }
-                if (consecutiveFailures >= 5) {
-                    Timber.w("SyncNutrition: aborting after %d consecutive API failures", consecutiveFailures)
-                    completedDays++
-                    onProgress(
-                        SyncProgress(
-                            currentDate = dateStr,
-                            totalDays = totalDays,
-                            completedDays = completedDays,
-                            recordsSynced = totalRecordsSynced,
-                        ),
-                    )
-                    break
+            }
+
+            // Checkpoint the watermark after each contiguous unsynced past date succeeds.
+            // Re-checked dates at or before the watermark neither advance nor block it.
+            val currentWatermark = watermark
+            if (date != today && (currentWatermark == null || date.isAfter(currentWatermark))) {
+                if (!dayOk) {
+                    gapSeen = true
+                } else if (!gapSeen) {
+                    saveLastSyncedDate(dateStr)
+                    watermark = date
                 }
             }
 
@@ -142,32 +173,33 @@ class SyncNutritionUseCase @Inject constructor(
                 ),
             )
 
+            if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+                Timber.w("SyncNutrition: aborting after %d consecutive failures", consecutiveFailures)
+                break
+            }
+
             // Rate limit with exponential backoff on consecutive failures
             if (completedDays < totalDays) {
                 delay(currentDelay)
                 if (consecutiveFailures > 0) {
-                    currentDelay = min(currentDelay * 2, 8000L)
+                    currentDelay = min(currentDelay * 2, MAX_DELAY_MS)
                 }
             }
         }
 
-        // Persist lastSyncedDate: find newest contiguous successful date from oldest end
-        val pastDates = pastDateResults.keys.sorted() // oldest first
-        var contiguousEnd: LocalDate? = null
-        for (date in pastDates) {
-            if (pastDateResults[date] == true) {
-                contiguousEnd = date
-            } else {
-                break // gap found — stop advancing
-            }
-        }
-        if (contiguousEnd != null) {
-            settingsRepository.setLastSyncedDate(contiguousEnd.format(DateTimeFormatter.ISO_LOCAL_DATE))
+        val syncResult = when {
+            successfulDays == 0 -> SyncResult.Error(lastErrorMessage ?: "Sync failed")
+            totalEntriesFetched > 0 && totalRecordsSynced == 0 ->
+                SyncResult.Error(HC_WRITE_FAILED_MESSAGE)
+            else -> SyncResult.Success(totalRecordsSynced, successfulDays)
         }
 
-        if (totalRecordsSynced > 0) {
+        // "Last synced" reflects the last healthy sync, even when it brought no new meals
+        if (syncResult is SyncResult.Success) {
             try {
-                settingsRepository.setLastSyncTimestamp(System.currentTimeMillis())
+                settingsRepository.setLastSyncTimestamp(clock.millis())
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Timber.w(e, "Failed to save last sync timestamp")
             }
@@ -190,7 +222,7 @@ class SyncNutritionUseCase @Inject constructor(
                         } catch (_: DateTimeParseException) {
                             LocalTime.NOON
                         }
-                        val timestamp = date.atTime(time).atZone(ZoneId.systemDefault()).toInstant()
+                        val timestamp = date.atTime(time).atZone(clock.zone).toInstant()
                         SyncedMealSummary(
                             foodName = entry.foodName,
                             mealType = entry.mealType,
@@ -199,17 +231,13 @@ class SyncNutritionUseCase @Inject constructor(
                         )
                     }
                 settingsRepository.setLastSyncedMeals(summaries)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Timber.w(e, "Failed to persist synced meal summaries")
             }
         }
 
-        val syncResult = when {
-            successfulDays == 0 -> SyncResult.Error(lastErrorMessage ?: "Sync failed")
-            totalEntriesFetched > 0 && totalRecordsSynced == 0 ->
-                SyncResult.Error("Failed to write records to Health Connect")
-            else -> SyncResult.Success(totalRecordsSynced, successfulDays)
-        }
         Timber.d(
             "SyncNutrition: finished — %d/%d days ok, %d entries fetched, %d records written, result=%s",
             successfulDays,
@@ -221,15 +249,48 @@ class SyncNutritionUseCase @Inject constructor(
         return syncResult
     }
 
-    private fun parseSyncStartDate(lastSyncedDate: String, maxPastDate: LocalDate): LocalDate {
-        if (lastSyncedDate.isEmpty()) return maxPastDate
-        return try {
-            val lastDate = LocalDate.parse(lastSyncedDate, DateTimeFormatter.ISO_LOCAL_DATE)
-            val nextDate = lastDate.plusDays(1)
-            if (nextDate.isAfter(maxPastDate)) nextDate else maxPastDate
-        } catch (e: DateTimeParseException) {
-            // Corrupt date in DataStore — treat as unsynced and do a full re-sync from maxPastDate
-            maxPastDate
+    private suspend fun commitETag(date: String, etag: String) {
+        try {
+            settingsRepository.setETag(date, etag)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to persist ETag for %s, will re-fetch next sync", date)
         }
+    }
+
+    private suspend fun saveLastSyncedDate(date: String) {
+        try {
+            settingsRepository.setLastSyncedDate(date)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to save lastSyncedDate %s", date)
+        }
+    }
+
+    private fun parseLastSyncedDate(lastSyncedDate: String): LocalDate? {
+        if (lastSyncedDate.isEmpty()) return null
+        return try {
+            LocalDate.parse(lastSyncedDate, DateTimeFormatter.ISO_LOCAL_DATE)
+        } catch (e: DateTimeParseException) {
+            null
+        }
+    }
+
+    private fun parseSyncStartDate(lastSyncedDate: String, maxPastDate: LocalDate): LocalDate {
+        // Corrupt or missing date in DataStore — treat as unsynced and do a full re-sync from maxPastDate
+        val lastDate = parseLastSyncedDate(lastSyncedDate) ?: return maxPastDate
+        val nextDate = lastDate.plusDays(1)
+        return if (nextDate.isAfter(maxPastDate)) nextDate else maxPastDate
+    }
+
+    private companion object {
+        const val MAX_PAST_DAYS = 365L
+        const val RECHECK_WINDOW_DAYS = 7L
+        const val MAX_CONSECUTIVE_FAILURES = 5
+        const val INITIAL_DELAY_MS = 500L
+        const val MAX_DELAY_MS = 8000L
+        const val HC_WRITE_FAILED_MESSAGE = "Failed to write records to Health Connect"
     }
 }

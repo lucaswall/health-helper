@@ -14,6 +14,11 @@ import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.time.format.DateTimeParseException
 
+/** Prefix of the Health Connect clientRecordId of every nutrition record synced from Food Scanner. */
+const val FOOD_SCANNER_CLIENT_ID_PREFIX = "foodscanner-"
+
+fun foodScannerClientRecordId(entryId: Int): String = "$FOOD_SCANNER_CLIENT_ID_PREFIX$entryId"
+
 fun mapToNutritionRecord(entry: FoodLogEntry, date: String): NutritionRecord {
     val localDate = LocalDate.parse(date)
     val localTime = if (entry.time != null) {
@@ -66,7 +71,7 @@ fun mapToNutritionRecord(entry: FoodLogEntry, date: String): NutritionRecord {
         energyFromFat = entry.caloriesFromFat?.let { Energy.kilocalories(it) },
         mealType = mealTypeInt,
         metadata = Metadata.manualEntry(
-            clientRecordId = "foodscanner-${entry.id}",
+            clientRecordId = foodScannerClientRecordId(entry.id),
         ),
     )
 }

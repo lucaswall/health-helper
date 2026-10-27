@@ -4,6 +4,7 @@ import com.healthhelper.app.data.api.FoodScannerApiClient
 import com.healthhelper.app.domain.model.FoodLogResult
 import com.healthhelper.app.domain.repository.FoodLogRepository
 import com.healthhelper.app.domain.repository.SettingsRepository
+import kotlin.coroutines.cancellation.CancellationException
 import timber.log.Timber
 import javax.inject.Inject
 
@@ -19,6 +20,8 @@ class FoodScannerFoodLogRepository @Inject constructor(
     ): Result<FoodLogResult> {
         val etag = try {
             settingsRepository.getETag(date)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Timber.w(e, "Failed to read ETag for %s, proceeding without", date)
             null
@@ -36,14 +39,9 @@ class FoodScannerFoodLogRepository @Inject constructor(
                     apiResponse.entries.size,
                     apiResponse.etag ?: "(none)",
                 )
-                if (apiResponse.etag != null) {
-                    try {
-                        settingsRepository.setETag(date, apiResponse.etag)
-                    } catch (e: Exception) {
-                        Timber.w(e, "Failed to persist ETag for %s, will re-fetch next sync", date)
-                    }
-                }
-                FoodLogResult.Data(apiResponse.entries)
+                // The ETag is NOT persisted here: the caller commits it only after the entries
+                // are in Health Connect, so a failed write is re-fetched on the next sync.
+                FoodLogResult.Data(apiResponse.entries, apiResponse.etag)
             }
         }
     }

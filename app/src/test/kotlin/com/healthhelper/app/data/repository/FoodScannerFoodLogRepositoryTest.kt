@@ -13,7 +13,10 @@ import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class FoodScannerFoodLogRepositoryTest {
@@ -88,25 +91,38 @@ class FoodScannerFoodLogRepositoryTest {
     }
 
     @Test
-    @DisplayName("new ETag from API response is stored via setETag")
-    fun newEtagStoredViaSetETag() = runTest {
+    @DisplayName("new ETag from API response is returned in Data but NOT persisted (caller commits after HC write)")
+    fun newEtagReturnedNotPersisted() = runTest {
         val apiResponse = FoodLogApiResponse(listOf(testEntry), etag = "\"new_etag\"", notModified = false)
         coEvery { apiClient.getFoodLog(any(), any(), any(), any()) } returns Result.success(apiResponse)
 
-        repository.getFoodLog("https://api.example.com", "key", "2026-02-28")
+        val result = repository.getFoodLog("https://api.example.com", "key", "2026-02-28")
 
-        coVerify { settingsRepository.setETag("2026-02-28", "\"new_etag\"") }
+        assertEquals("\"new_etag\"", (result.getOrThrow() as FoodLogResult.Data).etag)
+        coVerify(exactly = 0) { settingsRepository.setETag(any(), any()) }
     }
 
     @Test
-    @DisplayName("null ETag from API response does NOT call setETag")
-    fun nullEtagDoesNotCallSetETag() = runTest {
+    @DisplayName("null ETag from API response yields Data with null etag")
+    fun nullEtagYieldsNullInData() = runTest {
         val apiResponse = FoodLogApiResponse(listOf(testEntry), etag = null, notModified = false)
         coEvery { apiClient.getFoodLog(any(), any(), any(), any()) } returns Result.success(apiResponse)
 
-        repository.getFoodLog("https://api.example.com", "key", "2026-02-28")
+        val result = repository.getFoodLog("https://api.example.com", "key", "2026-02-28")
 
+        assertNull((result.getOrThrow() as FoodLogResult.Data).etag)
         coVerify(exactly = 0) { settingsRepository.setETag(any(), any()) }
+    }
+
+    @Test
+    @DisplayName("CancellationException from getETag propagates instead of being swallowed")
+    fun getETagCancellationPropagates() = runTest {
+        coEvery { settingsRepository.getETag(any()) } throws CancellationException("cancelled")
+
+        assertFailsWith<CancellationException> {
+            repository.getFoodLog("https://api.example.com", "key", "2026-02-28")
+        }
+        coVerify(exactly = 0) { apiClient.getFoodLog(any(), any(), any(), any()) }
     }
 
     @Test
@@ -132,20 +148,5 @@ class FoodScannerFoodLogRepositoryTest {
         assertTrue(result.isSuccess)
         // API called with null etag (graceful degradation)
         coVerify { apiClient.getFoodLog(any(), any(), any(), null) }
-    }
-
-    @Test
-    @DisplayName("setETag failure does not prevent successful result (graceful degradation)")
-    fun setETagFailureDoesNotPreventSuccess() = runTest {
-        coEvery { settingsRepository.setETag(any(), any()) } throws RuntimeException("Disk full")
-        val apiResponse = FoodLogApiResponse(listOf(testEntry), etag = "\"new\"", notModified = false)
-        coEvery { apiClient.getFoodLog(any(), any(), any(), any()) } returns Result.success(apiResponse)
-
-        val result = repository.getFoodLog("https://api.example.com", "key", "2026-02-28")
-
-        assertTrue(result.isSuccess)
-        val data = result.getOrThrow()
-        assertTrue(data is FoodLogResult.Data)
-        assertEquals(1, (data as FoodLogResult.Data).entries.size)
     }
 }
