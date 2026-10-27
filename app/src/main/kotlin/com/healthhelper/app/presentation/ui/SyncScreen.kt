@@ -2,6 +2,7 @@ package com.healthhelper.app.presentation.ui
 
 import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -36,13 +37,20 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.PermissionController
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -53,6 +61,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.healthhelper.app.domain.model.HealthPermissions
 import com.healthhelper.app.presentation.viewmodel.SYNC_STATUS_NEVER_SYNCED
 import com.healthhelper.app.presentation.viewmodel.SyncViewModel
+import kotlinx.coroutines.launch
 import timber.log.Timber
 
 private fun humanReadablePermissionLabel(permission: String): String = when (permission) {
@@ -88,6 +97,15 @@ private fun openHealthConnectSettings(context: android.content.Context) {
     }
 }
 
+@Composable
+private fun SectionTitle(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.titleMedium,
+        modifier = Modifier.semantics { heading() },
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SyncScreen(
@@ -104,34 +122,26 @@ fun SyncScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    val snackbarScope = rememberCoroutineScope()
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     // Tracks whether we've auto-launched the HC permission sheet for the current missing set.
     // rememberSaveable survives rotation; ON_RESUME refreshes permissions and, if still missing
     // after the user returns from HC, we do NOT auto-prompt again — the banner shows a manual CTA.
     var autoRequestedFor by rememberSaveable { mutableStateOf<Set<String>>(emptySet()) }
+    // The set passed to the HC sheet that is currently showing (null when none). The result
+    // contract doesn't echo its input, so we remember it to evaluate the result correctly.
+    var pendingHcRequest by rememberSaveable { mutableStateOf<Set<String>?>(null) }
+    // Ask for POST_NOTIFICATIONS at most once per screen instance (survives navigation and rotation).
+    var notificationPermissionAsked by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(snackbarMessage) {
         if (snackbarMessage != null) {
-            snackbarHostState.showSnackbar(snackbarMessage)
+            // Consume first so leaving the screen mid-show can't replay the message, and show it
+            // in a scope that isn't tied to this effect's key.
             onSnackbarShown()
+            snackbarScope.launch { snackbarHostState.showSnackbar(snackbarMessage) }
         }
-    }
-
-    val permissionLauncher = rememberLauncherForActivityResult(
-        contract = PermissionController.createRequestPermissionResultContract(),
-    ) { grantedPermissions ->
-        val stillMissing = SyncViewModel.REQUIRED_HC_PERMISSIONS - grantedPermissions
-        viewModel.onPermissionResult(
-            grantedAll = stillMissing.isEmpty(),
-            stillMissing = stillMissing,
-        )
-    }
-
-    val cameraPermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        viewModel.onCameraPermissionResult(granted)
     }
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
@@ -140,35 +150,82 @@ fun SyncScreen(
         Timber.d("POST_NOTIFICATIONS granted=%b", granted)
     }
 
-    LaunchedEffect(Unit) {
-        cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+    fun maybeRequestNotificationPermission() {
+        if (notificationPermissionAsked) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        notificationPermissionAsked = true
+        val alreadyGranted = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.POST_NOTIFICATIONS,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!alreadyGranted) {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
 
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = PermissionController.createRequestPermissionResultContract(),
+    ) { _ ->
+        // The result only covers the requested subset; let the VM re-query full grant state.
+        val requested = pendingHcRequest.orEmpty()
+        pendingHcRequest = null
+        viewModel.onPermissionRequestReturned(requested)
+        // The HC sheet is closed now, so a runtime permission dialog won't collide with it.
+        maybeRequestNotificationPermission()
+    }
+
+    fun launchHcPermissionRequest(permissions: Set<String>) {
+        pendingHcRequest = permissions
+        try {
+            permissionLauncher.launch(permissions)
+        } catch (e: Exception) {
+            Timber.w(e, "HC permission request failed to launch")
+            pendingHcRequest = null
+            openHealthConnectSettings(context)
+        }
+    }
+
     // Refresh permissions on every resume — the user may have changed grants in HC settings.
+    // The relative-time ticker only runs while the screen is started.
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                viewModel.refreshPermissions()
+            when (event) {
+                Lifecycle.Event.ON_START -> viewModel.onStart()
+                Lifecycle.Event.ON_RESUME -> viewModel.refreshPermissions()
+                Lifecycle.Event.ON_STOP -> viewModel.onStop()
+                else -> Unit
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            viewModel.onStop()
+        }
     }
 
     // Auto-launch the permission sheet the first time we see a given missing set.
     // If the user returns with the same missing set, we stop auto-prompting to avoid
     // pestering them — the banner still offers a manual Grant button and HC-settings fallback.
-    LaunchedEffect(uiState.healthConnectAvailable, uiState.missingHealthPermissions) {
-        if (!uiState.healthConnectAvailable) return@LaunchedEffect
-        val missing = uiState.missingHealthPermissions
-        if (missing.isNotEmpty() && autoRequestedFor != missing) {
-            autoRequestedFor = missing
-            permissionLauncher.launch(missing)
-        } else if (missing.isEmpty()) {
-            autoRequestedFor = emptySet()
+    // The notification permission is requested only when no HC sheet is pending, because
+    // Android allows a single permission request at a time.
+    LaunchedEffect(
+        uiState.healthConnectAvailable,
+        uiState.permissionsChecked,
+        uiState.missingHealthPermissions,
+    ) {
+        if (uiState.healthConnectAvailable) {
+            if (!uiState.permissionsChecked) return@LaunchedEffect
+            val missing = uiState.missingHealthPermissions
+            if (missing.isNotEmpty() && autoRequestedFor != missing) {
+                autoRequestedFor = missing
+                launchHcPermissionRequest(missing)
+                return@LaunchedEffect
+            } else if (missing.isEmpty()) {
+                autoRequestedFor = emptySet()
+            }
+        }
+        if (pendingHcRequest == null) {
+            maybeRequestNotificationPermission()
         }
     }
 
@@ -205,24 +262,37 @@ fun SyncScreen(
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Text(
-                        text = "Nutrition Sync",
-                        style = MaterialTheme.typography.titleMedium,
-                    )
+                    SectionTitle("Nutrition Sync")
 
                     if (!uiState.healthConnectAvailable) {
                         Text(
                             text = "Health Connect is not available on this device.",
                             color = MaterialTheme.colorScheme.error,
                         )
+                    } else if (!uiState.permissionsChecked) {
+                        Text(
+                            text = "Checking Health Connect permissions…",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     } else if (uiState.missingHealthPermissions.isNotEmpty()) {
+                        val coreMissing = uiState.missingCorePermissions.isNotEmpty()
                         val missingLabels = uiState.missingHealthPermissions
                             .map { humanReadablePermissionLabel(it) }
                             .sorted()
                         Text(
-                            text = "Health Connect permissions needed:",
-                            color = MaterialTheme.colorScheme.error,
+                            text = if (coreMissing) {
+                                "Health Connect permissions needed:"
+                            } else {
+                                "Optional: background hydration sync and full history need:"
+                            },
+                            color = if (coreMissing) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
                             style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                         )
                         missingLabels.forEach { label ->
                             Text(
@@ -231,13 +301,24 @@ fun SyncScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                        Button(
-                            onClick = {
-                                permissionLauncher.launch(uiState.missingHealthPermissions)
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text("Grant in Health Connect")
+                        if (coreMissing) {
+                            Button(
+                                onClick = {
+                                    launchHcPermissionRequest(uiState.missingHealthPermissions)
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text("Grant in Health Connect")
+                            }
+                        } else {
+                            OutlinedButton(
+                                onClick = {
+                                    launchHcPermissionRequest(uiState.missingHealthPermissions)
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text("Grant in Health Connect")
+                            }
                         }
                         if (uiState.permissionLockoutSuspected) {
                             Text(
@@ -273,7 +354,15 @@ fun SyncScreen(
                     }
 
                     uiState.lastSyncResult?.let { result ->
-                        Text("Last result: $result")
+                        Text(
+                            text = "Last result: $result",
+                            color = if (uiState.lastSyncResultIsError) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                Color.Unspecified
+                            },
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                        )
                     }
 
                     if (uiState.lastSyncedMeals.isNotEmpty()) {
@@ -336,16 +425,14 @@ fun SyncScreen(
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Text(
-                        text = "Blood Pressure",
-                        style = MaterialTheme.typography.titleMedium,
-                    )
+                    SectionTitle("Blood Pressure")
 
                     if (bpScanError != null) {
                         Text(
                             text = bpScanError,
                             color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                         )
                     }
 
@@ -377,18 +464,10 @@ fun SyncScreen(
                             viewModel.refreshLastBpReading()
                             onNavigateToCamera()
                         },
-                        enabled = uiState.permissionGranted && uiState.cameraPermissionGranted,
+                        enabled = uiState.permissionGranted,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text("Log Blood Pressure")
-                    }
-
-                    if (!uiState.cameraPermissionGranted) {
-                        Text(
-                            text = "Camera permission required to scan blood pressure readings.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
                     }
                 }
             }
@@ -401,16 +480,14 @@ fun SyncScreen(
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Text(
-                        text = "Blood Glucose",
-                        style = MaterialTheme.typography.titleMedium,
-                    )
+                    SectionTitle("Blood Glucose")
 
                     if (glucoseScanError != null) {
                         Text(
                             text = glucoseScanError,
                             color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                         )
                     }
 
@@ -442,18 +519,10 @@ fun SyncScreen(
                             viewModel.refreshLastGlucoseReading()
                             onNavigateToGlucoseCamera()
                         },
-                        enabled = uiState.permissionGranted && uiState.cameraPermissionGranted,
+                        enabled = uiState.permissionGranted,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text("Log Glucose")
-                    }
-
-                    if (!uiState.cameraPermissionGranted) {
-                        Text(
-                            text = "Camera permission required to scan glucose readings.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
                     }
                 }
             }
@@ -466,24 +535,18 @@ fun SyncScreen(
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Text(
-                        text = "Hydration",
-                        style = MaterialTheme.typography.titleMedium,
-                    )
+                    SectionTitle("Hydration")
 
                     if (uiState.hydrationReadPermissionMissing) {
                         Text(
                             text = "Health Connect read permission denied for hydration.",
                             color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                         )
                         Button(
                             onClick = {
-                                try {
-                                    permissionLauncher.launch(setOf(HealthPermissions.READ_HYDRATION))
-                                } catch (e: Exception) {
-                                    openHealthConnectSettings(context)
-                                }
+                                launchHcPermissionRequest(setOf(HealthPermissions.READ_HYDRATION))
                             },
                             modifier = Modifier.fillMaxWidth(),
                         ) {

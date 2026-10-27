@@ -5,8 +5,8 @@
     <!-- Network access for Food Scanner API -->
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <!-- Camera for Blood Pressure scanner -->
-    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- No CAMERA permission: scanners use ActivityResultContracts.TakePicture (system camera app),
+         which needs no permission as long as CAMERA is not declared. -->
 
     <!-- Post notifications (Android 13+) for permission-missing alerts from background sync -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
