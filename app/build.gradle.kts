@@ -31,8 +31,10 @@ android {
     buildTypes {
         debug {
             signingConfig = signingConfigs.getByName("debug")
+            manifestPlaceholders["sentryEnvironment"] = "debug"
         }
         release {
+            manifestPlaceholders["sentryEnvironment"] = "release"
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")

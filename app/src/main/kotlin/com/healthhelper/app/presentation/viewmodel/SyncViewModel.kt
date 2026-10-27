@@ -3,6 +3,7 @@ package com.healthhelper.app.presentation.viewmodel
 import androidx.health.connect.client.HealthConnectClient
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.healthhelper.app.data.sync.SyncCoordinator
 import com.healthhelper.app.data.sync.SyncScheduler
 import com.healthhelper.app.domain.model.BloodPressureReading
 import com.healthhelper.app.domain.model.GlucoseReading
@@ -78,6 +79,7 @@ class SyncViewModel @Inject constructor(
     private val getTodayHydrationTotalUseCase: GetTodayHydrationTotalUseCase,
     private val permissionChecker: HealthPermissionChecker,
     healthConnectClient: HealthConnectClient?,
+    private val syncCoordinator: SyncCoordinator = SyncCoordinator(),
 ) : ViewModel() {
 
     private val healthConnectAvailable: Boolean = healthConnectClient != null
@@ -463,6 +465,14 @@ class SyncViewModel @Inject constructor(
         syncJob?.cancel()
         _uiState.update { it.copy(isSyncing = true, syncProgress = null) }
         syncJob = viewModelScope.launch {
+            // Never run concurrently with the periodic SyncWorker (duplicate HC quota, watermark regressions).
+            if (!syncCoordinator.tryAcquire()) {
+                Timber.d("SyncViewModel: triggerSync skipped, background sync already running")
+                _uiState.update {
+                    it.copy(isSyncing = false, syncProgress = null, lastSyncResult = "Sync already running")
+                }
+                return@launch
+            }
             try {
                 val result = syncNutritionUseCase.invoke { progress ->
                     _uiState.update { it.copy(syncProgress = progress) }
@@ -505,6 +515,7 @@ class SyncViewModel @Inject constructor(
                 Timber.e(e, "triggerSync unexpected error")
                 _uiState.update { it.copy(lastSyncResult = "Sync failed. Please try again.") }
             } finally {
+                syncCoordinator.release()
                 _uiState.update { it.copy(isSyncing = false, syncProgress = null) }
             }
         }
