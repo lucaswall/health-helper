@@ -56,6 +56,11 @@ class SettingsViewModel @Inject constructor(
     private var persistedSettings = PersistedSettings()
     private var isSaving = false
 
+    // True when the settings flows failed before (or after) loading, so persistedSettings may not
+    // reflect what is actually stored. Save then skips fields the user did not touch, rather than
+    // overwriting real stored values with the empty defaults shown in the UI.
+    private var loadFailed = false
+
     init {
         viewModelScope.launch {
             try {
@@ -86,6 +91,7 @@ class SettingsViewModel @Inject constructor(
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 Timber.e(e, "Failed to collect settings flows")
+                loadFailed = true
                 // Don't leave the screen permanently disabled; let the user re-enter settings.
                 _uiState.update { it.copy(isLoaded = true) }
             }
@@ -139,14 +145,20 @@ class SettingsViewModel @Inject constructor(
                 anthropicApiKey = current.anthropicApiKey,
                 baseUrl = current.baseUrl,
                 baseUrlError = null,
+                // Clear any stale error so observers (e.g. save-then-exit) only react to this save.
+                saveError = null,
             )
         }
+        val baseline = persistedSettings
+        val skipUnchanged = loadFailed
         viewModelScope.launch {
             try {
                 var anyFailed = false
                 var secureStorageFailed = false
                 val apiKeySaved = try {
-                    settingsRepository.setApiKey(current.apiKey)
+                    if (!skipUnchanged || current.apiKey != baseline.apiKey) {
+                        settingsRepository.setApiKey(current.apiKey)
+                    }
                     true
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
@@ -156,7 +168,9 @@ class SettingsViewModel @Inject constructor(
                     false
                 }
                 val baseUrlSaved = try {
-                    settingsRepository.setBaseUrl(current.baseUrl)
+                    if (!skipUnchanged || current.baseUrl != baseline.baseUrl) {
+                        settingsRepository.setBaseUrl(current.baseUrl)
+                    }
                     true
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
@@ -165,7 +179,9 @@ class SettingsViewModel @Inject constructor(
                     false
                 }
                 val intervalSaved = try {
-                    settingsRepository.setSyncInterval(current.syncInterval)
+                    if (!skipUnchanged || current.syncInterval != baseline.syncInterval) {
+                        settingsRepository.setSyncInterval(current.syncInterval)
+                    }
                     true
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
@@ -174,7 +190,9 @@ class SettingsViewModel @Inject constructor(
                     false
                 }
                 val anthropicApiKeySaved = try {
-                    settingsRepository.setAnthropicApiKey(current.anthropicApiKey)
+                    if (!skipUnchanged || current.anthropicApiKey != baseline.anthropicApiKey) {
+                        settingsRepository.setAnthropicApiKey(current.anthropicApiKey)
+                    }
                     true
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e

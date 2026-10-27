@@ -570,6 +570,54 @@ class SettingsViewModelTest {
         assertTrue(viewModel.uiState.value.isLoaded)
     }
 
+    @Test
+    fun `after flow failure save only writes fields the user edited`() = runTest {
+        every { settingsRepository.apiKeyFlow } returns flow { throw IOException("corrupt") }
+
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.updateBaseUrl("https://typed.example.com")
+        viewModel.save()
+        advanceUntilIdle()
+
+        coVerify { settingsRepository.setBaseUrl("https://typed.example.com") }
+        coVerify(exactly = 0) { settingsRepository.setApiKey(any()) }
+        coVerify(exactly = 0) { settingsRepository.setAnthropicApiKey(any()) }
+        coVerify(exactly = 0) { settingsRepository.setSyncInterval(any()) }
+        val state = viewModel.uiState.value
+        assertNull(state.saveError)
+        assertFalse(state.hasUnsavedChanges)
+    }
+
+    @Test
+    fun `save clears stale saveError as soon as a new save starts`() = runTest {
+        coEvery { settingsRepository.setApiKey(any()) } throws RuntimeException("write failed")
+
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.updateApiKey("new-key")
+        viewModel.save()
+        advanceUntilIdle()
+        assertNotNull(viewModel.uiState.value.saveError)
+
+        val gate = CompletableDeferred<Unit>()
+        coEvery { settingsRepository.setApiKey(any()) } coAnswers { gate.await() }
+        viewModel.save()
+        advanceUntilIdle()
+
+        // Save in flight: the previous error must not linger (the screen's save-then-exit
+        // logic would otherwise treat it as a failure of this save).
+        assertNull(viewModel.uiState.value.saveError)
+        assertTrue(viewModel.uiState.value.hasUnsavedChanges)
+
+        gate.complete(Unit)
+        advanceUntilIdle()
+        assertNull(viewModel.uiState.value.saveError)
+        assertFalse(viewModel.uiState.value.hasUnsavedChanges)
+    }
+
     // --- settings-3 / security-privacy-10 / security-privacy-11: trimming and URL validation ---
 
     @Test
