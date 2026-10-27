@@ -11,6 +11,7 @@ import io.mockk.just
 import io.mockk.mockk
 import io.mockk.Runs
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
@@ -100,7 +101,7 @@ class ETagStorageTest {
         val todayStr = today.format(DateTimeFormatter.ISO_LOCAL_DATE)
 
         // Pre-populate with an old entry via raw DataStore write
-        val key = stringPreferencesKey("food_log_etags")
+        val key = stringPreferencesKey("food_log_etags_v2")
         dataStore.edit {
             it[key] = """{"$oldDate":"\"old\"","$recentDate":"\"recent\""}"""
         }
@@ -118,7 +119,7 @@ class ETagStorageTest {
     @Test
     @DisplayName("getETag with malformed JSON in DataStore returns null")
     fun getETagWithMalformedJsonReturnsNull() = testScope.runTest {
-        val key = stringPreferencesKey("food_log_etags")
+        val key = stringPreferencesKey("food_log_etags_v2")
         dataStore.edit { it[key] = "this is not valid json{{{" }
         repository = DataStoreSettingsRepository(dataStore, encryptedPrefs)
 
@@ -134,5 +135,19 @@ class ETagStorageTest {
         assertEquals("\"etag_yesterday\"", repository.getETag(yesterday))
         assertEquals("\"etag_today\"", repository.getETag(today))
         assertNull(repository.getETag(twoDaysAgo))
+    }
+
+    @Test
+    @DisplayName("legacy v1 ETags are ignored and dropped on the next write")
+    fun legacyETagsAreIgnored() = testScope.runTest {
+        val legacyKey = stringPreferencesKey("food_log_etags")
+        dataStore.edit { it[legacyKey] = """{"$yesterday":"\"stale\""}""" }
+        repository = DataStoreSettingsRepository(dataStore, encryptedPrefs)
+
+        assertNull(repository.getETag(yesterday))
+
+        repository.setETag(today, "\"new\"")
+        val prefs = dataStore.data.first()
+        assertNull(prefs[legacyKey])
     }
 }

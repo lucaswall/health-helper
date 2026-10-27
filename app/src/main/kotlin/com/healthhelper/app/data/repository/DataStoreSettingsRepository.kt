@@ -68,7 +68,10 @@ class DataStoreSettingsRepository @Inject constructor(
         val HYDRATION_SYNC_CAUGHT_UP = booleanPreferencesKey("hydration_sync_caught_up")
         val HYDRATION_SYNC_RUN_TIMESTAMP = longPreferencesKey("hydration_sync_run_timestamp")
         val LAST_SYNCED_MEALS = stringPreferencesKey("last_synced_meals")
-        val FOOD_LOG_ETAGS = stringPreferencesKey("food_log_etags")
+        // v2: ETags written before the write-then-save fix may cover days whose HC write failed,
+        // so the v1 map is discarded (costs one full re-fetch of the recent window).
+        val FOOD_LOG_ETAGS = stringPreferencesKey("food_log_etags_v2")
+        val LEGACY_FOOD_LOG_ETAGS = stringPreferencesKey("food_log_etags")
         val DIRECT_PUSHED_GLUCOSE_TIMESTAMPS = stringPreferencesKey("direct_pushed_glucose_timestamps")
         val DIRECT_PUSHED_BP_TIMESTAMPS = stringPreferencesKey("direct_pushed_bp_timestamps")
         val HYDRATION_WATERMARK_RESET_V1 = booleanPreferencesKey("hydration_watermark_reset_v1")
@@ -290,6 +293,7 @@ class DataStoreSettingsRepository @Inject constructor(
         prefs.remove(LAST_SYNCED_DATE)
         prefs.remove(LAST_SYNCED_MEALS)
         prefs.remove(FOOD_LOG_ETAGS)
+        prefs.remove(LEGACY_FOOD_LOG_ETAGS)
         prefs.remove(LAST_GLUCOSE_SYNC_TIMESTAMP)
         prefs.remove(LAST_BP_SYNC_TIMESTAMP)
         prefs.remove(LAST_HYDRATION_SYNC_TIMESTAMP)
@@ -426,6 +430,7 @@ class DataStoreSettingsRepository @Inject constructor(
 
             pruned[date] = etag
             prefs[FOOD_LOG_ETAGS] = Json.encodeToString(pruned)
+            prefs.remove(LEGACY_FOOD_LOG_ETAGS)
         }
     }
 
