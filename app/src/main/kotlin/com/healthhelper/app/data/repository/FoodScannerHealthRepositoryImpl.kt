@@ -93,7 +93,7 @@ class FoodScannerHealthRepositoryImpl @Inject constructor(
         GlucoseReadingDto(
             measuredAt = reading.timestamp.toString(),
             valueMgDl = reading.valueMgDl,
-            zoneOffset = zoneOffsetString(reading.timestamp),
+            zoneOffset = zoneOffsetString(reading.zoneOffset, reading.timestamp),
             relationToMeal = reading.relationToMeal.name.lowercase(),
             mealType = reading.glucoseMealType.name.lowercase(),
             specimenSource = reading.specimenSource.name.lowercase(),
@@ -104,7 +104,7 @@ class FoodScannerHealthRepositoryImpl @Inject constructor(
             measuredAt = reading.timestamp.toString(),
             systolic = reading.systolic,
             diastolic = reading.diastolic,
-            zoneOffset = zoneOffsetString(reading.timestamp),
+            zoneOffset = zoneOffsetString(reading.zoneOffset, reading.timestamp),
             bodyPosition = reading.bodyPosition.name.lowercase(),
             measurementLocation = reading.measurementLocation.name.lowercase(),
         )
@@ -116,8 +116,8 @@ class FoodScannerHealthRepositoryImpl @Inject constructor(
             zoneOffset = reading.zoneOffset?.toString()?.let { if (it == "Z") "+00:00" else it },
         )
 
-    private fun zoneOffsetString(timestamp: java.time.Instant): String {
-        val raw = ZoneId.systemDefault().rules.getOffset(timestamp).toString()
+    private fun zoneOffsetString(recorded: java.time.ZoneOffset?, timestamp: java.time.Instant): String {
+        val raw = (recorded ?: ZoneId.systemDefault().rules.getOffset(timestamp)).toString()
         return if (raw == "Z") "+00:00" else raw
     }
 }

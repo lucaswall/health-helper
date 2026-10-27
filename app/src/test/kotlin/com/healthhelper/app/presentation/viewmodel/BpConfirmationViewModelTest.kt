@@ -147,6 +147,34 @@ class BpConfirmationViewModelTest {
     }
 
     @Test
+    fun `isSaveEnabled false when systolic above Health Connect max of 200`() = runTest {
+        viewModel = createViewModel(120, 80)
+        advanceTimeBy(1_000)
+
+        viewModel.updateSystolic("210")
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertFalse(state.isSaveEnabled)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `isSaveEnabled false when diastolic above Health Connect max of 180`() = runTest {
+        viewModel = createViewModel(190, 80)
+        advanceTimeBy(1_000)
+
+        viewModel.updateDiastolic("181")
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertFalse(state.isSaveEnabled)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
     fun `isSaveEnabled false when diastolic out of range below`() = runTest {
         viewModel = createViewModel(120, 80)
         advanceTimeBy(1_000)

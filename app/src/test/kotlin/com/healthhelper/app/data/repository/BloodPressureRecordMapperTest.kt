@@ -152,4 +152,32 @@ class BloodPressureRecordMapperTest {
         val expectedOffset = ZoneId.systemDefault().rules.getOffset(timestamp)
         assertEquals(expectedOffset, record.zoneOffset)
     }
+
+    @Test
+    @DisplayName("mapToBloodPressureReading keeps the record's zoneOffset")
+    fun readMapperKeepsZoneOffset() {
+        val record = BloodPressureRecord(
+            time = Instant.parse("2026-01-15T23:00:00Z"),
+            zoneOffset = ZoneOffset.ofHours(9),
+            systolic = Pressure.millimetersOfMercury(120.0),
+            diastolic = Pressure.millimetersOfMercury(80.0),
+            metadata = Metadata.manualEntry(),
+        )
+        assertEquals(ZoneOffset.ofHours(9), mapToBloodPressureReading(record).zoneOffset)
+    }
+
+    @Test
+    @DisplayName("mapToBloodPressureRecord prefers the reading's own zoneOffset over the system default")
+    fun writeMapperUsesReadingZoneOffset() {
+        val reading = createReading().copy(zoneOffset = ZoneOffset.ofHours(-3))
+        assertEquals(ZoneOffset.ofHours(-3), mapToBloodPressureRecord(reading).zoneOffset)
+    }
+
+    @Test
+    @DisplayName("Health Connect upper bounds 200/180 map to a valid record")
+    fun healthConnectUpperBoundsMap() {
+        val record = mapToBloodPressureRecord(createReading(systolic = 200, diastolic = 180))
+        assertEquals(200.0, record.systolic.inMillimetersOfMercury)
+        assertEquals(180.0, record.diastolic.inMillimetersOfMercury)
+    }
 }

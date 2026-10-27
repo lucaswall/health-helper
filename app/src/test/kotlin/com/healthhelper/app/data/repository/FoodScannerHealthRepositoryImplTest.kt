@@ -395,6 +395,39 @@ class FoodScannerHealthRepositoryImplTest {
         )
     }
 
+    @Test
+    @DisplayName("pushGlucoseReadings uses the reading's recorded zoneOffset instead of the device zone")
+    fun pushGlucoseReadingsUsesRecordedZoneOffset() = runTest {
+        val slot = slot<GlucoseReadingRequest>()
+        coEvery { apiClient.postGlucoseReadings(any(), any(), capture(slot)) } returns Result.success(1)
+
+        repository.pushGlucoseReadings(
+            listOf(testGlucoseReading.copy(zoneOffset = ZoneOffset.ofHours(9))),
+        )
+
+        assertEquals("+09:00", slot.captured.readings[0].zoneOffset)
+    }
+
+    @Test
+    @DisplayName("pushBloodPressureReadings uses the reading's recorded zoneOffset, formatting UTC as +00:00")
+    fun pushBloodPressureReadingsUsesRecordedZoneOffset() = runTest {
+        val slot = slot<BloodPressureReadingRequest>()
+        coEvery { apiClient.postBloodPressureReadings(any(), any(), capture(slot)) } returns Result.success(1)
+
+        repository.pushBloodPressureReadings(
+            listOf(
+                BloodPressureReading(
+                    systolic = 120,
+                    diastolic = 80,
+                    timestamp = Instant.parse("2026-01-01T08:00:00Z"),
+                    zoneOffset = ZoneOffset.UTC,
+                ),
+            ),
+        )
+
+        assertEquals("+00:00", slot.captured.readings[0].zoneOffset)
+    }
+
     // --- pushBloodPressureReadings (batch) tests ---
 
     @Test

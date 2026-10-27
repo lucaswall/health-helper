@@ -2,12 +2,13 @@ package com.healthhelper.app.data.repository
 
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.records.HydrationRecord
-import androidx.health.connect.client.request.ReadRecordsRequest
+import androidx.health.connect.client.request.AggregateRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import com.healthhelper.app.domain.model.HydrationReading
 import com.healthhelper.app.domain.model.ReadingsResult
 import com.healthhelper.app.domain.repository.HydrationRepository
 import kotlin.coroutines.cancellation.CancellationException
+import kotlin.math.roundToInt
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 import timber.log.Timber
@@ -21,75 +22,55 @@ class HealthConnectHydrationRepository @Inject constructor(
     override suspend fun getReadings(start: Instant, end: Instant): List<HydrationReading> =
         getReadingsResult(start, end).readings
 
-    override suspend fun getReadingsResult(start: Instant, end: Instant): ReadingsResult<HydrationReading> {
-        if (healthConnectClient == null) {
+    override suspend fun getReadingsResult(
+        start: Instant,
+        end: Instant,
+        limit: Int,
+    ): ReadingsResult<HydrationReading> {
+        val client = healthConnectClient ?: run {
             Timber.w("getReadings: Health Connect not available")
-            return ReadingsResult(emptyList())
+            throw IllegalStateException("Health Connect not available")
         }
-        val allRecords = mutableListOf<HydrationRecord>()
-        var truncated = false
-        return try {
-            val startMs = System.currentTimeMillis()
-            var pageToken: String? = null
-            do {
-                val elapsed = System.currentTimeMillis() - startMs
-                if (elapsed > CUMULATIVE_TIMEOUT_MS) {
-                    Timber.w(
-                        "getReadings: cumulative timeout (>%ds), returning %d partial hydration records",
-                        CUMULATIVE_TIMEOUT_MS / 1000,
-                        allRecords.size,
-                    )
-                    truncated = true
-                    break
-                }
-                val response = withTimeout(10_000L) {
-                    healthConnectClient.readRecords(
-                        ReadRecordsRequest(
-                            recordType = HydrationRecord::class,
-                            timeRangeFilter = TimeRangeFilter.between(start, end),
-                            pageToken = pageToken,
-                        ),
-                    )
-                }
-                allRecords.addAll(response.records)
-                pageToken = response.pageToken
-            } while (pageToken != null)
-            if (!truncated) {
-                Timber.d(
-                    "getReadings: read %d hydration records in %dms",
-                    allRecords.size,
-                    System.currentTimeMillis() - startMs,
-                )
-            }
-            val readings = allRecords
-                .mapNotNull { record ->
-                    runCatching { mapToHydrationReading(record) }
-                        .onFailure { Timber.w(it, "getReadings: failed to map hydration record") }
-                        .getOrNull()
-                }
-                .sortedBy { it.timestamp }
-            ReadingsResult(readings, truncated)
-        } catch (e: TimeoutCancellationException) {
-            Timber.w("getReadings: per-page timeout, returning %d partial hydration records", allRecords.size)
-            val readings = allRecords
-                .mapNotNull { record ->
-                    runCatching { mapToHydrationReading(record) }
-                        .onFailure { Timber.w(it, "getReadings: failed to map hydration record") }
-                        .getOrNull()
-                }
-                .sortedBy { it.timestamp }
-            ReadingsResult(readings, truncated = true)
-        } catch (e: SecurityException) {
-            Timber.w(e, "getReadings: hydration permission denied — rethrowing for use-case reporting")
-            throw e
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            Timber.e(e, "getReadings: failed")
-            ReadingsResult(emptyList())
-        }
+        // Hydration is read from every data origin (other apps log water intake).
+        return client.readReadingsPaged(
+            recordType = HydrationRecord::class,
+            start = start,
+            end = end,
+            dataOriginFilter = emptySet(),
+            limit = limit,
+            label = "hydration",
+            map = ::mapToHydrationReading,
+            timestamp = { it.timestamp },
+        )
     }
 
-    companion object {
-        private const val CUMULATIVE_TIMEOUT_MS = 120_000L
+    override suspend fun getTotalVolumeMl(start: Instant, end: Instant): Int? {
+        val client = healthConnectClient
+        if (client == null) {
+            Timber.w("getTotalVolumeMl: Health Connect not available")
+            return null
+        }
+        return try {
+            val result = withTimeout(HC_PAGE_TIMEOUT_MS) {
+                client.aggregate(
+                    AggregateRequest(
+                        metrics = setOf(HydrationRecord.VOLUME_TOTAL),
+                        timeRangeFilter = TimeRangeFilter.between(start, end),
+                    ),
+                )
+            }
+            result[HydrationRecord.VOLUME_TOTAL]?.inMilliliters?.roundToInt() ?: 0
+        } catch (e: TimeoutCancellationException) {
+            Timber.w("getTotalVolumeMl: timed out after %dms", HC_PAGE_TIMEOUT_MS)
+            null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: SecurityException) {
+            Timber.w(e, "getTotalVolumeMl: hydration permission denied")
+            throw e
+        } catch (e: Exception) {
+            Timber.e(e, "getTotalVolumeMl: failed")
+            null
+        }
     }
 }

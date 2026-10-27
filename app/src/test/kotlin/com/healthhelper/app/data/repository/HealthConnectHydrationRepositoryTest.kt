@@ -9,6 +9,11 @@ import androidx.health.connect.client.units.Volume
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
+import androidx.health.connect.client.aggregate.AggregationResult
+import kotlin.test.assertNull
+import kotlin.test.assertNotNull
+import kotlin.test.assertFalse
+import io.mockk.slot
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
@@ -25,14 +30,15 @@ class HealthConnectHydrationRepositoryTest {
     // --- getReadings tests ---
 
     @Test
-    @DisplayName("getReadings returns empty list when HealthConnectClient is null")
-    fun getReadingsReturnsEmptyListWhenClientNull() = runTest {
+    @DisplayName("getReadingsResult throws when HealthConnectClient is null (unavailable is not 'no data')")
+    fun getReadingsThrowsWhenClientNull() = runTest {
         val repository = HealthConnectHydrationRepository(healthConnectClient = null)
-        val result = repository.getReadings(
-            start = Instant.parse("2026-01-01T00:00:00Z"),
-            end = Instant.parse("2026-01-02T00:00:00Z"),
-        )
-        assertTrue(result.isEmpty())
+        assertFailsWith<IllegalStateException> {
+            repository.getReadingsResult(
+                start = Instant.parse("2026-01-01T00:00:00Z"),
+                end = Instant.parse("2026-01-02T00:00:00Z"),
+            )
+        }
     }
 
     @Test
@@ -268,4 +274,209 @@ class HealthConnectHydrationRepositoryTest {
         assertEquals(1, result.size)
         assertEquals(250, result[0].volumeMl)
     }
+
+    // --- getReadingsResult failure / paging tests ---
+
+    @Test
+    @DisplayName("getReadingsResult rethrows non-permission read failures instead of returning an empty result")
+    fun getReadingsResultRethrowsGenericFailure() = runTest {
+        val mockClient = mockk<HealthConnectClient>()
+        coEvery { mockClient.readRecords(any<ReadRecordsRequest<HydrationRecord>>()) } throws IllegalStateException("HC quota")
+
+        val repository = HealthConnectHydrationRepository(mockClient)
+        assertFailsWith<IllegalStateException> {
+            repository.getReadingsResult(
+                start = Instant.parse("2026-01-01T00:00:00Z"),
+                end = Instant.parse("2026-01-02T00:00:00Z"),
+            )
+        }
+    }
+
+    @Test
+    @DisplayName("getReadingsResult stops paging once the limit is exceeded and marks the result truncated")
+    fun getReadingsResultStopsPagingAtLimit() = runTest {
+        val mockClient = mockk<HealthConnectClient>()
+        val page1 = mockk<ReadRecordsResponse<HydrationRecord>>()
+        every { page1.records } returns listOf(
+            makeRecord("2026-01-01T01:00:00Z"),
+            makeRecord("2026-01-01T02:00:00Z"),
+            makeRecord("2026-01-01T03:00:00Z"),
+        )
+        every { page1.pageToken } returns "page2"
+        val requests = mutableListOf<ReadRecordsRequest<HydrationRecord>>()
+        coEvery { mockClient.readRecords(capture(requests)) } returns page1
+
+        val repository = HealthConnectHydrationRepository(mockClient)
+        val result = repository.getReadingsResult(
+            start = Instant.parse("2026-01-01T00:00:00Z"),
+            end = Instant.parse("2026-01-02T00:00:00Z"),
+            limit = 2,
+        )
+
+        assertEquals(1, requests.size)
+        assertEquals(3, requests[0].pageSize)
+        assertTrue(result.truncated)
+        assertEquals(3, result.readings.size)
+    }
+
+    @Test
+    @DisplayName("getReadingsResult keeps paging while readings tie with the limit-th timestamp")
+    fun getReadingsResultIncludesTiesAtLimit() = runTest {
+        val mockClient = mockk<HealthConnectClient>()
+        val page1 = mockk<ReadRecordsResponse<HydrationRecord>>()
+        every { page1.records } returns listOf(
+            makeRecord("2026-01-01T01:00:00Z"),
+            makeRecord("2026-01-01T02:00:00Z"),
+            makeRecord("2026-01-01T02:00:00Z"),
+        )
+        every { page1.pageToken } returns "page2"
+        val page2 = mockk<ReadRecordsResponse<HydrationRecord>>()
+        every { page2.records } returns listOf(
+            makeRecord("2026-01-01T02:00:00Z"),
+            makeRecord("2026-01-01T03:00:00Z"),
+        )
+        every { page2.pageToken } returns "page3"
+        var calls = 0
+        coEvery { mockClient.readRecords(any<ReadRecordsRequest<HydrationRecord>>()) } answers {
+            calls++
+            if (calls == 1) page1 else page2
+        }
+
+        val repository = HealthConnectHydrationRepository(mockClient)
+        val result = repository.getReadingsResult(
+            start = Instant.parse("2026-01-01T00:00:00Z"),
+            end = Instant.parse("2026-01-02T00:00:00Z"),
+            limit = 2,
+        )
+
+        assertEquals(2, calls)
+        assertTrue(result.truncated)
+        assertEquals(5, result.readings.size)
+    }
+
+    @Test
+    @DisplayName("getReadingsResult reads every page and is not truncated when no limit is reached")
+    fun getReadingsResultReadsAllPagesWithoutLimit() = runTest {
+        val mockClient = mockk<HealthConnectClient>()
+        val page1 = mockk<ReadRecordsResponse<HydrationRecord>>()
+        every { page1.records } returns listOf(makeRecord("2026-01-01T01:00:00Z"))
+        every { page1.pageToken } returns "page2"
+        val page2 = mockk<ReadRecordsResponse<HydrationRecord>>()
+        every { page2.records } returns listOf(makeRecord("2026-01-01T02:00:00Z"))
+        every { page2.pageToken } returns null
+        var calls = 0
+        coEvery { mockClient.readRecords(any<ReadRecordsRequest<HydrationRecord>>()) } answers {
+            calls++
+            if (calls == 1) page1 else page2
+        }
+
+        val repository = HealthConnectHydrationRepository(mockClient)
+        val result = repository.getReadingsResult(
+            start = Instant.parse("2026-01-01T00:00:00Z"),
+            end = Instant.parse("2026-01-02T00:00:00Z"),
+        )
+
+        assertEquals(2, calls)
+        assertFalse(result.truncated)
+        assertEquals(2, result.readings.size)
+    }
+
+    @Test
+    @DisplayName("getReadings maps the record's lastModifiedTime so late arrivals can be detected")
+    fun getReadingsMapsLastModified() = runTest {
+        val lastModified = Instant.parse("2026-01-01T15:00:00Z")
+        val metadata = mockk<Metadata>(relaxed = true)
+        every { metadata.lastModifiedTime } returns lastModified
+        val record = HydrationRecord(
+            startTime = Instant.parse("2026-01-01T10:00:00Z"),
+            startZoneOffset = ZoneOffset.UTC,
+            endTime = Instant.parse("2026-01-01T10:00:05Z"),
+            endZoneOffset = ZoneOffset.UTC,
+            volume = Volume.milliliters(250.0),
+            metadata = metadata,
+        )
+        assertEquals(lastModified, mapToHydrationReading(record).lastModified)
+    }
+
+    // --- getTotalVolumeMl tests ---
+
+    @Test
+    @DisplayName("getTotalVolumeMl returns the aggregated VOLUME_TOTAL rounded to mL")
+    fun getTotalVolumeReturnsAggregate() = runTest {
+        val mockClient = mockk<HealthConnectClient>()
+        val aggregation = mockk<AggregationResult>()
+        every { aggregation[HydrationRecord.VOLUME_TOTAL] } returns Volume.milliliters(750.6)
+        coEvery { mockClient.aggregate(any()) } returns aggregation
+
+        val repository = HealthConnectHydrationRepository(mockClient)
+        val result = repository.getTotalVolumeMl(
+            Instant.parse("2026-01-01T00:00:00Z"),
+            Instant.parse("2026-01-01T12:00:00Z"),
+        )
+
+        assertEquals(751, result)
+    }
+
+    @Test
+    @DisplayName("getTotalVolumeMl returns 0 when there is no hydration data")
+    fun getTotalVolumeReturnsZeroWhenNoData() = runTest {
+        val mockClient = mockk<HealthConnectClient>()
+        val aggregation = mockk<AggregationResult>()
+        every { aggregation[HydrationRecord.VOLUME_TOTAL] } returns null
+        coEvery { mockClient.aggregate(any()) } returns aggregation
+
+        val repository = HealthConnectHydrationRepository(mockClient)
+        assertEquals(0, repository.getTotalVolumeMl(Instant.EPOCH, Instant.parse("2026-01-01T00:00:00Z")))
+    }
+
+    @Test
+    @DisplayName("getTotalVolumeMl returns null (unavailable) when HealthConnectClient is null")
+    fun getTotalVolumeNullWhenClientNull() = runTest {
+        val repository = HealthConnectHydrationRepository(healthConnectClient = null)
+        assertNull(repository.getTotalVolumeMl(Instant.EPOCH, Instant.parse("2026-01-01T00:00:00Z")))
+    }
+
+    @Test
+    @DisplayName("getTotalVolumeMl returns null (unavailable) on a generic read failure")
+    fun getTotalVolumeNullOnFailure() = runTest {
+        val mockClient = mockk<HealthConnectClient>()
+        coEvery { mockClient.aggregate(any()) } throws IllegalStateException("HC down")
+
+        val repository = HealthConnectHydrationRepository(mockClient)
+        assertNull(repository.getTotalVolumeMl(Instant.EPOCH, Instant.parse("2026-01-01T00:00:00Z")))
+    }
+
+    @Test
+    @DisplayName("getTotalVolumeMl returns null (unavailable) when aggregate exceeds the timeout")
+    fun getTotalVolumeNullOnTimeout() = runTest {
+        val mockClient = mockk<HealthConnectClient>()
+        coEvery { mockClient.aggregate(any()) } coAnswers {
+            delay(15_000L)
+            mockk()
+        }
+
+        val repository = HealthConnectHydrationRepository(mockClient)
+        assertNull(repository.getTotalVolumeMl(Instant.EPOCH, Instant.parse("2026-01-01T00:00:00Z")))
+    }
+
+    @Test
+    @DisplayName("getTotalVolumeMl rethrows SecurityException so the use case reports PermissionDenied")
+    fun getTotalVolumeRethrowsSecurityException() = runTest {
+        val mockClient = mockk<HealthConnectClient>()
+        coEvery { mockClient.aggregate(any()) } throws SecurityException("denied")
+
+        val repository = HealthConnectHydrationRepository(mockClient)
+        assertFailsWith<SecurityException> {
+            repository.getTotalVolumeMl(Instant.EPOCH, Instant.parse("2026-01-01T00:00:00Z"))
+        }
+    }
+
+    private fun makeRecord(time: String) = HydrationRecord(
+        startTime = Instant.parse(time),
+        startZoneOffset = ZoneOffset.UTC,
+        endTime = Instant.parse(time).plusSeconds(5),
+        endZoneOffset = ZoneOffset.UTC,
+        volume = Volume.milliliters(250.0),
+        metadata = Metadata.manualEntry(),
+    )
 }

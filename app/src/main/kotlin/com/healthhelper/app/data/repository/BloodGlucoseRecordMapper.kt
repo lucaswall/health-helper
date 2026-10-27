@@ -11,7 +11,7 @@ import com.healthhelper.app.domain.model.SpecimenSource
 import java.time.ZoneId
 
 fun mapToBloodGlucoseRecord(reading: GlucoseReading): BloodGlucoseRecord {
-    val zoneOffset = ZoneId.systemDefault().rules.getOffset(reading.timestamp)
+    val zoneOffset = reading.zoneOffset ?: ZoneId.systemDefault().rules.getOffset(reading.timestamp)
 
     val relationToMealInt = when (reading.relationToMeal) {
         RelationToMeal.GENERAL -> BloodGlucoseRecord.RELATION_TO_MEAL_GENERAL
@@ -85,5 +85,6 @@ fun mapToGlucoseReading(record: BloodGlucoseRecord): GlucoseReading {
         glucoseMealType = glucoseMealType,
         specimenSource = specimenSource,
         timestamp = record.time,
+        zoneOffset = record.zoneOffset,
     )
 }

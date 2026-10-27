@@ -1,18 +1,8 @@
 package com.healthhelper.app.data.api
 
-open class FoodScannerApiException(
-    message: String,
-    val httpStatus: Int,
-) : Exception(message)
-
-class RateLimitException(
-    httpStatus: Int = 429,
-) : FoodScannerApiException("Rate limited", httpStatus)
-
-class AuthenticationException(
-    httpStatus: Int = 401,
-) : FoodScannerApiException("Authentication failed", httpStatus)
-
-class ServerException(
-    httpStatus: Int,
-) : FoodScannerApiException("Server unavailable", httpStatus)
+// The exception hierarchy lives in the domain layer (domain must not depend on data).
+// These aliases keep existing data-layer call sites compiling unchanged.
+typealias FoodScannerApiException = com.healthhelper.app.domain.model.FoodScannerApiException
+typealias RateLimitException = com.healthhelper.app.domain.model.RateLimitException
+typealias AuthenticationException = com.healthhelper.app.domain.model.AuthenticationException
+typealias ServerException = com.healthhelper.app.domain.model.ServerException
