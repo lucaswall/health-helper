@@ -11,18 +11,32 @@ object HealthPermissions {
     const val READ_HEALTH_DATA_IN_BACKGROUND = "android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND"
 
     /**
-     * Full set the app needs to function. Used to check runtime grants on app open.
+     * Permissions the core features (manual sync, BP/glucose logging, hydration display) need.
+     * Missing any of these blocks the corresponding actions in the UI.
      */
-    val REQUIRED: Set<String> = setOf(
+    val CORE: Set<String> = setOf(
         WRITE_NUTRITION,
         WRITE_BLOOD_PRESSURE,
         READ_BLOOD_PRESSURE,
         WRITE_BLOOD_GLUCOSE,
         READ_BLOOD_GLUCOSE,
         READ_HYDRATION,
+    )
+
+    /**
+     * Feature-gated permissions that only improve background behaviour (background hydration
+     * reads, history older than 30 days). They are requested when the Health Connect provider
+     * supports them, but never block foreground actions — some HC builds can't grant them at all.
+     */
+    val OPTIONAL: Set<String> = setOf(
         READ_HEALTH_DATA_HISTORY,
         READ_HEALTH_DATA_IN_BACKGROUND,
     )
+
+    /**
+     * Full set the app asks for, before feature-availability filtering.
+     */
+    val REQUIRED: Set<String> = CORE + OPTIONAL
 }
 
 enum class HealthSyncType { GLUCOSE, BLOOD_PRESSURE, HYDRATION }

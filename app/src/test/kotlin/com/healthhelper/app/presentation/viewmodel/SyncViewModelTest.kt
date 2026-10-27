@@ -9,6 +9,7 @@ import androidx.health.connect.client.records.NutritionRecord
 import com.healthhelper.app.data.sync.SyncCoordinator
 import com.healthhelper.app.data.sync.SyncScheduler
 import com.healthhelper.app.domain.model.BloodPressureReading
+import com.healthhelper.app.domain.model.HealthPermissions
 import com.healthhelper.app.domain.model.MealType
 import com.healthhelper.app.domain.model.SyncProgress
 import com.healthhelper.app.domain.model.SyncResult
@@ -73,6 +74,7 @@ class SyncViewModelTest {
         syncHealthReadingsUseCase = mockk(relaxed = true)
         permissionChecker = mockk()
         coEvery { permissionChecker.getGrantedPermissions() } returns emptySet()
+        coEvery { permissionChecker.getRequestablePermissions() } returns HealthPermissions.REQUIRED
 
         every { settingsRepository.apiKeyFlow } returns flowOf("fsk_test")
         every { settingsRepository.baseUrlFlow } returns flowOf("https://example.com")
@@ -457,18 +459,201 @@ class SyncViewModelTest {
     }
 
     @Test
-    fun `onPermissionResult updates permissionGranted state`() = viewModelTest {
-        coEvery { permissionChecker.getGrantedPermissions() } returns SyncViewModel.REQUIRED_HC_PERMISSIONS
+    fun `onPermissionRequestReturned re-queries grants and updates permissionGranted`() = viewModelTest {
         viewModel = createViewModel()
         advanceTimeBy(1_000)
+        assertFalse(viewModel.uiState.value.permissionGranted)
 
-        viewModel.onPermissionResult(true, emptySet())
+        coEvery { permissionChecker.getGrantedPermissions() } returns HealthPermissions.REQUIRED
+        viewModel.onPermissionRequestReturned(HealthPermissions.REQUIRED)
+        advanceTimeBy(1_000)
 
         viewModel.uiState.test {
             val state = awaitItem()
             assertTrue(state.permissionGranted)
+            assertTrue(state.missingHealthPermissions.isEmpty())
+            assertFalse(state.permissionLockoutSuspected)
             cancelAndIgnoreRemainingEvents()
         }
+    }
+
+    @Test
+    fun `partial request result does not mark previously granted permissions missing`() = viewModelTest {
+        // Everything except READ_HYDRATION granted initially
+        coEvery { permissionChecker.getGrantedPermissions() } returns
+            HealthPermissions.REQUIRED - HealthPermissions.READ_HYDRATION
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+        assertEquals(setOf(HealthPermissions.READ_HYDRATION), viewModel.uiState.value.missingHealthPermissions)
+
+        // User grants only READ_HYDRATION via the hydration button
+        coEvery { permissionChecker.getGrantedPermissions() } returns HealthPermissions.REQUIRED
+        viewModel.onPermissionRequestReturned(setOf(HealthPermissions.READ_HYDRATION))
+        advanceTimeBy(1_000)
+
+        val state = viewModel.uiState.value
+        assertTrue(state.missingHealthPermissions.isEmpty())
+        assertTrue(state.permissionGranted)
+        assertFalse(state.permissionLockoutSuspected)
+    }
+
+    @Test
+    fun `lockout suspected only when requested permissions are still missing`() = viewModelTest {
+        coEvery { permissionChecker.getGrantedPermissions() } returns
+            HealthPermissions.REQUIRED - HealthPermissions.READ_HYDRATION - HealthPermissions.WRITE_NUTRITION
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        // Request only READ_HYDRATION, user grants it; WRITE_NUTRITION still missing but wasn't requested
+        coEvery { permissionChecker.getGrantedPermissions() } returns
+            HealthPermissions.REQUIRED - HealthPermissions.WRITE_NUTRITION
+        viewModel.onPermissionRequestReturned(setOf(HealthPermissions.READ_HYDRATION))
+        advanceTimeBy(1_000)
+        assertFalse(viewModel.uiState.value.permissionLockoutSuspected)
+        assertEquals(setOf(HealthPermissions.WRITE_NUTRITION), viewModel.uiState.value.missingHealthPermissions)
+
+        // Request WRITE_NUTRITION, user denies
+        viewModel.onPermissionRequestReturned(setOf(HealthPermissions.WRITE_NUTRITION))
+        advanceTimeBy(1_000)
+        assertTrue(viewModel.uiState.value.permissionLockoutSuspected)
+    }
+
+    @Test
+    fun `onPermissionRequestReturned keeps state when grant query fails`() = viewModelTest {
+        coEvery { permissionChecker.getGrantedPermissions() } returns HealthPermissions.REQUIRED
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        coEvery { permissionChecker.getGrantedPermissions() } returns null
+        viewModel.onPermissionRequestReturned(setOf(HealthPermissions.READ_HYDRATION))
+        advanceTimeBy(1_000)
+
+        val state = viewModel.uiState.value
+        assertTrue(state.permissionGranted)
+        assertTrue(state.missingHealthPermissions.isEmpty())
+        assertFalse(state.permissionLockoutSuspected)
+    }
+
+    // --- Optional / feature-gated permissions ---
+
+    @Test
+    fun `missing optional permissions do not block permissionGranted`() = viewModelTest {
+        coEvery { permissionChecker.getGrantedPermissions() } returns HealthPermissions.CORE
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        val state = viewModel.uiState.value
+        assertTrue(state.permissionGranted)
+        assertEquals(HealthPermissions.OPTIONAL, state.missingHealthPermissions)
+        assertEquals(HealthPermissions.OPTIONAL, state.missingOptionalPermissions)
+        assertTrue(state.missingCorePermissions.isEmpty())
+    }
+
+    @Test
+    fun `missing core permission blocks permissionGranted`() = viewModelTest {
+        coEvery { permissionChecker.getGrantedPermissions() } returns
+            HealthPermissions.REQUIRED - HealthPermissions.WRITE_BLOOD_PRESSURE
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        val state = viewModel.uiState.value
+        assertFalse(state.permissionGranted)
+        assertEquals(setOf(HealthPermissions.WRITE_BLOOD_PRESSURE), state.missingCorePermissions)
+    }
+
+    @Test
+    fun `feature-unavailable permissions are not reported missing`() = viewModelTest {
+        coEvery { permissionChecker.getRequestablePermissions() } returns HealthPermissions.CORE
+        coEvery { permissionChecker.getGrantedPermissions() } returns HealthPermissions.CORE
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        val state = viewModel.uiState.value
+        assertTrue(state.missingHealthPermissions.isEmpty())
+        assertTrue(state.permissionGranted)
+    }
+
+    // --- Transient permission query failure ---
+
+    @Test
+    fun `refreshPermissions keeps previous missing set when query fails`() = viewModelTest {
+        coEvery { permissionChecker.getGrantedPermissions() } returns HealthPermissions.REQUIRED
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+        assertTrue(viewModel.uiState.value.permissionGranted)
+
+        coEvery { permissionChecker.getGrantedPermissions() } returns null
+        viewModel.refreshPermissions()
+        advanceTimeBy(1_000)
+
+        val state = viewModel.uiState.value
+        assertTrue(state.missingHealthPermissions.isEmpty())
+        assertTrue(state.permissionGranted)
+    }
+
+    @Test
+    fun `refreshPermissions keeps previous missing set when checker throws`() = viewModelTest {
+        coEvery { permissionChecker.getGrantedPermissions() } returns HealthPermissions.REQUIRED
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        coEvery { permissionChecker.getGrantedPermissions() } throws RuntimeException("binder died")
+        viewModel.refreshPermissions()
+        advanceTimeBy(1_000)
+
+        assertTrue(viewModel.uiState.value.missingHealthPermissions.isEmpty())
+        assertTrue(viewModel.uiState.value.permissionGranted)
+    }
+
+    @Test
+    fun `initial query failure leaves permissions unchecked and nothing marked missing`() = viewModelTest {
+        coEvery { permissionChecker.getGrantedPermissions() } returns null
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        val state = viewModel.uiState.value
+        assertFalse(state.permissionsChecked)
+        assertFalse(state.permissionGranted)
+        assertTrue(state.missingHealthPermissions.isEmpty())
+    }
+
+    // --- build-tests-11: manual sync must not cancel or reschedule periodic worker ---
+
+    @Test
+    fun `triggerSync does not cancel or reschedule the periodic worker`() = viewModelTest {
+        coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Success(3, 1)
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+        io.mockk.verify(exactly = 1) { syncScheduler.schedulePeriodic(30) }
+
+        viewModel.triggerSync()
+        advanceTimeBy(1_000)
+
+        io.mockk.verify(exactly = 0) { syncScheduler.cancelSync() }
+        io.mockk.verify(exactly = 1) { syncScheduler.schedulePeriodic(any()) }
+        assertFalse(viewModel.uiState.value.isSyncing)
+    }
+
+    // --- Last result error flag ---
+
+    @Test
+    fun `lastSyncResultIsError true for sync error and false for success`() = viewModelTest {
+        coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Error("boom")
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.triggerSync()
+        advanceTimeBy(1_000)
+        assertTrue(viewModel.uiState.value.lastSyncResultIsError)
+
+        coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Success(1, 1)
+        viewModel.triggerSync()
+        advanceTimeBy(1_000)
+        assertFalse(viewModel.uiState.value.lastSyncResultIsError)
     }
 
     @Test
@@ -571,7 +756,7 @@ class SyncViewModelTest {
 
     @Test
     fun `permissionGranted is true on init when permission already granted`() = viewModelTest {
-        coEvery { permissionChecker.getGrantedPermissions() } returns SyncViewModel.REQUIRED_HC_PERMISSIONS
+        coEvery { permissionChecker.getGrantedPermissions() } returns HealthPermissions.REQUIRED
 
         viewModel = createViewModel()
         advanceTimeBy(1_000)
@@ -645,7 +830,7 @@ class SyncViewModelTest {
 
     @Test
     fun `permissionGranted is true only when ALL required HC permissions are granted`() = viewModelTest {
-        coEvery { permissionChecker.getGrantedPermissions() } returns SyncViewModel.REQUIRED_HC_PERMISSIONS
+        coEvery { permissionChecker.getGrantedPermissions() } returns HealthPermissions.REQUIRED
 
         viewModel = createViewModel()
         advanceTimeBy(1_000)
@@ -682,47 +867,6 @@ class SyncViewModelTest {
 
         viewModel.uiState.test {
             assertFalse(awaitItem().permissionGranted)
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
-    fun `cameraPermissionGranted is false by default`() = viewModelTest {
-        viewModel = createViewModel()
-        advanceTimeBy(1_000)
-
-        viewModel.uiState.test {
-            val state = awaitItem()
-            assertFalse(state.cameraPermissionGranted)
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
-    fun `onCameraPermissionResult true sets cameraPermissionGranted to true`() = viewModelTest {
-        viewModel = createViewModel()
-        advanceTimeBy(1_000)
-
-        viewModel.onCameraPermissionResult(true)
-
-        viewModel.uiState.test {
-            val state = awaitItem()
-            assertTrue(state.cameraPermissionGranted)
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
-    fun `onCameraPermissionResult false sets cameraPermissionGranted to false`() = viewModelTest {
-        viewModel = createViewModel()
-        advanceTimeBy(1_000)
-
-        viewModel.onCameraPermissionResult(true)
-        viewModel.onCameraPermissionResult(false)
-
-        viewModel.uiState.test {
-            val state = awaitItem()
-            assertFalse(state.cameraPermissionGranted)
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -1252,87 +1396,153 @@ class SyncViewModelTest {
         }
     }
 
-    // --- Task 6 (HEA-210): Refresh sync status strings every 30s even when caught up ---
-    // Note: formatRelativeTime uses System.currentTimeMillis() (real clock), so we verify the
-    // loop runs the update path by ensuring the correct value is present in the next emission.
+    // --- Task 6 (HEA-210) / sync-ui-5: lifecycle-scoped 30s ticker refreshes relative strings ---
+
+    private val baseNow = Instant.parse("2026-03-15T12:00:00Z").toEpochMilli()
 
     @Test
-    fun `hydrationSyncStatus is correct in 30s loop tick even when caught up`() = viewModelTest {
-        val positiveTs = System.currentTimeMillis() - 5_000L
+    fun `hydrationSyncStatus refreshes on ticker tick when started even when caught up`() = viewModelTest {
+        var now = baseNow
         every { settingsRepository.hydrationSyncCountFlow } returns flowOf(0)
         every { settingsRepository.hydrationSyncCaughtUpFlow } returns flowOf(true)
-        every { settingsRepository.hydrationSyncRunTimestampFlow } returns flowOf(positiveTs)
-        // Second call returns Total(200) so the loop's loadTodayHydration() causes a state emission
-        coEvery { getTodayHydrationTotalUseCase.invoke() } returns
-            TodayHydrationResult.Total(0) andThen TodayHydrationResult.Total(200)
+        every { settingsRepository.hydrationSyncRunTimestampFlow } returns flowOf(baseNow - 5_000L)
 
         viewModel = createViewModel()
+        viewModel.currentTimeMillis = { now }
         advanceTimeBy(1_000)
+        assertEquals("Up to date · Just now", viewModel.uiState.value.hydrationSyncStatus)
 
-        viewModel.uiState.test {
-            awaitItem() // consume initial state (hydrationTodayDisplay = "")
+        viewModel.onStart()
+        now = baseNow + 5 * 60_000L
+        advanceTimeBy(30_001)
 
-            advanceTimeBy(30_001)
-
-            // hydrationTodayDisplay changed → StateFlow emits; hydrationSyncStatus co-present
-            val state = awaitItem()
-            assertEquals("200 mL", state.hydrationTodayDisplay)
-            assertTrue(
-                state.hydrationSyncStatus.startsWith("Up to date"),
-                "Expected 'Up to date' in hydrationSyncStatus (caughtUp=true), got: '${state.hydrationSyncStatus}'",
-            )
-            cancelAndIgnoreRemainingEvents()
-        }
+        assertEquals("Up to date · 5 min ago", viewModel.uiState.value.hydrationSyncStatus)
     }
 
     @Test
-    fun `glucoseSyncStatus is correct in 30s loop tick even when caught up`() = viewModelTest {
-        val positiveTs = System.currentTimeMillis() - 5_000L
-        every { settingsRepository.glucoseSyncCountFlow } returns flowOf(0)
+    fun `glucose and bp sync status refresh on ticker tick when started`() = viewModelTest {
+        var now = baseNow
         every { settingsRepository.glucoseSyncCaughtUpFlow } returns flowOf(true)
-        every { settingsRepository.glucoseSyncRunTimestampFlow } returns flowOf(positiveTs)
-        coEvery { getTodayHydrationTotalUseCase.invoke() } returns
-            TodayHydrationResult.Total(0) andThen TodayHydrationResult.Total(200)
+        every { settingsRepository.glucoseSyncRunTimestampFlow } returns flowOf(baseNow - 5_000L)
+        every { settingsRepository.bpSyncCaughtUpFlow } returns flowOf(true)
+        every { settingsRepository.bpSyncRunTimestampFlow } returns flowOf(baseNow - 5_000L)
 
         viewModel = createViewModel()
+        viewModel.currentTimeMillis = { now }
         advanceTimeBy(1_000)
 
-        viewModel.uiState.test {
-            awaitItem()
-            advanceTimeBy(30_001)
+        viewModel.onStart()
+        now = baseNow + 2 * 60 * 60_000L
+        advanceTimeBy(30_001)
 
-            val state = awaitItem()
-            assertTrue(
-                state.glucoseSyncStatus.startsWith("Up to date"),
-                "Expected 'Up to date' in glucoseSyncStatus (caughtUp=true), got: '${state.glucoseSyncStatus}'",
-            )
-            cancelAndIgnoreRemainingEvents()
-        }
+        assertEquals("Up to date · 2 hr ago", viewModel.uiState.value.glucoseSyncStatus)
+        assertEquals("Up to date · 2 hr ago", viewModel.uiState.value.bpSyncStatus)
     }
 
     @Test
-    fun `bpSyncStatus is correct in 30s loop tick even when caught up`() = viewModelTest {
-        val positiveTs = System.currentTimeMillis() - 5_000L
-        every { settingsRepository.bpSyncCountFlow } returns flowOf(0)
-        every { settingsRepository.bpSyncCaughtUpFlow } returns flowOf(true)
-        every { settingsRepository.bpSyncRunTimestampFlow } returns flowOf(positiveTs)
-        coEvery { getTodayHydrationTotalUseCase.invoke() } returns
-            TodayHydrationResult.Total(0) andThen TodayHydrationResult.Total(200)
+    fun `ticker does not run before onStart or after onStop`() = viewModelTest {
+        var now = baseNow
+        every { settingsRepository.hydrationSyncCaughtUpFlow } returns flowOf(true)
+        every { settingsRepository.hydrationSyncRunTimestampFlow } returns flowOf(baseNow - 5_000L)
 
         viewModel = createViewModel()
+        viewModel.currentTimeMillis = { now }
         advanceTimeBy(1_000)
 
-        viewModel.uiState.test {
-            awaitItem()
-            advanceTimeBy(30_001)
+        now = baseNow + 5 * 60_000L
+        advanceTimeBy(60_000)
+        assertEquals("Up to date · Just now", viewModel.uiState.value.hydrationSyncStatus)
 
-            val state = awaitItem()
-            assertTrue(
-                state.bpSyncStatus.startsWith("Up to date"),
-                "Expected 'Up to date' in bpSyncStatus (caughtUp=true), got: '${state.bpSyncStatus}'",
-            )
-            cancelAndIgnoreRemainingEvents()
-        }
+        viewModel.onStart()
+        advanceTimeBy(1_000)
+        assertEquals("Up to date · 5 min ago", viewModel.uiState.value.hydrationSyncStatus)
+
+        viewModel.onStop()
+        now = baseNow + 10 * 60_000L
+        advanceTimeBy(60_000)
+        assertEquals("Up to date · 5 min ago", viewModel.uiState.value.hydrationSyncStatus)
+    }
+
+    @Test
+    fun `ticker does not poll Health Connect for hydration`() = viewModelTest {
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+        viewModel.onStart()
+        advanceTimeBy(1_000)
+        io.mockk.clearMocks(getTodayHydrationTotalUseCase, answers = false)
+
+        advanceTimeBy(5 * 30_001L)
+
+        coVerify(exactly = 0) { getTodayHydrationTotalUseCase.invoke() }
+    }
+
+    @Test
+    fun `triggerSync refreshes today hydration after completing`() = viewModelTest {
+        coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Success(1, 1)
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+        coEvery { getTodayHydrationTotalUseCase.invoke() } returns TodayHydrationResult.Total(750)
+
+        viewModel.triggerSync()
+        advanceTimeBy(1_000)
+
+        assertEquals("750 mL", viewModel.uiState.value.hydrationTodayDisplay)
+    }
+
+    // --- sync-ui-7: nextSyncTime refreshes on tick ---
+
+    @Test
+    fun `nextSyncTime is recomputed on ticker tick`() = viewModelTest {
+        var now = baseNow
+        every { syncScheduler.getNextSyncTimeFlow() } returns flowOf(baseNow + 14 * 60_000L + 30_000L)
+
+        viewModel = createViewModel()
+        viewModel.currentTimeMillis = { now }
+        advanceTimeBy(1_000)
+        assertEquals("Next sync in ~14m", viewModel.uiState.value.nextSyncTime)
+
+        viewModel.onStart()
+        now = baseNow + 14 * 60_000L
+        advanceTimeBy(30_001)
+        assertEquals("Next sync in <1m", viewModel.uiState.value.nextSyncTime)
+
+        now = baseNow + 20 * 60_000L
+        advanceTimeBy(30_001)
+        assertEquals("Sync pending...", viewModel.uiState.value.nextSyncTime)
+    }
+
+    // --- sync-ui-9: Unavailable after midnight must not keep yesterday's total ---
+
+    @Test
+    fun `Unavailable on same day keeps cached hydration total`() = viewModelTest {
+        coEvery { getTodayHydrationTotalUseCase.invoke() } returns
+            TodayHydrationResult.Total(500) andThen TodayHydrationResult.Unavailable
+        viewModel = createViewModel()
+        viewModel.currentTimeMillis = { baseNow }
+        advanceTimeBy(1_000)
+        assertEquals("500 mL", viewModel.uiState.value.hydrationTodayDisplay)
+
+        viewModel.refreshTodayHydration()
+        advanceTimeBy(1_000)
+
+        assertEquals("500 mL", viewModel.uiState.value.hydrationTodayDisplay)
+    }
+
+    @Test
+    fun `Unavailable on a later day clears cached hydration total`() = viewModelTest {
+        var now = baseNow
+        coEvery { getTodayHydrationTotalUseCase.invoke() } returns
+            TodayHydrationResult.Total(500) andThen TodayHydrationResult.Unavailable
+        viewModel = createViewModel()
+        viewModel.currentTimeMillis = { now }
+        advanceTimeBy(1_000)
+        assertEquals("500 mL", viewModel.uiState.value.hydrationTodayDisplay)
+
+        now = baseNow + 24 * 60 * 60_000L
+        viewModel.refreshTodayHydration()
+        advanceTimeBy(1_000)
+
+        assertEquals("", viewModel.uiState.value.hydrationTodayDisplay)
     }
 
     // --- Task 4 (HEA-207): Hydration permission denial ---
