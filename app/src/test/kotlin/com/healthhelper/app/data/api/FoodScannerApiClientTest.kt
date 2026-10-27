@@ -4,6 +4,8 @@ import com.healthhelper.app.data.api.dto.BloodPressureReadingDto
 import com.healthhelper.app.data.api.dto.BloodPressureReadingRequest
 import com.healthhelper.app.data.api.dto.GlucoseReadingDto
 import com.healthhelper.app.data.api.dto.GlucoseReadingRequest
+import com.healthhelper.app.data.api.dto.HydrationReadingDto
+import com.healthhelper.app.data.api.dto.HydrationReadingRequest
 import com.healthhelper.app.domain.model.MealType
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
@@ -413,7 +415,10 @@ class FoodScannerApiClientTest {
         val result = client.getFoodLog("https://food.example.com", "fsk_test", "2026-02-27")
 
         assertTrue(result.isFailure)
-        assertTrue(result.exceptionOrNull() is java.nio.channels.UnresolvedAddressException)
+        val ex = result.exceptionOrNull()
+        assertTrue(ex is NetworkException)
+        assertEquals("Network unavailable", ex.message)
+        assertTrue(ex.cause is java.nio.channels.UnresolvedAddressException)
     }
 
     // --- 5xx log level tests ---
@@ -987,5 +992,179 @@ class FoodScannerApiClientTest {
 
         assertTrue(result.isFailure)
         assertTrue(result.exceptionOrNull() is FoodScannerApiException)
+    }
+
+    // --- Parse error handling (Ktor 3 wraps decode errors in JsonConvertException) ---
+
+    private val sampleHydrationRequest = HydrationReadingRequest(
+        readings = listOf(
+            HydrationReadingDto(
+                measuredAt = "2026-03-29T10:00:00Z",
+                volumeMl = 250,
+                zoneOffset = "+00:00",
+            ),
+        ),
+    )
+
+    private val missingCaloriesResponse = """
+        {"success":true,"data":{"date":"2026-02-27","meals":[{"mealTypeId":1,"entries":[
+            {"id":1,"foodName":"X","time":"08:00:00","proteinG":1.0,"carbsG":1.0,"fatG":1.0,"fiberG":1.0,"sodiumMg":1.0}
+        ]}]}}
+    """.trimIndent()
+
+    private suspend fun allMethods(client: FoodScannerApiClient): List<Pair<String, Result<*>>> = listOf(
+        "getFoodLog" to client.getFoodLog("https://food.example.com", "fsk_test", "2026-02-27"),
+        "postGlucoseReadings" to client.postGlucoseReadings("https://food.example.com", "fsk_test", sampleGlucoseRequest),
+        "postBloodPressureReadings" to client.postBloodPressureReadings("https://food.example.com", "fsk_test", sampleBpRequest),
+        "postHydrationReadings" to client.postHydrationReadings("https://food.example.com", "fsk_test", sampleHydrationRequest),
+    )
+
+    private fun assertParseFailure(name: String, result: Result<*>) {
+        assertTrue(result.isFailure, "$name should fail")
+        val ex = result.exceptionOrNull()
+        assertTrue(ex is ResponseParseException, "$name: expected ResponseParseException but was $ex")
+        assertEquals("Failed to parse response", ex.message)
+        assertFalse(ex is java.io.IOException, "$name: parse errors must not be retryable")
+        assertNotNull(ex.cause)
+    }
+
+    @Test
+    @DisplayName("malformed JSON body maps to 'Failed to parse response' for every method")
+    fun malformedJsonMapsToParseError() = runTest {
+        val engine = MockEngine { respond(content = "{not json", headers = jsonHeaders) }
+        val client = createClient(engine)
+
+        allMethods(client).forEach { (name, result) -> assertParseFailure(name, result) }
+    }
+
+    @Test
+    @DisplayName("body missing a required field maps to 'Failed to parse response' for every method")
+    fun missingRequiredFieldMapsToParseError() = runTest {
+        val engine = MockEngine { respond(content = missingCaloriesResponse, headers = jsonHeaders) }
+        val client = createClient(engine)
+
+        // For the post methods, "data" lacks the required "upserted" field of UpsertResponse.
+        allMethods(client).forEach { (name, result) -> assertParseFailure(name, result) }
+    }
+
+    @Test
+    @DisplayName("200 text/html response maps to 'Failed to parse response' for every method")
+    fun htmlResponseMapsToParseError() = runTest {
+        val engine = MockEngine {
+            respond(
+                content = "<html><body>Proxy login</body></html>",
+                headers = headersOf(HttpHeaders.ContentType, "text/html"),
+            )
+        }
+        val client = createClient(engine)
+
+        allMethods(client).forEach { (name, result) -> assertParseFailure(name, result) }
+    }
+
+    // --- Network error mapping ---
+
+    @Test
+    @DisplayName("IOException maps to NetworkException with user-facing message and original cause")
+    fun ioExceptionMapsToNetworkException() = runTest {
+        val original = java.io.IOException("Connection refused to https://food.example.com")
+        val engine = MockEngine { throw original }
+        val client = createClient(engine)
+
+        allMethods(client).forEach { (name, result) ->
+            val ex = result.exceptionOrNull()
+            assertTrue(ex is NetworkException, "$name: expected NetworkException but was $ex")
+            assertEquals("Network unavailable", ex.message)
+            assertTrue(ex is java.io.IOException, "$name: must stay an IOException for retry logic")
+            // Coroutine stack-trace recovery may copy the exception, so compare by type and message.
+            assertTrue(ex.cause is java.io.IOException)
+            assertEquals(original.message, ex.cause?.message)
+        }
+    }
+
+    @Test
+    @DisplayName("request timeout maps to 'Request timed out' NetworkException")
+    fun timeoutMapsToRequestTimedOut() = runTest {
+        val engine = MockEngine { request ->
+            throw io.ktor.client.plugins.HttpRequestTimeoutException(request.url.toString(), 30_000L)
+        }
+        val client = createClient(engine)
+
+        val result = client.getFoodLog("https://food.example.com", "fsk_test", "2026-02-27")
+
+        val ex = result.exceptionOrNull()
+        assertTrue(ex is NetworkException)
+        assertEquals("Request timed out", ex.message)
+    }
+
+    @Test
+    @DisplayName("unexpected exception maps to user-facing message without leaking raw text")
+    fun unexpectedExceptionMapsToUserFacing() = runTest {
+        val engine = MockEngine { throw IllegalStateException("internal details https://host/secret") }
+        val client = createClient(engine)
+
+        allMethods(client).forEach { (name, result) ->
+            val ex = result.exceptionOrNull()
+            assertTrue(ex is UnexpectedApiException, "$name: expected UnexpectedApiException but was $ex")
+            assertFalse(ex.message!!.contains("secret"))
+        }
+    }
+
+    // --- Base URL / API key normalization ---
+
+    @Test
+    @DisplayName("bare 'https://' with no host is rejected for every method")
+    fun bareHttpsRejected() = runTest {
+        var called = false
+        val engine = MockEngine {
+            called = true
+            respond(content = successResponse, headers = jsonHeaders)
+        }
+        val client = createClient(engine)
+
+        listOf(
+            client.getFoodLog("https://", "fsk_test", "2026-02-27"),
+            client.postGlucoseReadings("https://", "fsk_test", sampleGlucoseRequest),
+            client.postBloodPressureReadings("https:///", "fsk_test", sampleBpRequest),
+            client.postHydrationReadings("https://", "fsk_test", sampleHydrationRequest),
+        ).forEach { result ->
+            assertTrue(result.isFailure)
+            assertTrue(result.exceptionOrNull()?.message?.contains("HTTPS") == true)
+        }
+        assertFalse(called)
+    }
+
+    @Test
+    @DisplayName("leading/trailing whitespace in base URL and API key is trimmed")
+    fun whitespaceTrimmed() = runTest {
+        var capturedUrl: String? = null
+        var capturedAuth: String? = null
+        val engine = MockEngine { request ->
+            capturedUrl = request.url.toString()
+            capturedAuth = request.headers[HttpHeaders.Authorization]
+            respond(content = successResponse, headers = jsonHeaders)
+        }
+        val client = createClient(engine)
+
+        val result = client.getFoodLog("  https://food.example.com/ \n", " fsk_test\n", "2026-02-27")
+
+        assertTrue(result.isSuccess)
+        assertEquals("https://food.example.com/api/v1/food-log?date=2026-02-27", capturedUrl)
+        assertEquals("Bearer fsk_test", capturedAuth)
+    }
+
+    @Test
+    @DisplayName("postHydrationReadings posts to hydration-readings and returns upserted count")
+    fun postHydrationReadingsSuccess() = runTest {
+        var capturedUrl: String? = null
+        val engine = MockEngine { request ->
+            capturedUrl = request.url.toString()
+            respond(content = """{"success":true,"data":{"upserted":4}}""", headers = jsonHeaders)
+        }
+        val client = createClient(engine)
+
+        val result = client.postHydrationReadings("https://food.example.com", "fsk_test", sampleHydrationRequest)
+
+        assertEquals(4, result.getOrThrow())
+        assertEquals("https://food.example.com/api/v1/hydration-readings", capturedUrl)
     }
 }

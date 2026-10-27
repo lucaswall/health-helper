@@ -34,7 +34,7 @@ import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import io.ktor.client.HttpClient
-import io.ktor.client.engine.cio.CIO
+import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.serialization.kotlinx.json.json
@@ -111,7 +111,9 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideHttpClient(): HttpClient = HttpClient(CIO) {
+    // OkHttp engine: honors Android Network Security Config, supports TLS 1.3 / HTTP/2,
+    // pools connections and uses the platform proxy (CIO does none of these).
+    fun provideHttpClient(): HttpClient = HttpClient(OkHttp) {
         install(ContentNegotiation) {
             json(Json {
                 ignoreUnknownKeys = true
@@ -121,6 +123,8 @@ object AppModule {
         }
         install(HttpTimeout) {
             requestTimeoutMillis = 30_000L
+            connectTimeoutMillis = 15_000L
+            socketTimeoutMillis = 30_000L
         }
     }
 
