@@ -2,6 +2,21 @@ package com.healthhelper.app.domain.repository
 
 import com.healthhelper.app.domain.model.SyncedMealSummary
 import kotlinx.coroutines.flow.Flow
+import java.net.URI
+
+/** True when [url] is an absolute https URL with a non-blank host. */
+fun isValidHttpsBaseUrl(url: String): Boolean = try {
+    val uri = URI(url.trim())
+    uri.scheme.equals("https", ignoreCase = true) && !uri.host.isNullOrBlank()
+} catch (e: Exception) {
+    false
+}
+
+/**
+ * Thrown by [SettingsRepository.setApiKey] / [SettingsRepository.setAnthropicApiKey] when the
+ * secret could not be persisted to secure storage (Keystore unavailable or the write failed).
+ */
+class SecureStorageUnavailableException(message: String) : IllegalStateException(message)
 
 interface SettingsRepository {
     val apiKeyFlow: Flow<String>
@@ -26,8 +41,17 @@ interface SettingsRepository {
     val lastPermissionNotificationTimestampFlow: Flow<Long>
     val missingPermissionsAtLastNotificationFlow: Flow<Set<String>>
 
+    /** @throws SecureStorageUnavailableException if the key could not be stored securely. */
     suspend fun setApiKey(value: String)
+
+    /** @throws SecureStorageUnavailableException if the key could not be stored securely. */
     suspend fun setAnthropicApiKey(value: String)
+
+    /**
+     * Stores the base URL. When it points at a different server than the one the current sync
+     * state belongs to, the sync watermarks/ETags/ledgers are reset in the same edit so the new
+     * server receives full history.
+     */
     suspend fun setBaseUrl(value: String)
     suspend fun setSyncInterval(value: Int)
     suspend fun setLastSyncedDate(value: String)

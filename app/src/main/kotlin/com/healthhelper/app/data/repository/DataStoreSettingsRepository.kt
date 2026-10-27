@@ -2,6 +2,7 @@ package com.healthhelper.app.data.repository
 
 import android.content.SharedPreferences
 import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -10,7 +11,9 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.healthhelper.app.domain.model.MealType
 import com.healthhelper.app.domain.model.SyncedMealSummary
+import com.healthhelper.app.domain.repository.SecureStorageUnavailableException
 import com.healthhelper.app.domain.repository.SettingsRepository
+import com.healthhelper.app.domain.repository.isValidHttpsBaseUrl
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
@@ -18,6 +21,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -70,6 +74,9 @@ class DataStoreSettingsRepository @Inject constructor(
         val HYDRATION_WATERMARK_RESET_V1 = booleanPreferencesKey("hydration_watermark_reset_v1")
         val LAST_PERMISSION_NOTIFICATION_TIMESTAMP = longPreferencesKey("last_permission_notification_timestamp")
         val MISSING_PERMISSIONS_AT_LAST_NOTIFICATION = stringPreferencesKey("missing_permissions_at_last_notification")
+
+        /** Base URL of the server that the stored sync state (watermarks, ETags, ledgers) belongs to. */
+        val SYNC_STATE_BASE_URL = stringPreferencesKey("sync_state_base_url")
         const val DEFAULT_SYNC_INTERVAL = 15
         const val ENCRYPTED_API_KEY = "api_key"
         const val ENCRYPTED_ANTHROPIC_KEY = "anthropic_api_key"
@@ -126,7 +133,7 @@ class DataStoreSettingsRepository @Inject constructor(
             }
             encryptedPrefs.registerOnSharedPreferenceChangeListener(listener)
             awaitClose { encryptedPrefs.unregisterOnSharedPreferenceChangeListener(listener) }
-        }
+        }.flowOn(Dispatchers.IO)
     }
 
     override val anthropicApiKeyFlow: Flow<String> = if (encryptedPrefs == null) {
@@ -141,7 +148,7 @@ class DataStoreSettingsRepository @Inject constructor(
             }
             encryptedPrefs.registerOnSharedPreferenceChangeListener(listener)
             awaitClose { encryptedPrefs.unregisterOnSharedPreferenceChangeListener(listener) }
-        }
+        }.flowOn(Dispatchers.IO)
     }
 
     override val baseUrlFlow: Flow<String> =
@@ -241,27 +248,64 @@ class DataStoreSettingsRepository @Inject constructor(
         }
 
     override suspend fun setApiKey(value: String) {
-        if (encryptedPrefs == null) {
-            Timber.w("Cannot save API key: encrypted prefs unavailable")
-            return
-        }
-        withContext(Dispatchers.IO) {
-            encryptedPrefs.edit().putString(ENCRYPTED_API_KEY, value).commit()
-        }
+        writeSecret(ENCRYPTED_API_KEY, value, "API key")
     }
 
     override suspend fun setAnthropicApiKey(value: String) {
+        writeSecret(ENCRYPTED_ANTHROPIC_KEY, value, "Anthropic API key")
+    }
+
+    private suspend fun writeSecret(prefKey: String, value: String, label: String) {
         if (encryptedPrefs == null) {
-            Timber.w("Cannot save Anthropic API key: encrypted prefs unavailable")
-            return
+            // Nothing to store and reads already yield "" — not a failure.
+            if (value.isEmpty()) return
+            Timber.w("Cannot save %s: encrypted prefs unavailable", label)
+            throw SecureStorageUnavailableException("Secure storage unavailable; $label not saved")
         }
-        withContext(Dispatchers.IO) {
-            encryptedPrefs.edit().putString(ENCRYPTED_ANTHROPIC_KEY, value).commit()
+        val committed = withContext(Dispatchers.IO) {
+            encryptedPrefs.edit().putString(prefKey, value).commit()
+        }
+        if (!committed) {
+            Timber.w("Cannot save %s: encrypted prefs commit failed", label)
+            throw SecureStorageUnavailableException("Failed to write $label to secure storage")
         }
     }
 
     override suspend fun setBaseUrl(value: String) {
-        dataStore.edit { it[BASE_URL] = value }
+        dataStore.edit { prefs ->
+            val owner = prefs[SYNC_STATE_BASE_URL] ?: prefs[BASE_URL] ?: ""
+            prefs[BASE_URL] = value
+            if (value.isEmpty()) return@edit
+            if (owner.isNotEmpty() && normalizeUrl(owner) != normalizeUrl(value)) {
+                Timber.i("setBaseUrl: server changed, resetting sync state for full re-sync")
+                clearSyncState(prefs)
+            }
+            prefs[SYNC_STATE_BASE_URL] = value
+        }
+    }
+
+    private fun normalizeUrl(url: String): String = url.trim().trimEnd('/').lowercase()
+
+    private fun clearSyncState(prefs: MutablePreferences) {
+        prefs.remove(LAST_SYNCED_DATE)
+        prefs.remove(LAST_SYNCED_MEALS)
+        prefs.remove(FOOD_LOG_ETAGS)
+        prefs.remove(LAST_GLUCOSE_SYNC_TIMESTAMP)
+        prefs.remove(LAST_BP_SYNC_TIMESTAMP)
+        prefs.remove(LAST_HYDRATION_SYNC_TIMESTAMP)
+        prefs.remove(GLUCOSE_SYNC_COUNT)
+        prefs.remove(BP_SYNC_COUNT)
+        prefs.remove(HYDRATION_SYNC_COUNT)
+        prefs.remove(GLUCOSE_SYNC_CAUGHT_UP)
+        prefs.remove(BP_SYNC_CAUGHT_UP)
+        prefs.remove(HYDRATION_SYNC_CAUGHT_UP)
+        prefs.remove(GLUCOSE_SYNC_RUN_TIMESTAMP)
+        prefs.remove(BP_SYNC_RUN_TIMESTAMP)
+        prefs.remove(HYDRATION_SYNC_RUN_TIMESTAMP)
+        prefs.remove(DIRECT_PUSHED_GLUCOSE_TIMESTAMPS)
+        prefs.remove(DIRECT_PUSHED_BP_TIMESTAMPS)
+        // Watermark is now 0, so the one-time hydration reset migration has nothing left to do.
+        prefs[HYDRATION_WATERMARK_RESET_V1] = true
     }
 
     override suspend fun setSyncInterval(value: Int) {
@@ -391,7 +435,7 @@ class DataStoreSettingsRepository @Inject constructor(
             val apiKey = encryptedPrefs?.getString(ENCRYPTED_API_KEY, "") ?: ""
             val prefs = dataStore.data.first()
             val baseUrl = prefs[BASE_URL] ?: ""
-            apiKey.isNotEmpty() && baseUrl.isNotEmpty()
+            apiKey.isNotBlank() && isValidHttpsBaseUrl(baseUrl)
         }
     }
 

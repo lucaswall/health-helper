@@ -2,7 +2,9 @@ package com.healthhelper.app.presentation.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.healthhelper.app.domain.repository.SecureStorageUnavailableException
 import com.healthhelper.app.domain.repository.SettingsRepository
+import com.healthhelper.app.domain.repository.isValidHttpsBaseUrl
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -14,19 +16,23 @@ import kotlinx.coroutines.launch
 import timber.log.Timber
 import javax.inject.Inject
 
+const val MIN_SYNC_INTERVAL_MINUTES = 15
+const val MAX_SYNC_INTERVAL_MINUTES = 120
+
 data class SettingsUiState(
     val apiKey: String = "",
     val anthropicApiKey: String = "",
     val baseUrl: String = "",
-    val syncInterval: Int = 15,
-    val isConfigured: Boolean = false,
+    val syncInterval: Int = MIN_SYNC_INTERVAL_MINUTES,
+    val isLoaded: Boolean = false,
     val hasUnsavedChanges: Boolean = false,
+    val baseUrlError: String? = null,
     val saveError: String? = null,
 ) {
     override fun toString(): String =
         "SettingsUiState(apiKey=***, anthropicApiKey=***, baseUrl=$baseUrl, " +
-            "syncInterval=$syncInterval, isConfigured=$isConfigured, " +
-            "hasUnsavedChanges=$hasUnsavedChanges, saveError=$saveError)"
+            "syncInterval=$syncInterval, isLoaded=$isLoaded, " +
+            "hasUnsavedChanges=$hasUnsavedChanges, baseUrlError=$baseUrlError, saveError=$saveError)"
 }
 
 @HiltViewModel
@@ -41,7 +47,7 @@ class SettingsViewModel @Inject constructor(
         val apiKey: String = "",
         val anthropicApiKey: String = "",
         val baseUrl: String = "",
-        val syncInterval: Int = 15,
+        val syncInterval: Int = MIN_SYNC_INTERVAL_MINUTES,
     ) {
         override fun toString(): String =
             "PersistedSettings(apiKey=***, anthropicApiKey=***, baseUrl=$baseUrl, syncInterval=$syncInterval)"
@@ -62,22 +68,26 @@ class SettingsViewModel @Inject constructor(
                     PersistedSettings(apiKey, anthropicApiKey, baseUrl, syncInterval)
                 }.collect { settings ->
                     persistedSettings = settings
-                    if (!isSaving && !_uiState.value.hasUnsavedChanges) {
-                        val configured = settings.apiKey.isNotEmpty() && settings.baseUrl.isNotEmpty()
+                    val state = _uiState.value
+                    // Inputs are disabled until the first emission, so the first load always applies.
+                    if (!state.isLoaded || (!isSaving && !state.hasUnsavedChanges)) {
                         _uiState.update {
                             it.copy(
                                 apiKey = settings.apiKey,
                                 anthropicApiKey = settings.anthropicApiKey,
                                 baseUrl = settings.baseUrl,
                                 syncInterval = settings.syncInterval,
-                                isConfigured = configured,
+                                isLoaded = true,
                                 hasUnsavedChanges = false,
                             )
                         }
                     }
                 }
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
                 Timber.e(e, "Failed to collect settings flows")
+                // Don't leave the screen permanently disabled; let the user re-enter settings.
+                _uiState.update { it.copy(isLoaded = true) }
             }
         }
     }
@@ -90,13 +100,15 @@ class SettingsViewModel @Inject constructor(
 
     fun updateBaseUrl(value: String) {
         _uiState.update {
-            it.copy(baseUrl = value).withDirtyFlag()
+            it.copy(baseUrl = value, baseUrlError = null).withDirtyFlag()
         }
     }
 
     fun updateSyncInterval(value: Int) {
         _uiState.update {
-            it.copy(syncInterval = value).withDirtyFlag()
+            it.copy(
+                syncInterval = value.coerceIn(MIN_SYNC_INTERVAL_MINUTES, MAX_SYNC_INTERVAL_MINUTES),
+            ).withDirtyFlag()
         }
     }
 
@@ -107,12 +119,32 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun save() {
-        if (isSaving) return
+        if (isSaving || !_uiState.value.isLoaded) return
+        val current = _uiState.value.let {
+            it.copy(
+                apiKey = it.apiKey.trim(),
+                anthropicApiKey = it.anthropicApiKey.trim(),
+                baseUrl = it.baseUrl.trim(),
+            )
+        }
+        // Empty is allowed (clears the configuration); anything else must be an https URL with a host.
+        if (current.baseUrl.isNotEmpty() && !isValidHttpsBaseUrl(current.baseUrl)) {
+            _uiState.update { it.copy(baseUrlError = INVALID_BASE_URL_ERROR) }
+            return
+        }
         isSaving = true
-        val current = _uiState.value
+        _uiState.update {
+            it.copy(
+                apiKey = current.apiKey,
+                anthropicApiKey = current.anthropicApiKey,
+                baseUrl = current.baseUrl,
+                baseUrlError = null,
+            )
+        }
         viewModelScope.launch {
             try {
                 var anyFailed = false
+                var secureStorageFailed = false
                 val apiKeySaved = try {
                     settingsRepository.setApiKey(current.apiKey)
                     true
@@ -120,6 +152,7 @@ class SettingsViewModel @Inject constructor(
                     if (e is CancellationException) throw e
                     Timber.e(e, "Failed to save API key")
                     anyFailed = true
+                    if (e is SecureStorageUnavailableException) secureStorageFailed = true
                     false
                 }
                 val baseUrlSaved = try {
@@ -147,6 +180,7 @@ class SettingsViewModel @Inject constructor(
                     if (e is CancellationException) throw e
                     Timber.e(e, "Failed to save Anthropic API key")
                     anyFailed = true
+                    if (e is SecureStorageUnavailableException) secureStorageFailed = true
                     false
                 }
                 persistedSettings = PersistedSettings(
@@ -157,10 +191,10 @@ class SettingsViewModel @Inject constructor(
                 )
                 _uiState.update {
                     it.copy(
-                        saveError = if (anyFailed) {
-                            "Some settings could not be saved. Please try again."
-                        } else {
-                            null
+                        saveError = when {
+                            secureStorageFailed -> SECURE_STORAGE_ERROR
+                            anyFailed -> GENERIC_SAVE_ERROR
+                            else -> null
                         },
                     ).withDirtyFlag()
                 }
@@ -172,15 +206,13 @@ class SettingsViewModel @Inject constructor(
 
     fun reset() {
         _uiState.update {
-            val configured = persistedSettings.apiKey.isNotEmpty() &&
-                persistedSettings.baseUrl.isNotEmpty()
             it.copy(
                 apiKey = persistedSettings.apiKey,
                 anthropicApiKey = persistedSettings.anthropicApiKey,
                 baseUrl = persistedSettings.baseUrl,
                 syncInterval = persistedSettings.syncInterval,
-                isConfigured = configured,
                 hasUnsavedChanges = false,
+                baseUrlError = null,
             )
         }
     }
@@ -191,5 +223,12 @@ class SettingsViewModel @Inject constructor(
             baseUrl != persistedSettings.baseUrl ||
             syncInterval != persistedSettings.syncInterval
         return copy(hasUnsavedChanges = dirty)
+    }
+
+    companion object {
+        const val GENERIC_SAVE_ERROR = "Some settings could not be saved. Please try again."
+        const val SECURE_STORAGE_ERROR =
+            "Secure storage unavailable on this device; API key not saved."
+        const val INVALID_BASE_URL_ERROR = "Enter a valid https:// URL"
     }
 }

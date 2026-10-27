@@ -1,6 +1,7 @@
 package com.healthhelper.app.presentation.viewmodel
 
 import app.cash.turbine.test
+import com.healthhelper.app.domain.repository.SecureStorageUnavailableException
 import com.healthhelper.app.domain.repository.SettingsRepository
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -66,7 +67,7 @@ class SettingsViewModelTest {
             assertEquals("test-key", state.apiKey)
             assertEquals("https://example.com", state.baseUrl)
             assertEquals(30, state.syncInterval)
-            assertTrue(state.isConfigured)
+            assertTrue(state.isLoaded)
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -75,7 +76,7 @@ class SettingsViewModelTest {
     fun `initial state with empty settings shows defaults`() = runTest {
         every { settingsRepository.apiKeyFlow } returns flowOf("")
         every { settingsRepository.baseUrlFlow } returns flowOf("")
-        every { settingsRepository.syncIntervalFlow } returns flowOf(10)
+        every { settingsRepository.syncIntervalFlow } returns flowOf(15)
 
         viewModel = createViewModel()
         advanceUntilIdle()
@@ -84,8 +85,7 @@ class SettingsViewModelTest {
             val state = awaitItem()
             assertEquals("", state.apiKey)
             assertEquals("", state.baseUrl)
-            assertEquals(10, state.syncInterval)
-            assertFalse(state.isConfigured)
+            assertEquals(15, state.syncInterval)
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -228,12 +228,12 @@ class SettingsViewModelTest {
 
         viewModel.updateApiKey("changed")
         viewModel.updateBaseUrl("https://changed-url.com")
-        viewModel.updateSyncInterval(99)
+        viewModel.updateSyncInterval(95)
         viewModel.uiState.test {
             val state = awaitItem()
             assertEquals("changed", state.apiKey)
             assertEquals("https://changed-url.com", state.baseUrl)
-            assertEquals(99, state.syncInterval)
+            assertEquals(95, state.syncInterval)
             cancelAndIgnoreRemainingEvents()
         }
 
@@ -396,22 +396,6 @@ class SettingsViewModelTest {
     }
 
     @Test
-    fun `isConfigured is false when apiKey and baseUrl are empty`() = runTest {
-        every { settingsRepository.apiKeyFlow } returns flowOf("")
-        every { settingsRepository.baseUrlFlow } returns flowOf("")
-        every { settingsRepository.syncIntervalFlow } returns flowOf(10)
-
-        viewModel = createViewModel()
-        advanceUntilIdle()
-
-        viewModel.uiState.test {
-            val state = awaitItem()
-            assertFalse(state.isConfigured)
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
     fun `init handles repository flow exception gracefully`() = runTest {
         every { settingsRepository.apiKeyFlow } returns flow { throw IOException("corrupt") }
 
@@ -501,5 +485,182 @@ class SettingsViewModelTest {
         // setSyncInterval and setAnthropicApiKey must NOT have been called
         coVerify(exactly = 0) { settingsRepository.setSyncInterval(any()) }
         coVerify(exactly = 0) { settingsRepository.setAnthropicApiKey(any()) }
+    }
+
+    // --- settings-1 / security-privacy-5: secure storage failures are reported ---
+
+    @Test
+    fun `save shows secure storage error and stays dirty when setApiKey reports storage unavailable`() = runTest {
+        coEvery { settingsRepository.setApiKey(any()) } throws
+            SecureStorageUnavailableException("Secure storage unavailable")
+
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.updateApiKey("new-key")
+        viewModel.save()
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals(SettingsViewModel.SECURE_STORAGE_ERROR, state.saveError)
+            assertTrue(state.hasUnsavedChanges)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `save shows secure storage error when setAnthropicApiKey reports storage unavailable`() = runTest {
+        coEvery { settingsRepository.setAnthropicApiKey(any()) } throws
+            SecureStorageUnavailableException("Secure storage unavailable")
+
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.updateAnthropicApiKey("sk-ant-new")
+        viewModel.save()
+        advanceUntilIdle()
+
+        viewModel.uiState.test {
+            val state = awaitItem()
+            assertEquals(SettingsViewModel.SECURE_STORAGE_ERROR, state.saveError)
+            assertTrue(state.hasUnsavedChanges)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    // --- settings-2: inputs gated until first load ---
+
+    @Test
+    fun `state is not loaded before first emission and save is ignored`() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        every { settingsRepository.apiKeyFlow } returns flow {
+            gate.await()
+            emit("stored-key")
+        }
+
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        assertFalse(viewModel.uiState.value.isLoaded)
+        viewModel.updateBaseUrl("https://typed.example.com")
+        viewModel.save()
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { settingsRepository.setApiKey(any()) }
+        coVerify(exactly = 0) { settingsRepository.setBaseUrl(any()) }
+
+        gate.complete(Unit)
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertTrue(state.isLoaded)
+        assertEquals("stored-key", state.apiKey)
+        assertEquals("https://example.com", state.baseUrl)
+        assertFalse(state.hasUnsavedChanges)
+    }
+
+    @Test
+    fun `flow failure still marks state loaded so the screen is usable`() = runTest {
+        every { settingsRepository.apiKeyFlow } returns flow { throw IOException("corrupt") }
+
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.isLoaded)
+    }
+
+    // --- settings-3 / security-privacy-10 / security-privacy-11: trimming and URL validation ---
+
+    @Test
+    fun `save trims api keys and base url`() = runTest {
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.updateApiKey("  fsk_new \n")
+        viewModel.updateAnthropicApiKey(" sk-ant-new ")
+        viewModel.updateBaseUrl(" https://food.example.com ")
+        viewModel.save()
+        advanceUntilIdle()
+
+        coVerify { settingsRepository.setApiKey("fsk_new") }
+        coVerify { settingsRepository.setAnthropicApiKey("sk-ant-new") }
+        coVerify { settingsRepository.setBaseUrl("https://food.example.com") }
+        val state = viewModel.uiState.value
+        assertEquals("fsk_new", state.apiKey)
+        assertEquals("https://food.example.com", state.baseUrl)
+        assertFalse(state.hasUnsavedChanges)
+    }
+
+    @Test
+    fun `save rejects http base url without persisting anything`() = runTest {
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.updateApiKey("new-key")
+        viewModel.updateBaseUrl("http://food.example.com")
+        viewModel.save()
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { settingsRepository.setApiKey(any()) }
+        coVerify(exactly = 0) { settingsRepository.setBaseUrl(any()) }
+        coVerify(exactly = 0) { settingsRepository.setSyncInterval(any()) }
+        coVerify(exactly = 0) { settingsRepository.setAnthropicApiKey(any()) }
+        val state = viewModel.uiState.value
+        assertEquals(SettingsViewModel.INVALID_BASE_URL_ERROR, state.baseUrlError)
+        assertTrue(state.hasUnsavedChanges)
+    }
+
+    @Test
+    fun `save rejects base url without scheme`() = runTest {
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.updateBaseUrl("food.example.com")
+        viewModel.save()
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { settingsRepository.setBaseUrl(any()) }
+        assertNotNull(viewModel.uiState.value.baseUrlError)
+    }
+
+    @Test
+    fun `editing base url clears the base url error`() = runTest {
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.updateBaseUrl("http://bad")
+        viewModel.save()
+        advanceUntilIdle()
+        assertNotNull(viewModel.uiState.value.baseUrlError)
+
+        viewModel.updateBaseUrl("https://good.example.com")
+        assertNull(viewModel.uiState.value.baseUrlError)
+    }
+
+    @Test
+    fun `save allows empty base url to clear configuration`() = runTest {
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.updateBaseUrl("   ")
+        viewModel.save()
+        advanceUntilIdle()
+
+        coVerify { settingsRepository.setBaseUrl("") }
+        assertNull(viewModel.uiState.value.baseUrlError)
+    }
+
+    // --- settings-6: sync interval is clamped ---
+
+    @Test
+    fun `updateSyncInterval clamps to allowed range`() = runTest {
+        viewModel = createViewModel()
+        advanceUntilIdle()
+
+        viewModel.updateSyncInterval(5)
+        assertEquals(15, viewModel.uiState.value.syncInterval)
+        viewModel.updateSyncInterval(500)
+        assertEquals(120, viewModel.uiState.value.syncInterval)
     }
 }
