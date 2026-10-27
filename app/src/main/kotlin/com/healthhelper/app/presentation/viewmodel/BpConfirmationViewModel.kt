@@ -5,19 +5,17 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.healthhelper.app.domain.model.BloodPressureReading
 import com.healthhelper.app.domain.model.BodyPosition
-import com.healthhelper.app.domain.model.HealthDataWriteResult
 import com.healthhelper.app.domain.model.MeasurementLocation
 import com.healthhelper.app.domain.usecase.WriteBloodPressureReadingUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.channels.BufferOverflow
-import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import timber.log.Timber
@@ -31,38 +29,50 @@ data class BpConfirmationUiState(
     val isSaveEnabled: Boolean = false,
     val isSaving: Boolean = false,
     val error: String? = null,
-    val warning: String? = null,
     val validationError: String? = null,
 )
 
 @HiltViewModel
 class BpConfirmationViewModel @Inject constructor(
-    savedStateHandle: SavedStateHandle,
+    private val savedStateHandle: SavedStateHandle,
     private val writeBloodPressureReadingUseCase: WriteBloodPressureReadingUseCase,
 ) : ViewModel() {
 
-    private val initialSystolic: Int = savedStateHandle["systolic"] ?: 120
-    private val initialDiastolic: Int = savedStateHandle["diastolic"] ?: 80
+    private val initialSystolic: String =
+        savedStateHandle.get<String>(KEY_EDIT_SYSTOLIC) ?: (savedStateHandle.get<Int>("systolic") ?: 120).toString()
+    private val initialDiastolic: String =
+        savedStateHandle.get<String>(KEY_EDIT_DIASTOLIC) ?: (savedStateHandle.get<Int>("diastolic") ?: 80).toString()
+    private val initialBodyPosition: BodyPosition =
+        savedStateHandle.get<String>(KEY_EDIT_BODY_POSITION)
+            ?.let { name -> BodyPosition.entries.firstOrNull { it.name == name } }
+            ?: BodyPosition.SITTING_DOWN
+    private val initialLocation: MeasurementLocation =
+        savedStateHandle.get<String>(KEY_EDIT_LOCATION)
+            ?.let { name -> MeasurementLocation.entries.firstOrNull { it.name == name } }
+            ?: MeasurementLocation.LEFT_UPPER_ARM
 
     private val _uiState = MutableStateFlow(
-        BpConfirmationUiState(
-            systolic = initialSystolic.toString(),
-            diastolic = initialDiastolic.toString(),
-            isSaveEnabled = validate(initialSystolic.toString(), initialDiastolic.toString()).first,
-        ),
+        validate(initialSystolic, initialDiastolic).let { (enabled, validationError) ->
+            BpConfirmationUiState(
+                systolic = initialSystolic,
+                diastolic = initialDiastolic,
+                bodyPosition = initialBodyPosition,
+                measurementLocation = initialLocation,
+                isSaveEnabled = enabled,
+                validationError = validationError,
+            )
+        },
     )
     val uiState: StateFlow<BpConfirmationUiState> = _uiState.asStateFlow()
 
-    private val _navigateHome = MutableSharedFlow<String>(
-        replay = 0,
-        extraBufferCapacity = 1,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST,
-    )
-    val navigateHome: SharedFlow<String> = _navigateHome.asSharedFlow()
+    // Channel buffers the one-shot event until a collector attaches (e.g. across Activity recreation).
+    private val _navigateHome = Channel<String>(Channel.BUFFERED)
+    val navigateHome: Flow<String> = _navigateHome.receiveAsFlow()
 
     private var savingJob: Job? = null
 
     fun updateSystolic(value: String) {
+        savedStateHandle[KEY_EDIT_SYSTOLIC] = value
         val (enabled, validationError) = validate(value, _uiState.value.diastolic)
         _uiState.update {
             it.copy(
@@ -74,6 +84,7 @@ class BpConfirmationViewModel @Inject constructor(
     }
 
     fun updateDiastolic(value: String) {
+        savedStateHandle[KEY_EDIT_DIASTOLIC] = value
         val (enabled, validationError) = validate(_uiState.value.systolic, value)
         _uiState.update {
             it.copy(
@@ -85,10 +96,12 @@ class BpConfirmationViewModel @Inject constructor(
     }
 
     fun updateBodyPosition(position: BodyPosition) {
+        savedStateHandle[KEY_EDIT_BODY_POSITION] = position.name
         _uiState.update { it.copy(bodyPosition = position) }
     }
 
     fun updateMeasurementLocation(location: MeasurementLocation) {
+        savedStateHandle[KEY_EDIT_LOCATION] = location.name
         _uiState.update { it.copy(measurementLocation = location) }
     }
 
@@ -111,30 +124,21 @@ class BpConfirmationViewModel @Inject constructor(
                     measurementLocation = state.measurementLocation,
                 )
                 val result = writeBloodPressureReadingUseCase.invoke(reading)
+                val savedMsg = "$systolic/$diastolic mmHg saved"
                 when {
                     result.allSucceeded -> {
                         _uiState.update { it.copy(isSaving = false) }
-                        _navigateHome.emit("$systolic/$diastolic mmHg saved")
+                        _navigateHome.send(savedMsg)
                     }
                     result.healthConnectSuccess && result.foodScannerFailed -> {
                         Timber.w(result.foodScannerResult.exceptionOrNull(), "Food-scanner sync failed for blood pressure")
-                        _uiState.update {
-                            it.copy(
-                                isSaving = false,
-                                warning = "Saved to Health Connect but could not sync to food-scanner.",
-                            )
-                        }
-                        _navigateHome.emit("$systolic/$diastolic mmHg saved")
+                        _uiState.update { it.copy(isSaving = false) }
+                        _navigateHome.send("$savedMsg to Health Connect, but could not sync to food-scanner")
                     }
                     !result.healthConnectSuccess && !result.foodScannerFailed -> {
                         Timber.w("Health Connect write failed for blood pressure (non-blocking)")
-                        _uiState.update {
-                            it.copy(
-                                isSaving = false,
-                                warning = "Reading saved but could not be written to Health Connect.",
-                            )
-                        }
-                        _navigateHome.emit("$systolic/$diastolic mmHg saved")
+                        _uiState.update { it.copy(isSaving = false) }
+                        _navigateHome.send("$savedMsg to food-scanner, but could not write to Health Connect")
                     }
                     else -> {
                         Timber.w(result.foodScannerResult.exceptionOrNull(), "Both writes failed for blood pressure")
@@ -159,6 +163,11 @@ class BpConfirmationViewModel @Inject constructor(
     }
 
     private companion object {
+        const val KEY_EDIT_SYSTOLIC = "edit_systolic"
+        const val KEY_EDIT_DIASTOLIC = "edit_diastolic"
+        const val KEY_EDIT_BODY_POSITION = "edit_body_position"
+        const val KEY_EDIT_LOCATION = "edit_measurement_location"
+
         fun validate(systolicStr: String, diastolicStr: String): Pair<Boolean, String?> {
             val systolic = systolicStr.toIntOrNull()
             val diastolic = diastolicStr.toIntOrNull()

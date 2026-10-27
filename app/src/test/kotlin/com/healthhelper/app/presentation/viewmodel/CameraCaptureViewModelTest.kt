@@ -1,17 +1,15 @@
 package com.healthhelper.app.presentation.viewmodel
 
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import androidx.lifecycle.SavedStateHandle
 import app.cash.turbine.test
 import com.healthhelper.app.data.api.AnthropicApiClient
 import com.healthhelper.app.domain.model.BloodPressureParseResult
+import com.healthhelper.app.domain.model.ImageParseErrorKind
 import com.healthhelper.app.domain.repository.SettingsRepository
+import com.healthhelper.app.presentation.image.ImagePreparer
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
-import io.mockk.mockkStatic
-import io.mockk.unmockkStatic
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -25,7 +23,6 @@ import kotlinx.coroutines.test.setMain
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import java.io.OutputStream
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -38,6 +35,7 @@ class CameraCaptureViewModelTest {
     private val testDispatcher = StandardTestDispatcher()
     private lateinit var anthropicApiClient: AnthropicApiClient
     private lateinit var settingsRepository: SettingsRepository
+    private lateinit var imagePreparer: ImagePreparer
     private lateinit var viewModel: CameraCaptureViewModel
 
     private val testImageBytes = byteArrayOf(1, 2, 3)
@@ -48,27 +46,8 @@ class CameraCaptureViewModelTest {
         anthropicApiClient = mockk()
         settingsRepository = mockk(relaxed = true)
 
-        // Mock BitmapFactory — Android stubs throw RuntimeException in JUnit
-        mockkStatic(BitmapFactory::class)
-        val mockBitmap = mockk<Bitmap>(relaxed = true)
-        every {
-            BitmapFactory.decodeByteArray(any(), any(), any(), any<BitmapFactory.Options>())
-        } answers {
-            val options = lastArg<BitmapFactory.Options>()
-            if (options.inJustDecodeBounds) {
-                options.outWidth = 100
-                options.outHeight = 100
-                null // Real API returns null for bounds-only decode
-            } else {
-                mockBitmap
-            }
-        }
-        every { BitmapFactory.decodeByteArray(any(), any(), any()) } returns mockBitmap
-        every { mockBitmap.compress(any(), any(), any<OutputStream>()) } answers {
-            val os = thirdArg<OutputStream>()
-            os.write(byteArrayOf(1, 2, 3))
-            true
-        }
+        imagePreparer = mockk()
+        every { imagePreparer.prepare(any(), any()) } returns byteArrayOf(1, 2, 3)
 
         every { settingsRepository.apiKeyFlow } returns flowOf("fsk_test")
         every { settingsRepository.baseUrlFlow } returns flowOf("https://example.com")
@@ -82,11 +61,10 @@ class CameraCaptureViewModelTest {
     @AfterEach
     fun tearDown() {
         Dispatchers.resetMain()
-        unmockkStatic(BitmapFactory::class)
     }
 
     private fun createViewModel(savedStateHandle: SavedStateHandle = SavedStateHandle()) =
-        CameraCaptureViewModel(anthropicApiClient, settingsRepository, savedStateHandle, testDispatcher)
+        CameraCaptureViewModel(anthropicApiClient, settingsRepository, savedStateHandle, testDispatcher, imagePreparer)
 
     @Test
     fun `initial state has isProcessing false`() = runTest {
@@ -260,17 +238,7 @@ class CameraCaptureViewModelTest {
 
     @Test
     fun `prepareImageForApi returns null for undecodable bytes emits navigateBackWithError`() = runTest {
-        // Override BitmapFactory to simulate undecodable image (dimensions = 0)
-        every {
-            BitmapFactory.decodeByteArray(any(), any(), any(), any<BitmapFactory.Options>())
-        } answers {
-            val options = lastArg<BitmapFactory.Options>()
-            if (options.inJustDecodeBounds) {
-                options.outWidth = 0
-                options.outHeight = 0
-            }
-            null
-        }
+        every { imagePreparer.prepare(any(), any()) } returns null
 
         viewModel = createViewModel()
         advanceTimeBy(1_000)
@@ -326,6 +294,95 @@ class CameraCaptureViewModelTest {
 
         viewModel.tempFilePath.test {
             assertEquals("/cache/bp_images/bp_456.jpg", awaitItem())
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `auth error tells user to check Settings instead of retaking`() = runTest {
+        coEvery { anthropicApiClient.parseBloodPressureImage(any(), any()) } returns
+            BloodPressureParseResult.Error("Authentication failed", ImageParseErrorKind.AUTH)
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.navigateBackWithError.test {
+            viewModel.onPhotoCaptured(testImageBytes)
+            advanceUntilIdle()
+            val msg = awaitItem()
+            assertTrue(msg.contains("Settings"))
+            assertFalse(msg.contains("retake", ignoreCase = true))
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `network error kind reports connection problem`() = runTest {
+        coEvery { anthropicApiClient.parseBloodPressureImage(any(), any()) } returns
+            BloodPressureParseResult.Error("Failed to analyze image", ImageParseErrorKind.NETWORK)
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.navigateBackWithError.test {
+            viewModel.onPhotoCaptured(testImageBytes)
+            advanceUntilIdle()
+            assertTrue(awaitItem().contains("connection", ignoreCase = true))
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `rate limited and server error kinds report service busy`() = runTest {
+        coEvery { anthropicApiClient.parseBloodPressureImage(any(), any()) } returns
+            BloodPressureParseResult.Error("Rate limited", ImageParseErrorKind.RATE_LIMITED)
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.navigateBackWithError.test {
+            viewModel.onPhotoCaptured(testImageBytes)
+            advanceUntilIdle()
+            assertEquals("Service busy, try again shortly.", awaitItem())
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `onCaptureError cancels in-flight processing so no confirmation is emitted`() = runTest {
+        coEvery { anthropicApiClient.parseBloodPressureImage(any(), any()) } coAnswers {
+            kotlinx.coroutines.delay(2_000)
+            BloodPressureParseResult.Success(120, 80)
+        }
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        viewModel.navigateToConfirmation.test {
+            viewModel.onPhotoCaptured(testImageBytes)
+            testDispatcher.scheduler.advanceTimeBy(100)
+            viewModel.onCaptureError("Could not read shared image.")
+            advanceUntilIdle()
+            expectNoEvents()
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertFalse(viewModel.uiState.value.isProcessing)
+    }
+
+    @Test
+    fun `navigateToConfirmation event is buffered until a collector subscribes`() = runTest {
+        coEvery { anthropicApiClient.parseBloodPressureImage(any(), any()) } returns
+            BloodPressureParseResult.Success(120, 80)
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        // No collector attached yet (e.g. Activity being recreated)
+        viewModel.onPhotoCaptured(testImageBytes)
+        advanceUntilIdle()
+
+        viewModel.navigateToConfirmation.test {
+            assertEquals(Pair(120, 80), awaitItem())
             cancelAndIgnoreRemainingEvents()
         }
     }

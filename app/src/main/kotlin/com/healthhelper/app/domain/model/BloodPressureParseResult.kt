@@ -8,5 +8,6 @@ sealed class BloodPressureParseResult {
 
     data class Error(
         val message: String,
+        val kind: ImageParseErrorKind = ImageParseErrorKind.UNREADABLE,
     ) : BloodPressureParseResult()
 }

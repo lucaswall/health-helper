@@ -330,13 +330,12 @@ class BpConfirmationViewModelTest {
             viewModel.save()
             advanceUntilIdle()
             val msg = awaitItem()
-            assertNotNull(msg)
+            assertEquals("120/80 mmHg saved to food-scanner, but could not write to Health Connect", msg)
             cancelAndIgnoreRemainingEvents()
         }
 
         viewModel.uiState.test {
             val state = awaitItem()
-            assertNotNull(state.warning)
             assertNull(state.error)
             assertFalse(state.isSaving)
             cancelAndIgnoreRemainingEvents()
@@ -356,13 +355,12 @@ class BpConfirmationViewModelTest {
             viewModel.save()
             advanceUntilIdle()
             val msg = awaitItem()
-            assertNotNull(msg)
+            assertEquals("120/80 mmHg saved to Health Connect, but could not sync to food-scanner", msg)
             cancelAndIgnoreRemainingEvents()
         }
 
         viewModel.uiState.test {
             val state = awaitItem()
-            assertNotNull(state.warning)
             assertNull(state.error)
             assertFalse(state.isSaving)
             cancelAndIgnoreRemainingEvents()
@@ -458,6 +456,56 @@ class BpConfirmationViewModelTest {
             val state = awaitItem()
             assertNotNull(state.error)
             assertFalse(state.isSaving)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `out-of-range initial values show validation error immediately`() = runTest {
+        viewModel = createViewModel(80, 120)
+        advanceTimeBy(1_000)
+
+        val state = viewModel.uiState.value
+        assertFalse(state.isSaveEnabled)
+        assertEquals("Systolic must be greater than diastolic", state.validationError)
+    }
+
+    @Test
+    fun `edits survive process death via SavedStateHandle`() = runTest {
+        val handle = createSavedStateHandle(120, 80)
+        viewModel = BpConfirmationViewModel(handle, useCase)
+        advanceTimeBy(1_000)
+
+        viewModel.updateSystolic("135")
+        viewModel.updateDiastolic("85")
+        viewModel.updateBodyPosition(BodyPosition.STANDING_UP)
+        viewModel.updateMeasurementLocation(MeasurementLocation.RIGHT_WRIST)
+
+        val restored = BpConfirmationViewModel(handle, useCase)
+        advanceTimeBy(1_000)
+
+        val state = restored.uiState.value
+        assertEquals("135", state.systolic)
+        assertEquals("85", state.diastolic)
+        assertEquals(BodyPosition.STANDING_UP, state.bodyPosition)
+        assertEquals(MeasurementLocation.RIGHT_WRIST, state.measurementLocation)
+        assertTrue(state.isSaveEnabled)
+    }
+
+    @Test
+    fun `navigateHome event is buffered until a collector subscribes`() = runTest {
+        coEvery { useCase.invoke(any()) } returns HealthDataWriteResult(
+            healthConnectSuccess = true,
+            foodScannerResult = Result.success(Unit),
+        )
+        viewModel = createViewModel(120, 80)
+        advanceTimeBy(1_000)
+
+        viewModel.save()
+        advanceUntilIdle()
+
+        viewModel.navigateHome.test {
+            assertEquals("120/80 mmHg saved", awaitItem())
             cancelAndIgnoreRemainingEvents()
         }
     }

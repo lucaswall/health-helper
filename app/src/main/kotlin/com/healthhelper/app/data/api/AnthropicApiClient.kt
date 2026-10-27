@@ -10,6 +10,7 @@ import com.healthhelper.app.data.api.dto.AnthropicToolDefinition
 import com.healthhelper.app.domain.model.BloodPressureParseResult
 import com.healthhelper.app.domain.model.GlucoseParseResult
 import com.healthhelper.app.domain.model.GlucoseUnit
+import com.healthhelper.app.domain.model.ImageParseErrorKind
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.header
@@ -143,7 +144,7 @@ class AnthropicApiClient @Inject constructor(
             tag = "parseBloodPressureImage",
         )
         return when (outcome) {
-            is ToolCallOutcome.Failure -> BloodPressureParseResult.Error(outcome.message)
+            is ToolCallOutcome.Failure -> BloodPressureParseResult.Error(outcome.message, outcome.kind)
             is ToolCallOutcome.Success -> parseToolInput(outcome.input)
         }
     }
@@ -206,7 +207,7 @@ class AnthropicApiClient @Inject constructor(
             tag = "parseGlucoseImage",
         )
         return when (outcome) {
-            is ToolCallOutcome.Failure -> GlucoseParseResult.Error(outcome.message)
+            is ToolCallOutcome.Failure -> GlucoseParseResult.Error(outcome.message, outcome.kind)
             is ToolCallOutcome.Success -> parseGlucoseToolInput(outcome.input)
         }
     }
@@ -258,12 +259,19 @@ class AnthropicApiClient @Inject constructor(
 
     private sealed interface ToolCallOutcome {
         data class Success(val input: JsonObject) : ToolCallOutcome
-        data class Failure(val message: String) : ToolCallOutcome
+        data class Failure(
+            val message: String,
+            val kind: ImageParseErrorKind = ImageParseErrorKind.UNREADABLE,
+        ) : ToolCallOutcome
     }
 
     private sealed interface AttemptOutcome {
         data class Done(val outcome: ToolCallOutcome) : AttemptOutcome
-        data class Retryable(val message: String, val retryAfterMs: Long?) : AttemptOutcome
+        data class Retryable(
+            val message: String,
+            val kind: ImageParseErrorKind,
+            val retryAfterMs: Long?,
+        ) : AttemptOutcome
     }
 
     /**
@@ -313,7 +321,7 @@ class AnthropicApiClient @Inject constructor(
             when (val result = attemptCall(trimmedKey, request, tag)) {
                 is AttemptOutcome.Done -> return result.outcome
                 is AttemptOutcome.Retryable -> {
-                    if (attempt >= MAX_RETRIES) return ToolCallOutcome.Failure(result.message)
+                    if (attempt >= MAX_RETRIES) return ToolCallOutcome.Failure(result.message, result.kind)
                     val delayMs = retryDelayMs(attempt, result.retryAfterMs)
                     Timber.w("%s: attempt %d failed, retrying after %dms", tag, attempt + 1, delayMs)
                     delay(delayMs)
@@ -358,9 +366,13 @@ class AnthropicApiClient @Inject constructor(
                     else -> "HTTP error $status"
                 }
                 return if (status in RETRYABLE_STATUSES) {
-                    AttemptOutcome.Retryable(message, parseRetryAfterMs(response.headers["retry-after"]))
+                    AttemptOutcome.Retryable(
+                        message,
+                        httpStatusErrorKind(status),
+                        parseRetryAfterMs(response.headers["retry-after"]),
+                    )
                 } else {
-                    AttemptOutcome.Done(ToolCallOutcome.Failure(message))
+                    AttemptOutcome.Done(ToolCallOutcome.Failure(message, httpStatusErrorKind(status)))
                 }
             }
 
@@ -377,7 +389,12 @@ class AnthropicApiClient @Inject constructor(
             throw e
         } catch (@Suppress("SwallowedException") e: SecurityException) {
             Timber.e(e, "%s security exception", tag)
-            AttemptOutcome.Done(ToolCallOutcome.Failure("Network access denied. Please check app permissions."))
+            AttemptOutcome.Done(
+                ToolCallOutcome.Failure(
+                    "Network access denied. Please check app permissions.",
+                    ImageParseErrorKind.NETWORK,
+                ),
+            )
         } catch (e: Exception) {
             when {
                 ApiErrors.isParseError(e) -> {
@@ -385,21 +402,25 @@ class AnthropicApiClient @Inject constructor(
                     // extracted health values), so only the exception type reaches Sentry.
                     Timber.d(e, "%s parse error detail", tag)
                     Timber.e("%s parse error (%s)", tag, e::class.simpleName)
-                    AttemptOutcome.Done(ToolCallOutcome.Failure("Failed to parse response"))
+                    AttemptOutcome.Done(ToolCallOutcome.Failure("Failed to parse response", ImageParseErrorKind.SERVER))
                 }
                 ApiErrors.isNetworkError(e) && ApiErrors.isTimeout(e) -> {
                     // A timeout already cost the user up to the full request timeout; retrying
                     // (and re-uploading the image) would multiply that wait.
                     Timber.w(e, "%s timed out", tag)
-                    AttemptOutcome.Done(ToolCallOutcome.Failure("Request timed out"))
+                    AttemptOutcome.Done(ToolCallOutcome.Failure("Request timed out", ImageParseErrorKind.NETWORK))
                 }
                 ApiErrors.isNetworkError(e) -> {
                     Timber.w(e, "%s network error", tag)
-                    AttemptOutcome.Retryable("Failed to analyze image", retryAfterMs = null)
+                    AttemptOutcome.Retryable(
+                        "Failed to analyze image",
+                        ImageParseErrorKind.NETWORK,
+                        retryAfterMs = null,
+                    )
                 }
                 else -> {
                     Timber.e(e, "%s error", tag)
-                    AttemptOutcome.Done(ToolCallOutcome.Failure("Failed to analyze image"))
+                    AttemptOutcome.Done(ToolCallOutcome.Failure("Failed to analyze image", ImageParseErrorKind.UNKNOWN))
                 }
             }
         }
@@ -420,4 +441,12 @@ class AnthropicApiClient @Inject constructor(
         val base = retryAfterMs ?: (backoff + jitter)
         return base.coerceIn(0, MAX_RETRY_DELAY_MS)
     }
+}
+
+private fun httpStatusErrorKind(status: Int): ImageParseErrorKind = when {
+    status == 401 || status == 403 -> ImageParseErrorKind.AUTH
+    status == 429 -> ImageParseErrorKind.RATE_LIMITED
+    // 5xx (incl. 529 overloaded) are transient; other 4xx are request problems a retry won't fix.
+    status >= 500 -> ImageParseErrorKind.SERVER
+    else -> ImageParseErrorKind.UNKNOWN
 }

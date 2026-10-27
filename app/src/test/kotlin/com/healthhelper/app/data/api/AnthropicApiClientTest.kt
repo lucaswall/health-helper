@@ -3,6 +3,7 @@ package com.healthhelper.app.data.api
 import com.healthhelper.app.domain.model.BloodPressureParseResult
 import com.healthhelper.app.domain.model.GlucoseParseResult
 import com.healthhelper.app.domain.model.GlucoseUnit
+import com.healthhelper.app.domain.model.ImageParseErrorKind
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -108,6 +109,7 @@ class AnthropicApiClientTest {
         val result = client.parseBloodPressureImage(testApiKey, testImageBytes)
 
         assertIs<BloodPressureParseResult.Error>(result)
+        assertEquals(ImageParseErrorKind.AUTH, result.kind)
     }
 
     @Test
@@ -119,6 +121,26 @@ class AnthropicApiClientTest {
         val result = client.parseBloodPressureImage(testApiKey, testImageBytes)
 
         assertIs<BloodPressureParseResult.Error>(result)
+        assertEquals(ImageParseErrorKind.RATE_LIMITED, result.kind)
+    }
+
+    @Test
+    @DisplayName("maps HTTP 5xx to SERVER and other 4xx to UNKNOWN")
+    fun mapsServerAndClientErrorKinds() = runTest {
+        val serverResult = createClient(MockEngine { respondError(HttpStatusCode.ServiceUnavailable) })
+            .parseBloodPressureImage(testApiKey, testImageBytes)
+        assertIs<BloodPressureParseResult.Error>(serverResult)
+        assertEquals(ImageParseErrorKind.SERVER, serverResult.kind)
+
+        val badRequest = createClient(MockEngine { respondError(HttpStatusCode.BadRequest) })
+            .parseGlucoseImage(testApiKey, testImageBytes)
+        assertIs<GlucoseParseResult.Error>(badRequest)
+        assertEquals(ImageParseErrorKind.UNKNOWN, badRequest.kind)
+
+        val forbidden = createClient(MockEngine { respondError(HttpStatusCode.Forbidden) })
+            .parseGlucoseImage(testApiKey, testImageBytes)
+        assertIs<GlucoseParseResult.Error>(forbidden)
+        assertEquals(ImageParseErrorKind.AUTH, forbidden.kind)
     }
 
     @Test
@@ -130,6 +152,7 @@ class AnthropicApiClientTest {
         val result = client.parseBloodPressureImage(testApiKey, testImageBytes)
 
         assertIs<BloodPressureParseResult.Error>(result)
+        assertEquals(ImageParseErrorKind.NETWORK, result.kind)
     }
 
     @Test
