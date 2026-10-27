@@ -79,7 +79,7 @@ class SyncViewModel @Inject constructor(
     private val getTodayHydrationTotalUseCase: GetTodayHydrationTotalUseCase,
     private val permissionChecker: HealthPermissionChecker,
     healthConnectClient: HealthConnectClient?,
-    private val syncCoordinator: SyncCoordinator = SyncCoordinator(),
+    private val syncCoordinator: SyncCoordinator,
 ) : ViewModel() {
 
     private val healthConnectAvailable: Boolean = healthConnectClient != null

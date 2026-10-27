@@ -109,7 +109,7 @@ class SyncViewModelTest {
     private val healthConnectClient: HealthConnectClient? = mockk(relaxed = true)
 
     private fun createViewModel(hcClient: HealthConnectClient? = healthConnectClient): SyncViewModel =
-        SyncViewModel(syncNutritionUseCase, syncHealthReadingsUseCase, settingsRepository, syncScheduler, getLastBpReadingUseCase, getLastGlucoseReadingUseCase, getTodayHydrationTotalUseCase, permissionChecker, hcClient)
+        SyncViewModel(syncNutritionUseCase, syncHealthReadingsUseCase, settingsRepository, syncScheduler, getLastBpReadingUseCase, getLastGlucoseReadingUseCase, getTodayHydrationTotalUseCase, permissionChecker, hcClient, SyncCoordinator())
 
     /**
      * Wraps [runTest] to cancel viewModelScope after the test body,
