@@ -361,10 +361,12 @@ class AnthropicApiClient @Inject constructor(
     }
 }
 
-private fun httpStatusErrorKind(status: Int): ImageParseErrorKind = when (status) {
-    401, 403 -> ImageParseErrorKind.AUTH
-    429 -> ImageParseErrorKind.RATE_LIMITED
-    else -> ImageParseErrorKind.SERVER
+private fun httpStatusErrorKind(status: Int): ImageParseErrorKind = when {
+    status == 401 || status == 403 -> ImageParseErrorKind.AUTH
+    status == 429 -> ImageParseErrorKind.RATE_LIMITED
+    // 5xx (incl. 529 overloaded) are transient; other 4xx are request problems a retry won't fix.
+    status >= 500 -> ImageParseErrorKind.SERVER
+    else -> ImageParseErrorKind.UNKNOWN
 }
 
 private fun exceptionErrorKind(e: Exception): ImageParseErrorKind = when (e) {

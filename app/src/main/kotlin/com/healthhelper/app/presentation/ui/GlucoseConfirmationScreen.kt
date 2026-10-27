@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -83,6 +84,8 @@ fun GlucoseConfirmationScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                // innerPadding already covers the nav bar; don't add it again under the keyboard.
+                .consumeWindowInsets(innerPadding)
                 .imePadding()
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),

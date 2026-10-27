@@ -125,6 +125,25 @@ class AnthropicApiClientTest {
     }
 
     @Test
+    @DisplayName("maps HTTP 5xx to SERVER and other 4xx to UNKNOWN")
+    fun mapsServerAndClientErrorKinds() = runTest {
+        val serverResult = createClient(MockEngine { respondError(HttpStatusCode.ServiceUnavailable) })
+            .parseBloodPressureImage(testApiKey, testImageBytes)
+        assertIs<BloodPressureParseResult.Error>(serverResult)
+        assertEquals(ImageParseErrorKind.SERVER, serverResult.kind)
+
+        val badRequest = createClient(MockEngine { respondError(HttpStatusCode.BadRequest) })
+            .parseGlucoseImage(testApiKey, testImageBytes)
+        assertIs<GlucoseParseResult.Error>(badRequest)
+        assertEquals(ImageParseErrorKind.UNKNOWN, badRequest.kind)
+
+        val forbidden = createClient(MockEngine { respondError(HttpStatusCode.Forbidden) })
+            .parseGlucoseImage(testApiKey, testImageBytes)
+        assertIs<GlucoseParseResult.Error>(forbidden)
+        assertEquals(ImageParseErrorKind.AUTH, forbidden.kind)
+    }
+
+    @Test
     @DisplayName("returns Error on network timeout or IO exception")
     fun returnsErrorOnNetworkFailure() = runTest {
         val engine = MockEngine { throw java.io.IOException("Connection refused") }
