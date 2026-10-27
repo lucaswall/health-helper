@@ -223,7 +223,8 @@ class SyncHealthReadingsUseCase @Inject constructor(
             Timber.w(e, "refineMissingPermissions: could not read granted permissions")
             return reported.toSet()
         }
-        if (granted.isEmpty()) return reported.toSet()
+        // null = grant state unknown; empty = query likely failed. Either way, trust the report.
+        if (granted.isNullOrEmpty()) return reported.toSet()
         val actuallyMissing = reported.filterTo(mutableSetOf()) { it !in granted }
         if (HealthPermissions.READ_HEALTH_DATA_IN_BACKGROUND !in granted) {
             actuallyMissing += HealthPermissions.READ_HEALTH_DATA_IN_BACKGROUND

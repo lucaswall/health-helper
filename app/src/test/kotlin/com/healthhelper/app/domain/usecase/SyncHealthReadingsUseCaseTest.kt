@@ -916,6 +916,17 @@ class SyncHealthReadingsUseCaseTest {
     }
 
     @Test
+    @DisplayName("SecurityException falls back to the per-type permission when grant state is unknown")
+    fun securityExceptionFallsBackWhenGrantStateUnknown() = runTest {
+        coEvery { hydrationRepository.getReadingsResult(any(), any(), any()) } throws SecurityException("denied")
+        coEvery { permissionChecker.getGrantedPermissions() } returns null
+
+        val report = createUseCase().invoke()
+
+        assertEquals(setOf(HealthPermissions.READ_HYDRATION), report.missingReadPermissions)
+    }
+
+    @Test
     @DisplayName("permission checker is not queried when no SecurityException occurred")
     fun permissionCheckerNotQueriedWithoutSecurityException() = runTest {
         createUseCase().invoke()
