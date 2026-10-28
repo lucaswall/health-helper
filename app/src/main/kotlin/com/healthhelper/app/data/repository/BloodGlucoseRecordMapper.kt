@@ -9,6 +9,16 @@ import com.healthhelper.app.domain.model.GlucoseReading
 import com.healthhelper.app.domain.model.RelationToMeal
 import com.healthhelper.app.domain.model.SpecimenSource
 import java.time.ZoneId
+import kotlin.math.roundToInt
+
+private const val GLUCOSE_CLIENT_RECORD_PREFIX = "bloodglucose-"
+
+/**
+ * clientRecordVersion marking glucose records whose level was written in mg/dL. Older builds wrote
+ * version-0 records as mmol/L using the app's 18.018 factor, while Health Connect converts with
+ * 18.0, so HC (and every app reading it) showed those values ~0.1% low.
+ */
+internal const val GLUCOSE_MG_DL_RECORD_VERSION = 1L
 
 fun mapToBloodGlucoseRecord(reading: GlucoseReading): BloodGlucoseRecord {
     val zoneOffset = reading.zoneOffset ?: ZoneId.systemDefault().rules.getOffset(reading.timestamp)
@@ -42,12 +52,14 @@ fun mapToBloodGlucoseRecord(reading: GlucoseReading): BloodGlucoseRecord {
     return BloodGlucoseRecord(
         time = reading.timestamp,
         zoneOffset = zoneOffset,
-        level = BloodGlucose.millimolesPerLiter(reading.toMmolL()),
+        // Stored in the unit the user entered so HC shows exactly that number.
+        level = BloodGlucose.milligramsPerDeciliter(reading.valueMgDl.toDouble()),
         relationToMeal = relationToMealInt,
         mealType = mealTypeInt,
         specimenSource = specimenSourceInt,
         metadata = Metadata.manualEntry(
-            clientRecordId = "bloodglucose-${reading.timestamp.toEpochMilli()}",
+            clientRecordId = "$GLUCOSE_CLIENT_RECORD_PREFIX${reading.timestamp.toEpochMilli()}",
+            clientRecordVersion = GLUCOSE_MG_DL_RECORD_VERSION,
         ),
     )
 }
@@ -80,11 +92,26 @@ fun mapToGlucoseReading(record: BloodGlucoseRecord): GlucoseReading {
     }
 
     return GlucoseReading(
-        valueMgDl = GlucoseReading.fromMmolL(record.level.inMillimolesPerLiter).coerceIn(18, 720),
+        valueMgDl = readMgDl(record).coerceIn(18, 720),
         relationToMeal = relationToMeal,
         glucoseMealType = glucoseMealType,
         specimenSource = specimenSource,
         timestamp = record.time,
         zoneOffset = record.zoneOffset,
     )
+}
+
+/**
+ * Exact mg/dL for records written in mg/dL (ours from now on, and other apps'). This app's legacy
+ * version-0 records are decoded with the 18.018 factor they were encoded with, so they read back
+ * as the integer the user saved.
+ */
+private fun readMgDl(record: BloodGlucoseRecord): Int {
+    val isLegacyOwnRecord = record.metadata.clientRecordId?.startsWith(GLUCOSE_CLIENT_RECORD_PREFIX) == true &&
+        record.metadata.clientRecordVersion < GLUCOSE_MG_DL_RECORD_VERSION
+    return if (isLegacyOwnRecord) {
+        GlucoseReading.fromMmolL(record.level.inMillimolesPerLiter)
+    } else {
+        record.level.inMilligramsPerDeciliter.roundToInt()
+    }
 }

@@ -20,11 +20,47 @@ class BloodGlucoseRecordMapperTest {
     private val testTimestamp = Instant.parse("2026-02-28T10:00:00Z")
 
     @Test
-    @DisplayName("mapToBloodGlucoseRecord maps 100 mg/dL to approximately 5.55 mmol/L")
+    @DisplayName("mapToBloodGlucoseRecord stores the exact mg/dL value, marked with the mg/dL record version")
     fun mapsValueCorrectly() {
         val reading = GlucoseReading(valueMgDl = 100, timestamp = testTimestamp)
         val record = mapToBloodGlucoseRecord(reading)
-        assertEquals(5.55, record.level.inMillimolesPerLiter, 0.01)
+        assertEquals(100.0, record.level.inMilligramsPerDeciliter, 1e-9)
+        assertEquals(GLUCOSE_MG_DL_RECORD_VERSION, record.metadata.clientRecordVersion)
+    }
+
+    @Test
+    @DisplayName("every valid value round-trips exactly through Health Connect")
+    fun everyValueRoundTrips() {
+        (18..720).forEach { mgDl ->
+            val record = mapToBloodGlucoseRecord(GlucoseReading(valueMgDl = mgDl, timestamp = testTimestamp))
+            assertEquals(mgDl, mapToGlucoseReading(record).valueMgDl, "mgDl=$mgDl")
+        }
+    }
+
+    @Test
+    @DisplayName("legacy version-0 records written with the 18.018 factor still read back exactly")
+    fun legacyRecordsReadBackExactly() {
+        (18..720).forEach { mgDl ->
+            val legacy = BloodGlucoseRecord(
+                time = testTimestamp,
+                zoneOffset = ZoneOffset.UTC,
+                level = BloodGlucose.millimolesPerLiter(mgDl / 18.018),
+                metadata = Metadata.manualEntry(clientRecordId = "bloodglucose-${testTimestamp.toEpochMilli()}"),
+            )
+            assertEquals(mgDl, mapToGlucoseReading(legacy).valueMgDl, "mgDl=$mgDl")
+        }
+    }
+
+    @Test
+    @DisplayName("records from other apps read back as the mg/dL value they wrote")
+    fun otherAppRecordsReadExactly() {
+        val record = BloodGlucoseRecord(
+            time = testTimestamp,
+            zoneOffset = ZoneOffset.UTC,
+            level = BloodGlucose.milligramsPerDeciliter(600.0),
+            metadata = Metadata.manualEntry(clientRecordId = "meter-app-42"),
+        )
+        assertEquals(600, mapToGlucoseReading(record).valueMgDl)
     }
 
     @Test
