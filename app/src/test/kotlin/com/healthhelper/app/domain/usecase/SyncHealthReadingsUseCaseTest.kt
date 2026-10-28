@@ -42,6 +42,7 @@ class SyncHealthReadingsUseCaseTest {
     private val hydrationRepository = mockk<HydrationRepository>()
     private val foodScannerHealthRepository = mockk<FoodScannerHealthRepository>()
     private val settingsRepository = mockk<SettingsRepository>()
+    private val syncPendingWaistReadings = mockk<SyncPendingWaistReadingsUseCase>()
     private val permissionChecker = mockk<HealthPermissionChecker>()
 
     @BeforeEach
@@ -63,6 +64,7 @@ class SyncHealthReadingsUseCaseTest {
         coEvery { settingsRepository.getDirectPushedBpTimestamps() } returns emptySet()
         coEvery { settingsRepository.pruneDirectPushedTimestamps(any(), any()) } returns Unit
         coEvery { settingsRepository.getPendingBpHeartRates() } returns emptyMap()
+        coEvery { syncPendingWaistReadings() } returns 0
         every { settingsRepository.lastHydrationSyncTimestampFlow } returns flowOf(0L)
         every { settingsRepository.hydrationSyncCountFlow } returns flowOf(0)
         coEvery { settingsRepository.setLastHydrationSyncTimestamp(any()) } returns Unit
@@ -84,6 +86,7 @@ class SyncHealthReadingsUseCaseTest {
         foodScannerHealthRepository = foodScannerHealthRepository,
         settingsRepository = settingsRepository,
         permissionChecker = permissionChecker,
+        syncPendingWaistReadings = syncPendingWaistReadings,
     )
 
     private fun glucoseReadings(count: Int, startMs: Long = 1_000L): List<GlucoseReading> =
@@ -1052,5 +1055,35 @@ class SyncHealthReadingsUseCaseTest {
         createUseCase().invoke()
 
         assertEquals(listOf(74, null), pushed.captured.map { it.heartRate })
+    }
+
+    @Test
+    @DisplayName("pending waist readings are retried on every sync")
+    fun pendingWaistReadingsRetried() = runTest {
+        createUseCase().invoke()
+
+        coVerify(exactly = 1) { syncPendingWaistReadings() }
+    }
+
+    @Test
+    @DisplayName("a failing waist retry does not stop the health readings sync")
+    fun waistRetryFailureIsNonFatal() = runTest {
+        coEvery { syncPendingWaistReadings() } throws RuntimeException("offline")
+        coEvery { bloodGlucoseRepository.getReadingsResult(any(), any(), any()) } returns ReadingsResult(glucoseReadings(1))
+        coEvery { foodScannerHealthRepository.pushGlucoseReadings(any()) } returns Result.success(1)
+
+        createUseCase().invoke()
+
+        coVerify { foodScannerHealthRepository.pushGlucoseReadings(any()) }
+    }
+
+    @Test
+    @DisplayName("nothing is sent when food-scanner is not configured")
+    fun waistNotRetriedWhenUnconfigured() = runTest {
+        coEvery { settingsRepository.isConfigured() } returns false
+
+        createUseCase().invoke()
+
+        coVerify(exactly = 0) { syncPendingWaistReadings() }
     }
 }

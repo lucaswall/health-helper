@@ -996,6 +996,16 @@ class FoodScannerApiClientTest {
 
     // --- Parse error handling (Ktor 3 wraps decode errors in JsonConvertException) ---
 
+    private val sampleWaistRequest = com.healthhelper.app.data.api.dto.WaistReadingRequest(
+        readings = listOf(
+            com.healthhelper.app.data.api.dto.WaistReadingDto(
+                measuredAt = "2026-10-28T11:05:00Z",
+                valueCm = 104.5,
+                zoneOffset = "-03:00",
+            ),
+        ),
+    )
+
     private val sampleHydrationRequest = HydrationReadingRequest(
         readings = listOf(
             HydrationReadingDto(
@@ -1017,6 +1027,7 @@ class FoodScannerApiClientTest {
         "postGlucoseReadings" to client.postGlucoseReadings("https://food.example.com", "fsk_test", sampleGlucoseRequest),
         "postBloodPressureReadings" to client.postBloodPressureReadings("https://food.example.com", "fsk_test", sampleBpRequest),
         "postHydrationReadings" to client.postHydrationReadings("https://food.example.com", "fsk_test", sampleHydrationRequest),
+        "postWaistReadings" to client.postWaistReadings("https://food.example.com", "fsk_test", sampleWaistRequest),
     )
 
     private fun assertParseFailure(name: String, result: Result<*>) {
@@ -1166,5 +1177,27 @@ class FoodScannerApiClientTest {
 
         assertEquals(4, result.getOrThrow())
         assertEquals("https://food.example.com/api/v1/hydration-readings", capturedUrl)
+    }
+
+    @Test
+    @DisplayName("postWaistReadings posts the readings to waist-readings and returns upserted count")
+    fun postWaistReadingsSuccess() = runTest {
+        var capturedUrl: String? = null
+        var capturedBody: String? = null
+        val engine = MockEngine { request ->
+            capturedUrl = request.url.toString()
+            capturedBody = (request.body as io.ktor.http.content.TextContent).text
+            respond(content = """{"success":true,"data":{"upserted":1}}""", headers = jsonHeaders)
+        }
+        val client = createClient(engine)
+
+        val result = client.postWaistReadings("https://food.example.com", "fsk_test", sampleWaistRequest)
+
+        assertEquals(1, result.getOrThrow())
+        assertEquals("https://food.example.com/api/v1/waist-readings", capturedUrl)
+        val body = capturedBody!!
+        assertTrue(body.contains("\"valueCm\":104.5"), body)
+        assertTrue(body.contains("\"measuredAt\":\"2026-10-28T11:05:00Z\""), body)
+        assertTrue(body.contains("\"zoneOffset\":\"-03:00\""), body)
     }
 }

@@ -129,4 +129,25 @@ class AppModuleTest {
         assertNull(result)
         assertFalse(deleted)
     }
+
+    @Test
+    fun `preserveCorruptFile copies the corrupt waist store next to itself`() {
+        val dir = kotlin.io.path.createTempDirectory("waist").toFile()
+        val file = java.io.File(dir, "waist_readings.preferences_pb").apply { writeText("corrupt bytes") }
+
+        val copy = AppModule.preserveCorruptFile(file, 1_700_000_000_000L)
+
+        assertNotNull(copy)
+        assertEquals("waist_readings.preferences_pb.corrupt-1700000000000", copy.name)
+        assertEquals("corrupt bytes", copy.readText())
+        assertEquals("corrupt bytes", file.readText())
+        dir.deleteRecursively()
+    }
+
+    @Test
+    fun `preserveCorruptFile returns null when there is no file`() {
+        val dir = kotlin.io.path.createTempDirectory("waist").toFile()
+        assertNull(AppModule.preserveCorruptFile(java.io.File(dir, "missing"), 1L))
+        dir.deleteRecursively()
+    }
 }

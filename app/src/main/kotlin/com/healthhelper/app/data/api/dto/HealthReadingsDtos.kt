@@ -47,6 +47,18 @@ data class HydrationReadingRequest(
 )
 
 @Serializable
+data class WaistReadingDto(
+    val measuredAt: String,
+    val valueCm: Double,
+    val zoneOffset: String? = null,
+)
+
+@Serializable
+data class WaistReadingRequest(
+    val readings: List<WaistReadingDto>,
+)
+
+@Serializable
 data class UpsertResponse(
     val upserted: Int,
 )

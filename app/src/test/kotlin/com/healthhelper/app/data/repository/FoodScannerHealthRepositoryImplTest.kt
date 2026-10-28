@@ -576,4 +576,42 @@ class FoodScannerHealthRepositoryImplTest {
 
         assertNull(slot.captured.readings[0].zoneOffset)
     }
+
+    // --- pushWaistReadings tests ---
+
+    @Test
+    @DisplayName("pushWaistReadings maps value, timestamp and normalized zone offset")
+    fun pushWaistReadingsMapsFields() = runTest {
+        val slot = slot<com.healthhelper.app.data.api.dto.WaistReadingRequest>()
+        coEvery { apiClient.postWaistReadings(any(), any(), capture(slot)) } returns Result.success(1)
+        val reading = com.healthhelper.app.domain.model.WaistReading(
+            valueCm = 104.5,
+            timestamp = fixedTimestamp,
+            zoneOffset = ZoneOffset.UTC,
+        )
+
+        val result = repository.pushWaistReadings(listOf(reading))
+
+        assertEquals(1, result.getOrThrow())
+        val dto = slot.captured.readings.single()
+        assertEquals(104.5, dto.valueCm)
+        assertEquals(fixedTimestamp.toString(), dto.measuredAt)
+        assertEquals("+00:00", dto.zoneOffset)
+    }
+
+    @Test
+    @DisplayName("pushWaistReadings with nothing to send makes no request")
+    fun pushWaistReadingsEmptyIsNoOp() = runTest {
+        assertEquals(0, repository.pushWaistReadings(emptyList()).getOrThrow())
+        coVerify(exactly = 0) { apiClient.postWaistReadings(any(), any(), any()) }
+    }
+
+    @Test
+    @DisplayName("pushWaistReadings fails when food-scanner is not configured")
+    fun pushWaistReadingsNotConfigured() = runTest {
+        every { settingsRepository.baseUrlFlow } returns flowOf("")
+        val reading = com.healthhelper.app.domain.model.WaistReading(valueCm = 100.0, timestamp = fixedTimestamp)
+
+        assertTrue(repository.pushWaistReadings(listOf(reading)).isFailure)
+    }
 }

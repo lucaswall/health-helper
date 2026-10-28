@@ -108,6 +108,16 @@ internal fun shouldAutoRequestHcPermissions(
     alreadyAutoRequested: Set<String>,
 ): Boolean = missing.isNotEmpty() && !alreadyAutoRequested.containsAll(missing)
 
+internal fun waistPendingLabel(count: Int): String =
+    if (count == 1) "1 reading waiting to sync to food-scanner" else "$count readings waiting to sync to food-scanner"
+
+internal fun waistRejectedLabel(count: Int): String =
+    if (count == 1) {
+        "1 reading was rejected by food-scanner; it is kept on this phone"
+    } else {
+        "$count readings were rejected by food-scanner; they are kept on this phone"
+    }
+
 @Composable
 private fun SectionTitle(text: String) {
     Text(
@@ -123,6 +133,7 @@ fun SyncScreen(
     onNavigateToSettings: () -> Unit,
     onLogBloodPressure: () -> Unit = {},
     onLogGlucose: () -> Unit = {},
+    onLogWaist: () -> Unit = {},
     snackbarMessage: String? = null,
     onSnackbarShown: () -> Unit = {},
     viewModel: SyncViewModel = hiltViewModel(),
@@ -514,7 +525,57 @@ fun SyncScreen(
                 }
             }
 
-            // Section 4: Hydration
+            // Section 4: Waist (no Health Connect type: kept on the phone until Food Scanner has it)
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    SectionTitle("Waist")
+
+                    if (uiState.lastWaistReadingDisplay.isNotEmpty()) {
+                        val timeLabel = if (uiState.lastWaistReadingTime.isNotEmpty()) " · ${uiState.lastWaistReadingTime}" else ""
+                        Text(
+                            text = "${uiState.lastWaistReadingDisplay}$timeLabel",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    } else {
+                        Text(
+                            text = "No readings yet",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+
+                    if (uiState.waistPendingCount > 0) {
+                        Text(
+                            text = waistPendingLabel(uiState.waistPendingCount),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+
+                    if (uiState.waistRejectedCount > 0) {
+                        Text(
+                            text = waistRejectedLabel(uiState.waistRejectedCount),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                        )
+                    }
+
+                    Button(
+                        onClick = onLogWaist,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Log Waist")
+                    }
+                }
+            }
+
+            // Section 5: Hydration
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier

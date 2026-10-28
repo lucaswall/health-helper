@@ -4,6 +4,7 @@ import com.healthhelper.app.data.api.dto.ApiEnvelope
 import com.healthhelper.app.data.api.dto.BloodPressureReadingRequest
 import com.healthhelper.app.data.api.dto.GlucoseReadingRequest
 import com.healthhelper.app.data.api.dto.HydrationReadingRequest
+import com.healthhelper.app.data.api.dto.WaistReadingRequest
 import com.healthhelper.app.data.api.dto.NutritionSummaryDto
 import com.healthhelper.app.data.api.dto.UpsertResponse
 import com.healthhelper.app.domain.model.FoodLogEntry
@@ -119,6 +120,17 @@ class FoodScannerApiClient @Inject constructor(
         apiKey = apiKey,
         path = "hydration-readings",
         tag = "postHydrationReadings",
+    ) { setBody(request) }
+
+    suspend fun postWaistReadings(
+        baseUrl: String,
+        apiKey: String,
+        request: WaistReadingRequest,
+    ): Result<Int> = postUpsert(
+        baseUrl = baseUrl,
+        apiKey = apiKey,
+        path = "waist-readings",
+        tag = "postWaistReadings",
     ) { setBody(request) }
 
     private suspend fun postUpsert(

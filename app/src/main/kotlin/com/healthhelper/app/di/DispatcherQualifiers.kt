@@ -9,3 +9,8 @@ annotation class DefaultDispatcher
 @Qualifier
 @Retention(AnnotationRetention.BINARY)
 annotation class IoDispatcher
+
+/** The waist readings DataStore: separate from settings because it holds data with no other copy. */
+@Qualifier
+@Retention(AnnotationRetention.BINARY)
+annotation class WaistDataStore

@@ -5,8 +5,10 @@ import android.content.SharedPreferences
 import androidx.datastore.core.DataStore
 import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.preferencesDataStore
+import androidx.datastore.preferences.preferencesDataStoreFile
 import androidx.health.connect.client.HealthConnectClient
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
@@ -19,6 +21,7 @@ import com.healthhelper.app.data.repository.FoodScannerHealthRepositoryImpl
 import com.healthhelper.app.data.repository.HealthConnectBloodGlucoseRepository
 import com.healthhelper.app.data.repository.HealthConnectBloodPressureRepository
 import com.healthhelper.app.data.repository.HealthConnectHeartRateRepository
+import com.healthhelper.app.data.repository.DataStoreWaistReadingRepository
 import com.healthhelper.app.data.repository.HealthConnectHydrationRepository
 import com.healthhelper.app.data.repository.HealthConnectNutritionRepository
 import com.healthhelper.app.data.repository.HealthConnectPermissionChecker
@@ -26,6 +29,7 @@ import com.healthhelper.app.data.sync.SyncScheduler
 import com.healthhelper.app.domain.repository.BloodGlucoseRepository
 import com.healthhelper.app.domain.repository.BloodPressureRepository
 import com.healthhelper.app.domain.repository.HeartRateRepository
+import com.healthhelper.app.domain.repository.WaistReadingRepository
 import com.healthhelper.app.domain.repository.FoodLogRepository
 import com.healthhelper.app.domain.repository.FoodScannerHealthRepository
 import com.healthhelper.app.domain.repository.HealthPermissionChecker
@@ -62,6 +66,7 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(
 )
 
 private const val ENCRYPTED_PREFS_NAME = "encrypted_settings"
+private const val WAIST_DATASTORE_NAME = "waist_readings"
 
 @Module
 @InstallIn(SingletonComponent::class)
@@ -84,6 +89,43 @@ object AppModule {
         dataStore: DataStore<Preferences>,
         encryptedPrefs: SharedPreferences?,
     ): SettingsRepository = DataStoreSettingsRepository(dataStore, encryptedPrefs)
+
+    /**
+     * Its own file, not the settings store: settings may be reset to empty on corruption (a
+     * re-sync recovers them), but pending waist readings exist nowhere else, so a corrupt file is
+     * copied aside before the store starts empty.
+     */
+    @Provides
+    @Singleton
+    @WaistDataStore
+    fun provideWaistDataStore(@ApplicationContext context: Context): DataStore<Preferences> {
+        val file = context.preferencesDataStoreFile(WAIST_DATASTORE_NAME)
+        return PreferenceDataStoreFactory.create(
+            corruptionHandler = ReplaceFileCorruptionHandler { e ->
+                val copy = preserveCorruptFile(file, System.currentTimeMillis())
+                Timber.e("Waist DataStore corrupted (%s); preserved copy=%b", e::class.simpleName, copy != null)
+                emptyPreferences()
+            },
+            produceFile = { file },
+        )
+    }
+
+    /** Copies a corrupt DataStore file next to itself; returns the copy, or null if it couldn't be made. */
+    internal fun preserveCorruptFile(file: java.io.File, nowMs: Long): java.io.File? = try {
+        if (file.exists()) {
+            java.io.File(file.parentFile, "${file.name}.corrupt-$nowMs").also { file.copyTo(it, overwrite = false) }
+        } else {
+            null
+        }
+    } catch (e: java.io.IOException) {
+        null
+    }
+
+    @Provides
+    @Singleton
+    fun provideWaistReadingRepository(
+        @WaistDataStore dataStore: DataStore<Preferences>,
+    ): WaistReadingRepository = DataStoreWaistReadingRepository(dataStore)
 
     @Provides
     @Singleton

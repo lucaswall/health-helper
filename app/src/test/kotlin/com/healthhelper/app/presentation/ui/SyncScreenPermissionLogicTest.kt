@@ -33,4 +33,11 @@ class SyncScreenPermissionLogicTest {
         val missing = HealthPermissions.OPTIONAL + HealthPermissions.WRITE_NUTRITION
         assertTrue(shouldAutoRequestHcPermissions(missing, HealthPermissions.OPTIONAL))
     }
+
+    @Test
+    fun `waist pending label uses singular and plural`() {
+        kotlin.test.assertEquals("1 reading waiting to sync to food-scanner", waistPendingLabel(1))
+        kotlin.test.assertEquals("3 readings waiting to sync to food-scanner", waistPendingLabel(3))
+        kotlin.test.assertEquals("1 reading was rejected by food-scanner; it is kept on this phone", waistRejectedLabel(1))
+    }
 }

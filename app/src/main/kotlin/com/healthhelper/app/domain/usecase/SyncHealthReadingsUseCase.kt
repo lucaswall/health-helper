@@ -32,9 +32,21 @@ class SyncHealthReadingsUseCase @Inject constructor(
     private val foodScannerHealthRepository: FoodScannerHealthRepository,
     private val settingsRepository: SettingsRepository,
     private val permissionChecker: HealthPermissionChecker,
+    private val syncPendingWaistReadings: SyncPendingWaistReadingsUseCase,
 ) {
     suspend operator fun invoke(): HealthReadingsSyncReport {
         if (!settingsRepository.isConfigured()) return HealthReadingsSyncReport()
+
+        // Waist readings live only on the phone until Food Scanner accepts them (Health Connect
+        // has no waist type); retry any that an offline save left behind.
+        try {
+            val stillPending = syncPendingWaistReadings()
+            if (stillPending > 0) Timber.w("Waist readings still pending after sync: %d", stillPending)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.w(e, "Pending waist readings sync failed (non-fatal)")
+        }
 
         val missing = mutableSetOf<String>()
         val skipped = mutableSetOf<HealthSyncType>()

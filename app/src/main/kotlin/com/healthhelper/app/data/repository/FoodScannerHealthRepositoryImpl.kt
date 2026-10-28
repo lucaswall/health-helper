@@ -7,9 +7,12 @@ import com.healthhelper.app.data.api.dto.GlucoseReadingDto
 import com.healthhelper.app.data.api.dto.GlucoseReadingRequest
 import com.healthhelper.app.data.api.dto.HydrationReadingDto
 import com.healthhelper.app.data.api.dto.HydrationReadingRequest
+import com.healthhelper.app.data.api.dto.WaistReadingDto
+import com.healthhelper.app.data.api.dto.WaistReadingRequest
 import com.healthhelper.app.domain.model.BloodPressureReading
 import com.healthhelper.app.domain.model.GlucoseReading
 import com.healthhelper.app.domain.model.HydrationReading
+import com.healthhelper.app.domain.model.WaistReading
 import com.healthhelper.app.domain.repository.FoodScannerHealthRepository
 import com.healthhelper.app.domain.repository.SettingsRepository
 import java.time.ZoneId
@@ -86,6 +89,28 @@ class FoodScannerHealthRepositoryImpl @Inject constructor(
             baseUrl = baseUrl,
             apiKey = apiKey,
             request = HydrationReadingRequest(readings = readings.map { toHydrationReadingDto(it) }),
+        )
+    }
+
+    override suspend fun pushWaistReadings(readings: List<WaistReading>): Result<Int> {
+        if (readings.isEmpty()) return Result.success(0)
+        val baseUrl = settingsRepository.baseUrlFlow.first()
+        val apiKey = settingsRepository.apiKeyFlow.first()
+        if (baseUrl.isBlank() || apiKey.isBlank()) {
+            return Result.failure(Exception("Food-scanner settings not configured"))
+        }
+        return apiClient.postWaistReadings(
+            baseUrl = baseUrl,
+            apiKey = apiKey,
+            request = WaistReadingRequest(
+                readings = readings.map { reading ->
+                    WaistReadingDto(
+                        measuredAt = reading.timestamp.toString(),
+                        valueCm = reading.valueCm,
+                        zoneOffset = zoneOffsetString(reading.zoneOffset, reading.timestamp),
+                    )
+                },
+            ),
         )
     }
 

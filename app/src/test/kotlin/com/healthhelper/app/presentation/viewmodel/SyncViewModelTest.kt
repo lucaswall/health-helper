@@ -60,6 +60,7 @@ class SyncViewModelTest {
     private lateinit var getTodayHydrationTotalUseCase: GetTodayHydrationTotalUseCase
     private lateinit var syncHealthReadingsUseCase: SyncHealthReadingsUseCase
     private lateinit var permissionChecker: HealthPermissionChecker
+    private lateinit var waistReadingRepository: com.healthhelper.app.domain.repository.WaistReadingRepository
     private lateinit var viewModel: SyncViewModel
 
     @BeforeEach
@@ -73,6 +74,10 @@ class SyncViewModelTest {
         getTodayHydrationTotalUseCase = mockk()
         syncHealthReadingsUseCase = mockk(relaxed = true)
         permissionChecker = mockk()
+        waistReadingRepository = mockk()
+        every { waistReadingRepository.lastReadingFlow } returns flowOf(null)
+        every { waistReadingRepository.pendingCountFlow } returns flowOf(0)
+        every { waistReadingRepository.rejectedCountFlow } returns flowOf(0)
         coEvery { permissionChecker.getGrantedPermissions() } returns emptySet()
         coEvery { permissionChecker.getRequestablePermissions() } returns HealthPermissions.REQUIRED
 
@@ -111,7 +116,7 @@ class SyncViewModelTest {
     private val healthConnectClient: HealthConnectClient? = mockk(relaxed = true)
 
     private fun createViewModel(hcClient: HealthConnectClient? = healthConnectClient): SyncViewModel =
-        SyncViewModel(syncNutritionUseCase, syncHealthReadingsUseCase, settingsRepository, syncScheduler, getLastBpReadingUseCase, getLastGlucoseReadingUseCase, getTodayHydrationTotalUseCase, permissionChecker, hcClient, SyncCoordinator())
+        SyncViewModel(syncNutritionUseCase, syncHealthReadingsUseCase, settingsRepository, syncScheduler, getLastBpReadingUseCase, getLastGlucoseReadingUseCase, getTodayHydrationTotalUseCase, permissionChecker, hcClient, SyncCoordinator(), waistReadingRepository)
 
     /**
      * Wraps [runTest] to cancel viewModelScope after the test body,
@@ -166,7 +171,7 @@ class SyncViewModelTest {
         val coordinator = SyncCoordinator()
         assertTrue(coordinator.tryAcquire())
 
-        viewModel = SyncViewModel(syncNutritionUseCase, syncHealthReadingsUseCase, settingsRepository, syncScheduler, getLastBpReadingUseCase, getLastGlucoseReadingUseCase, getTodayHydrationTotalUseCase, permissionChecker, healthConnectClient, coordinator)
+        viewModel = SyncViewModel(syncNutritionUseCase, syncHealthReadingsUseCase, settingsRepository, syncScheduler, getLastBpReadingUseCase, getLastGlucoseReadingUseCase, getTodayHydrationTotalUseCase, permissionChecker, healthConnectClient, coordinator, waistReadingRepository)
         advanceTimeBy(1_000)
 
         viewModel.triggerSync()
@@ -187,7 +192,7 @@ class SyncViewModelTest {
         coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Success(3, 1)
         val coordinator = SyncCoordinator()
 
-        viewModel = SyncViewModel(syncNutritionUseCase, syncHealthReadingsUseCase, settingsRepository, syncScheduler, getLastBpReadingUseCase, getLastGlucoseReadingUseCase, getTodayHydrationTotalUseCase, permissionChecker, healthConnectClient, coordinator)
+        viewModel = SyncViewModel(syncNutritionUseCase, syncHealthReadingsUseCase, settingsRepository, syncScheduler, getLastBpReadingUseCase, getLastGlucoseReadingUseCase, getTodayHydrationTotalUseCase, permissionChecker, healthConnectClient, coordinator, waistReadingRepository)
         advanceTimeBy(1_000)
 
         viewModel.triggerSync()
@@ -1663,5 +1668,22 @@ class SyncViewModelTest {
         val state = viewModel.uiState.value
         assertEquals(setOf(HealthPermissions.WRITE_HEART_RATE), state.missingHealthPermissions)
         assertTrue(state.permissionGranted)
+    }
+
+    @Test
+    fun `waist card shows the last reading and the pending count`() = viewModelTest {
+        val measuredAt = java.time.Instant.now().minusSeconds(2 * 24 * 3600)
+        every { waistReadingRepository.lastReadingFlow } returns
+            flowOf(com.healthhelper.app.domain.model.WaistReading(valueCm = 104.5, timestamp = measuredAt))
+        every { waistReadingRepository.pendingCountFlow } returns flowOf(2)
+        every { waistReadingRepository.rejectedCountFlow } returns flowOf(1)
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        val state = viewModel.uiState.value
+        assertEquals("104.5 cm", state.lastWaistReadingDisplay)
+        assertTrue(state.lastWaistReadingTime.isNotEmpty())
+        assertEquals(2, state.waistPendingCount)
+        assertEquals(1, state.waistRejectedCount)
     }
 }

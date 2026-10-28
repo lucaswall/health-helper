@@ -11,8 +11,10 @@ import com.healthhelper.app.domain.model.HealthPermissions
 import com.healthhelper.app.domain.model.SyncProgress
 import com.healthhelper.app.domain.model.SyncResult
 import com.healthhelper.app.domain.model.SyncedMealSummary
+import com.healthhelper.app.domain.model.WaistReading
 import com.healthhelper.app.domain.repository.HealthPermissionChecker
 import com.healthhelper.app.domain.repository.SettingsRepository
+import com.healthhelper.app.domain.repository.WaistReadingRepository
 import com.healthhelper.app.domain.usecase.GetLastBloodPressureReadingUseCase
 import com.healthhelper.app.domain.usecase.GetLastGlucoseReadingUseCase
 import com.healthhelper.app.domain.usecase.GetTodayHydrationTotalUseCase
@@ -67,6 +69,13 @@ data class SyncUiState(
     val hydrationSyncStatus: String = "",
     val hydrationHistoryStatus: String = "",
     val hydrationReadPermissionMissing: Boolean = false,
+    val lastWaistReading: WaistReading? = null,
+    val lastWaistReadingDisplay: String = "",
+    val lastWaistReadingTime: String = "",
+    /** Waist readings saved on the phone that Food Scanner hasn't accepted yet. */
+    val waistPendingCount: Int = 0,
+    /** Waist readings Food Scanner refused as invalid; kept on the phone. */
+    val waistRejectedCount: Int = 0,
 ) {
     /** Missing permissions that block foreground actions (sync, BP/glucose logging). */
     val missingCorePermissions: Set<String>
@@ -92,6 +101,7 @@ class SyncViewModel @Inject constructor(
     private val permissionChecker: HealthPermissionChecker,
     healthConnectClient: HealthConnectClient?,
     private val syncCoordinator: SyncCoordinator,
+    private val waistReadingRepository: WaistReadingRepository,
 ) : ViewModel() {
 
     private val healthConnectAvailable: Boolean = healthConnectClient != null
@@ -162,6 +172,31 @@ class SyncViewModel @Inject constructor(
             settingsRepository.lastSyncTimestampFlow.collect { ts ->
                 lastSyncTimestamp = ts
                 _uiState.update { it.copy(lastSyncTime = formatRelativeTime(ts, currentTimeMillis())) }
+            }
+        }
+
+        // Waist readings live on the phone until Food Scanner accepts them; both flows are local.
+        viewModelScope.launch {
+            waistReadingRepository.lastReadingFlow.collect { reading ->
+                _uiState.update {
+                    it.copy(
+                        lastWaistReading = reading,
+                        lastWaistReadingDisplay = reading?.let { r -> "%.1f cm".format(r.valueCm) } ?: "",
+                        lastWaistReadingTime = reading?.let { r ->
+                            formatRelativeTime(r.timestamp.toEpochMilli(), currentTimeMillis())
+                        } ?: "",
+                    )
+                }
+            }
+        }
+        viewModelScope.launch {
+            waistReadingRepository.pendingCountFlow.collect { count ->
+                _uiState.update { it.copy(waistPendingCount = count) }
+            }
+        }
+        viewModelScope.launch {
+            waistReadingRepository.rejectedCountFlow.collect { count ->
+                _uiState.update { it.copy(waistRejectedCount = count) }
             }
         }
 
@@ -303,6 +338,9 @@ class SyncViewModel @Inject constructor(
                 lastGlucoseReadingTime = state.lastGlucoseReading?.let {
                     formatRelativeTime(it.timestamp.toEpochMilli(), now)
                 } ?: state.lastGlucoseReadingTime,
+                lastWaistReadingTime = state.lastWaistReading?.let {
+                    formatRelativeTime(it.timestamp.toEpochMilli(), now)
+                } ?: state.lastWaistReadingTime,
                 hydrationSyncStatus = if (lastHydrationSyncTs > 0) {
                     formatSyncStatus(hydrationSyncCount, hydrationSyncCaughtUp, lastHydrationSyncTs, now)
                 } else {

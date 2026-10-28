@@ -21,6 +21,8 @@ private const val ROUTE_GLUCOSE_ENTRY_BASE = "glucose-entry"
 private const val ROUTE_BP_ENTRY = "$ROUTE_BP_ENTRY_BASE?$ARG_SHARED_PATH={$ARG_SHARED_PATH}"
 private const val ROUTE_GLUCOSE_ENTRY = "$ROUTE_GLUCOSE_ENTRY_BASE?$ARG_SHARED_PATH={$ARG_SHARED_PATH}"
 
+private const val ROUTE_WAIST_ENTRY = "waist-entry"
+
 private const val KEY_SNACKBAR_MSG = "snackbar_msg"
 
 /** Optional path of a shared image to scan as soon as the entry screen opens. */
@@ -98,6 +100,7 @@ fun AppNavigation(
                 onNavigateToSettings = { navController.navigate("settings") },
                 onLogBloodPressure = { navController.navigate(ROUTE_BP_ENTRY_BASE) { launchSingleTop = true } },
                 onLogGlucose = { navController.navigate(ROUTE_GLUCOSE_ENTRY_BASE) { launchSingleTop = true } },
+                onLogWaist = { navController.navigate(ROUTE_WAIST_ENTRY) { launchSingleTop = true } },
                 snackbarMessage = snackbarMessage,
                 onSnackbarShown = { backStackEntry.savedStateHandle.remove<String>(KEY_SNACKBAR_MSG) },
                 viewModel = syncViewModel,
@@ -113,6 +116,14 @@ fun AppNavigation(
             arguments = listOf(sharedPathArgument()),
         ) {
             BpEntryScreen(
+                onNavigateHome = { snackbarMsg ->
+                    navController.returnToSync(KEY_SNACKBAR_MSG, snackbarMsg)
+                },
+                onCancel = { navController.returnToSync() },
+            )
+        }
+        composable(ROUTE_WAIST_ENTRY) {
+            WaistEntryScreen(
                 onNavigateHome = { snackbarMsg ->
                     navController.returnToSync(KEY_SNACKBAR_MSG, snackbarMsg)
                 },

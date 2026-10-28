@@ -3,6 +3,7 @@ package com.healthhelper.app.domain.repository
 import com.healthhelper.app.domain.model.BloodPressureReading
 import com.healthhelper.app.domain.model.GlucoseReading
 import com.healthhelper.app.domain.model.HydrationReading
+import com.healthhelper.app.domain.model.WaistReading
 
 interface FoodScannerHealthRepository {
     suspend fun pushGlucoseReading(reading: GlucoseReading): Result<Unit>
@@ -10,4 +11,5 @@ interface FoodScannerHealthRepository {
     suspend fun pushGlucoseReadings(readings: List<GlucoseReading>): Result<Int>
     suspend fun pushBloodPressureReadings(readings: List<BloodPressureReading>): Result<Int>
     suspend fun pushHydrationReadings(readings: List<HydrationReading>): Result<Int>
+    suspend fun pushWaistReadings(readings: List<WaistReading>): Result<Int>
 }
