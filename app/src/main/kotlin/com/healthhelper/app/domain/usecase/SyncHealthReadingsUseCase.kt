@@ -1,5 +1,6 @@
 package com.healthhelper.app.domain.usecase
 
+import com.healthhelper.app.domain.model.BloodPressureReading
 import com.healthhelper.app.domain.model.HealthPermissions
 import com.healthhelper.app.domain.model.HealthReadingsSyncReport
 import com.healthhelper.app.domain.model.HealthSyncType
@@ -58,7 +59,7 @@ class SyncHealthReadingsUseCase @Inject constructor(
             missingSink = missing,
             skippedSink = skipped,
             getReadings = bloodPressureRepository::getReadingsResult,
-            pushReadings = foodScannerHealthRepository::pushBloodPressureReadings,
+            pushReadings = ::pushBloodPressureReadingsWithPendingHeartRates,
             watermarkFlow = settingsRepository.lastBpSyncTimestampFlow,
             setWatermark = settingsRepository::setLastBpSyncTimestamp,
             setCount = settingsRepository::setBpSyncCount,
@@ -213,6 +214,32 @@ class SyncHealthReadingsUseCase @Inject constructor(
      * actually missing so the user is asked for the right grant; fall back to the reported set
      * when the granted set cannot be determined.
      */
+    /**
+     * BP records read back from Health Connect carry no pulse. Readings whose direct push failed had
+     * their heart rate parked in a ledger; re-attach it so the server still receives it.
+     */
+    private suspend fun pushBloodPressureReadingsWithPendingHeartRates(
+        readings: List<BloodPressureReading>,
+    ): Result<Int> {
+        val pending = try {
+            settingsRepository.getPendingBpHeartRates()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.w(e, "Could not read pending BP heart rates")
+            emptyMap()
+        }
+        val withHeartRates = if (pending.isEmpty()) {
+            readings
+        } else {
+            readings.map { reading ->
+                val bpm = pending[reading.timestamp.toEpochMilli()]
+                if (bpm != null && reading.heartRate == null) reading.copy(heartRate = bpm) else reading
+            }
+        }
+        return foodScannerHealthRepository.pushBloodPressureReadings(withHeartRates)
+    }
+
     private suspend fun refineMissingPermissions(reported: Set<String>): Set<String> {
         if (reported.isEmpty()) return emptySet()
         val granted = try {

@@ -25,6 +25,8 @@ data class BloodPressureReadingDto(
     val zoneOffset: String? = null,
     val bodyPosition: String? = null,
     val measurementLocation: String? = null,
+    /** Pulse in bpm; omitted (explicitNulls = false) when unknown so the server keeps any stored value. */
+    val heartRate: Int? = null,
 )
 
 @Serializable

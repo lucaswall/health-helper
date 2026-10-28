@@ -35,7 +35,7 @@ object PrivacyPolicyContent {
         Section(
             heading = "Health Connect data we write",
             body = "Nutrition records for meals logged in your Food Scanner account, and blood pressure " +
-                "and blood glucose readings you capture or confirm in this app.",
+                "(with heart rate) and blood glucose readings you enter or scan in this app.",
         ),
         Section(
             heading = "Where your data goes",

@@ -729,4 +729,31 @@ class DataStoreSettingsRepositoryTest {
         assertEquals("", key)
         assertEquals(2, callCount, "getString should be called exactly twice: once in migration (throws), once in post-migration read")
     }
+
+    // --- Pending BP heart rates ---
+
+    @Test
+    @DisplayName("pending BP heart rates are stored by reading timestamp")
+    fun pendingBpHeartRatesStored() = testScope.runTest {
+        assertEquals(emptyMap(), repository.getPendingBpHeartRates())
+
+        repository.addPendingBpHeartRate(1_700_000_000_000L, 72)
+        repository.addPendingBpHeartRate(1_700_000_100_000L, 65)
+
+        assertEquals(
+            mapOf(1_700_000_000_000L to 72, 1_700_000_100_000L to 65),
+            repository.getPendingBpHeartRates(),
+        )
+    }
+
+    @Test
+    @DisplayName("pruneDirectPushedTimestamps drops pending heart rates older than the BP watermark")
+    fun pendingBpHeartRatesPruned() = testScope.runTest {
+        repository.addPendingBpHeartRate(1_000L, 70)
+        repository.addPendingBpHeartRate(3_000L, 80)
+
+        repository.pruneDirectPushedTimestamps(glucoseBeforeMs = 0L, bpBeforeMs = 2_000L)
+
+        assertEquals(mapOf(3_000L to 80), repository.getPendingBpHeartRates())
+    }
 }

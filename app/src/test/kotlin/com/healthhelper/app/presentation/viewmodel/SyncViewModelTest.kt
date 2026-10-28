@@ -1652,4 +1652,16 @@ class SyncViewModelTest {
             cancelAndIgnoreRemainingEvents()
         }
     }
+
+    @Test
+    fun `missing heart rate permission does not block sync or logging`() = viewModelTest {
+        coEvery { permissionChecker.getGrantedPermissions() } returns
+            HealthPermissions.REQUIRED - HealthPermissions.WRITE_HEART_RATE
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        val state = viewModel.uiState.value
+        assertEquals(setOf(HealthPermissions.WRITE_HEART_RATE), state.missingHealthPermissions)
+        assertTrue(state.permissionGranted)
+    }
 }

@@ -62,6 +62,7 @@ class SyncHealthReadingsUseCaseTest {
         coEvery { settingsRepository.getDirectPushedGlucoseTimestamps() } returns emptySet()
         coEvery { settingsRepository.getDirectPushedBpTimestamps() } returns emptySet()
         coEvery { settingsRepository.pruneDirectPushedTimestamps(any(), any()) } returns Unit
+        coEvery { settingsRepository.getPendingBpHeartRates() } returns emptyMap()
         every { settingsRepository.lastHydrationSyncTimestampFlow } returns flowOf(0L)
         every { settingsRepository.hydrationSyncCountFlow } returns flowOf(0)
         coEvery { settingsRepository.setLastHydrationSyncTimestamp(any()) } returns Unit
@@ -1036,5 +1037,20 @@ class SyncHealthReadingsUseCaseTest {
         createUseCase().invoke()
 
         coVerify(exactly = 1) { hydrationRepository.getReadingsResult(any(), any(), any()) }
+    }
+
+    @Test
+    @DisplayName("BP push re-attaches heart rates parked when the direct push failed")
+    fun bpPushAttachesPendingHeartRates() = runTest {
+        val readings = bpReadings(2, startMs = 10_000L)
+        val parkedTs = readings[0].timestamp.toEpochMilli()
+        coEvery { bloodPressureRepository.getReadingsResult(any(), any(), any()) } returns ReadingsResult(readings)
+        coEvery { settingsRepository.getPendingBpHeartRates() } returns mapOf(parkedTs to 74)
+        val pushed = slot<List<BloodPressureReading>>()
+        coEvery { foodScannerHealthRepository.pushBloodPressureReadings(capture(pushed)) } returns Result.success(2)
+
+        createUseCase().invoke()
+
+        assertEquals(listOf(74, null), pushed.captured.map { it.heartRate })
     }
 }

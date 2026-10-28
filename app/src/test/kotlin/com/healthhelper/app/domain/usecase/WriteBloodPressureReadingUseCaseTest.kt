@@ -4,6 +4,8 @@ import com.healthhelper.app.domain.model.BloodPressureReading
 import com.healthhelper.app.domain.model.HealthDataWriteResult
 import com.healthhelper.app.domain.repository.BloodPressureRepository
 import com.healthhelper.app.domain.repository.FoodScannerHealthRepository
+import com.healthhelper.app.domain.repository.HeartRateRepository
+import com.healthhelper.app.domain.model.HeartRateReading
 import com.healthhelper.app.domain.repository.SettingsRepository
 import io.mockk.coEvery
 import io.mockk.coJustRun
@@ -14,12 +16,15 @@ import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class WriteBloodPressureReadingUseCaseTest {
 
     private lateinit var bloodPressureRepository: BloodPressureRepository
+    private lateinit var heartRateRepository: HeartRateRepository
     private lateinit var foodScannerRepository: FoodScannerHealthRepository
     private lateinit var settingsRepository: SettingsRepository
     private lateinit var useCase: WriteBloodPressureReadingUseCase
@@ -34,9 +39,15 @@ class WriteBloodPressureReadingUseCaseTest {
     @BeforeEach
     fun setUp() {
         bloodPressureRepository = mockk()
+        heartRateRepository = mockk()
         foodScannerRepository = mockk()
         settingsRepository = mockk()
-        useCase = WriteBloodPressureReadingUseCase(bloodPressureRepository, foodScannerRepository, settingsRepository)
+        useCase = WriteBloodPressureReadingUseCase(
+            bloodPressureRepository,
+            heartRateRepository,
+            foodScannerRepository,
+            settingsRepository,
+        )
     }
 
     @Test
@@ -172,5 +183,95 @@ class WriteBloodPressureReadingUseCaseTest {
 
         assertTrue(result.healthConnectSuccess)
         assertTrue(result.foodScannerResult.isSuccess)
+    }
+
+    // --- heart rate ---
+
+    @Test
+    @DisplayName("reading without heart rate never touches the heart rate repository")
+    fun noHeartRateNoWrite() = runTest {
+        coEvery { bloodPressureRepository.writeBloodPressureRecord(any()) } returns true
+        coEvery { foodScannerRepository.pushBloodPressureReading(any()) } returns Result.success(Unit)
+        coJustRun { settingsRepository.addDirectPushedBpTimestamp(any()) }
+
+        val result = useCase.invoke(testReading)
+
+        assertNull(result.heartRateSuccess)
+        assertFalse(result.heartRateFailed)
+        coVerify(exactly = 0) { heartRateRepository.writeHeartRateRecord(any()) }
+    }
+
+    @Test
+    @DisplayName("heart rate is written with the reading's timestamp and offset")
+    fun heartRateWritten() = runTest {
+        val offset = java.time.ZoneOffset.ofHours(-3)
+        val reading = testReading.copy(heartRate = 72, zoneOffset = offset)
+        coEvery { bloodPressureRepository.writeBloodPressureRecord(any()) } returns true
+        coEvery { heartRateRepository.writeHeartRateRecord(any()) } returns true
+        coEvery { foodScannerRepository.pushBloodPressureReading(any()) } returns Result.success(Unit)
+        coJustRun { settingsRepository.addDirectPushedBpTimestamp(any()) }
+
+        val result = useCase.invoke(reading)
+
+        assertEquals(true, result.heartRateSuccess)
+        coVerify {
+            heartRateRepository.writeHeartRateRecord(
+                HeartRateReading(beatsPerMinute = 72, timestamp = fixedInstant, zoneOffset = offset),
+            )
+        }
+        coVerify { foodScannerRepository.pushBloodPressureReading(match { it.heartRate == 72 }) }
+    }
+
+    @Test
+    @DisplayName("heart rate write failure is reported but does not affect the BP result")
+    fun heartRateFailureReported() = runTest {
+        coEvery { bloodPressureRepository.writeBloodPressureRecord(any()) } returns true
+        coEvery { heartRateRepository.writeHeartRateRecord(any()) } throws RuntimeException("denied")
+        coEvery { foodScannerRepository.pushBloodPressureReading(any()) } returns Result.success(Unit)
+        coJustRun { settingsRepository.addDirectPushedBpTimestamp(any()) }
+
+        val result = useCase.invoke(testReading.copy(heartRate = 72))
+
+        assertTrue(result.allSucceeded)
+        assertTrue(result.heartRateFailed)
+    }
+
+    @Test
+    @DisplayName("heart rate is not written when the BP Health Connect write failed")
+    fun noHeartRateWithoutBpRecord() = runTest {
+        coEvery { bloodPressureRepository.writeBloodPressureRecord(any()) } returns false
+        coEvery { foodScannerRepository.pushBloodPressureReading(any()) } returns Result.success(Unit)
+        coJustRun { settingsRepository.addDirectPushedBpTimestamp(any()) }
+
+        val result = useCase.invoke(testReading.copy(heartRate = 72))
+
+        assertNull(result.heartRateSuccess)
+        coVerify(exactly = 0) { heartRateRepository.writeHeartRateRecord(any()) }
+    }
+
+    @Test
+    @DisplayName("failed direct push parks the heart rate for the background sync")
+    fun failedPushParksHeartRate() = runTest {
+        coEvery { bloodPressureRepository.writeBloodPressureRecord(any()) } returns true
+        coEvery { heartRateRepository.writeHeartRateRecord(any()) } returns true
+        coEvery { foodScannerRepository.pushBloodPressureReading(any()) } returns Result.failure(RuntimeException("offline"))
+        coJustRun { settingsRepository.addPendingBpHeartRate(any(), any()) }
+
+        useCase.invoke(testReading.copy(heartRate = 72))
+
+        coVerify { settingsRepository.addPendingBpHeartRate(fixedInstant.toEpochMilli(), 72) }
+    }
+
+    @Test
+    @DisplayName("successful direct push does not park the heart rate")
+    fun successfulPushDoesNotParkHeartRate() = runTest {
+        coEvery { bloodPressureRepository.writeBloodPressureRecord(any()) } returns true
+        coEvery { heartRateRepository.writeHeartRateRecord(any()) } returns true
+        coEvery { foodScannerRepository.pushBloodPressureReading(any()) } returns Result.success(Unit)
+        coJustRun { settingsRepository.addDirectPushedBpTimestamp(any()) }
+
+        useCase.invoke(testReading.copy(heartRate = 72))
+
+        coVerify(exactly = 0) { settingsRepository.addPendingBpHeartRate(any(), any()) }
     }
 }

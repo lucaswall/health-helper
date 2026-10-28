@@ -14,6 +14,7 @@ import androidx.lifecycle.lifecycleScope
 import com.healthhelper.app.presentation.image.CAPTURE_IMAGE_CACHE_DIRS
 import com.healthhelper.app.presentation.image.ImageTooLargeException
 import com.healthhelper.app.presentation.image.MAX_IMAGE_BYTES
+import com.healthhelper.app.presentation.image.SHARED_IMAGES_DIR
 import com.healthhelper.app.presentation.image.copyLimited
 import com.healthhelper.app.presentation.image.isAllowedSharedImageUri
 import com.healthhelper.app.presentation.image.sweepStaleFiles
@@ -103,7 +104,7 @@ class MainActivity : ComponentActivity() {
                 Timber.w("Rejected shared content with non-image type %s", type)
                 return null
             }
-            val dir = File(cacheDir, "shared_images")
+            val dir = File(cacheDir, SHARED_IMAGES_DIR)
             dir.mkdirs()
             val tempFile = File.createTempFile("shared_", ".jpg", dir)
             file = tempFile

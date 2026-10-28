@@ -150,4 +150,24 @@ class BloodPressureReadingTest {
         val result = BloodPressureParseResult.Error(message = "Could not parse")
         assertEquals("Could not parse", result.message)
     }
+
+    @Test
+    @DisplayName("heart rate is optional and defaults to null")
+    fun heartRateDefaultsToNull() {
+        assertEquals(null, BloodPressureReading(systolic = 120, diastolic = 80).heartRate)
+    }
+
+    @Test
+    @DisplayName("heart rate at the range bounds is accepted")
+    fun heartRateBoundsAccepted() {
+        assertEquals(30, BloodPressureReading(systolic = 120, diastolic = 80, heartRate = 30).heartRate)
+        assertEquals(250, BloodPressureReading(systolic = 120, diastolic = 80, heartRate = 250).heartRate)
+    }
+
+    @Test
+    @DisplayName("heart rate outside the range throws")
+    fun heartRateOutOfRangeThrows() {
+        assertThrows<IllegalArgumentException> { BloodPressureReading(systolic = 120, diastolic = 80, heartRate = 29) }
+        assertThrows<IllegalArgumentException> { BloodPressureReading(systolic = 120, diastolic = 80, heartRate = 251) }
+    }
 }

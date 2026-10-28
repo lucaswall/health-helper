@@ -5,6 +5,7 @@ object HealthPermissions {
     const val WRITE_BLOOD_GLUCOSE = "android.permission.health.WRITE_BLOOD_GLUCOSE"
     const val READ_BLOOD_PRESSURE = "android.permission.health.READ_BLOOD_PRESSURE"
     const val WRITE_BLOOD_PRESSURE = "android.permission.health.WRITE_BLOOD_PRESSURE"
+    const val WRITE_HEART_RATE = "android.permission.health.WRITE_HEART_RATE"
     const val READ_HYDRATION = "android.permission.health.READ_HYDRATION"
     const val WRITE_NUTRITION = "android.permission.health.WRITE_NUTRITION"
     const val READ_HEALTH_DATA_HISTORY = "android.permission.health.READ_HEALTH_DATA_HISTORY"
@@ -24,13 +25,15 @@ object HealthPermissions {
     )
 
     /**
-     * Feature-gated permissions that only improve background behaviour (background hydration
-     * reads, history older than 30 days). They are requested when the Health Connect provider
-     * supports them, but never block foreground actions — some HC builds can't grant them at all.
+     * Permissions that only add to a core feature: background hydration reads and history older
+     * than 30 days (feature-gated — some HC builds can't grant them), and heart rate saved alongside
+     * blood pressure. They are requested, but never block foreground actions: without heart rate
+     * the blood pressure reading is still saved.
      */
     val OPTIONAL: Set<String> = setOf(
         READ_HEALTH_DATA_HISTORY,
         READ_HEALTH_DATA_IN_BACKGROUND,
+        WRITE_HEART_RATE,
     )
 
     /**

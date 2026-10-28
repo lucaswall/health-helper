@@ -45,19 +45,23 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.healthhelper.app.domain.model.GlucoseMealType
-import com.healthhelper.app.domain.model.GlucoseUnit
 import com.healthhelper.app.domain.model.RelationToMeal
 import com.healthhelper.app.domain.model.SpecimenSource
-import com.healthhelper.app.presentation.viewmodel.GlucoseConfirmationViewModel
+import com.healthhelper.app.presentation.viewmodel.GlucoseEntryViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun GlucoseConfirmationScreen(
+fun GlucoseEntryScreen(
     onNavigateHome: (String) -> Unit,
     onCancel: () -> Unit,
-    viewModel: GlucoseConfirmationViewModel = hiltViewModel(),
+    viewModel: GlucoseEntryViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val capturePhoto = rememberPhotoCapture(
+        cacheSubDir = "glucose_images",
+        onPhoto = viewModel::onPhotoCaptured,
+        onError = viewModel::onCaptureError,
+    )
 
     LaunchedEffect(Unit) {
         viewModel.navigateHome.collect { message ->
@@ -68,7 +72,7 @@ fun GlucoseConfirmationScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Confirm Glucose") },
+                title = { Text("Blood Glucose") },
                 navigationIcon = {
                     IconButton(onClick = onCancel) {
                         Icon(
@@ -91,14 +95,17 @@ fun GlucoseConfirmationScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(
-                text = "${uiState.valueMgDl} mg/dL (${uiState.displayMmolL} mmol/L)",
-                style = MaterialTheme.typography.headlineMedium,
+            ScanFromPhotoSection(
+                isScanning = uiState.isScanning,
+                filledFromPhoto = uiState.filledFromPhoto,
+                scanError = uiState.scanError,
+                enabled = !uiState.isSaving,
+                onScan = capturePhoto,
             )
 
-            if (uiState.detectedUnit == GlucoseUnit.MMOL_L && uiState.originalMmolL.isNotEmpty()) {
+            uiState.conversionNote?.let { note ->
                 Text(
-                    text = "Converted from ${uiState.originalMmolL} mmol/L",
+                    text = note,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -107,6 +114,7 @@ fun GlucoseConfirmationScreen(
             OutlinedTextField(
                 value = uiState.valueMgDl,
                 onValueChange = viewModel::updateValue,
+                enabled = !uiState.isScanning,
                 label = { Text("Glucose (mg/dL)") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 modifier = Modifier.fillMaxWidth(),
@@ -171,7 +179,7 @@ fun GlucoseConfirmationScreen(
                 }
                 Button(
                     onClick = viewModel::save,
-                    enabled = uiState.isSaveEnabled && !uiState.isSaving,
+                    enabled = uiState.isSaveEnabled && !uiState.isSaving && !uiState.isScanning,
                     modifier = Modifier.weight(1f),
                 ) {
                     Text(if (uiState.isSaving) "Saving..." else "Save")

@@ -8,6 +8,7 @@ import com.healthhelper.app.data.api.dto.AnthropicMessageResponse
 import com.healthhelper.app.data.api.dto.AnthropicToolChoice
 import com.healthhelper.app.data.api.dto.AnthropicToolDefinition
 import com.healthhelper.app.domain.model.BloodPressureParseResult
+import com.healthhelper.app.domain.model.BloodPressureReading
 import com.healthhelper.app.domain.model.GlucoseParseResult
 import com.healthhelper.app.domain.model.GlucoseUnit
 import com.healthhelper.app.domain.model.ImageParseErrorKind
@@ -48,6 +49,7 @@ class AnthropicApiClient @Inject constructor(
         private const val SYSTOLIC_MAX = 300
         private const val DIASTOLIC_MIN = 30
         private const val DIASTOLIC_MAX = 200
+        private val HEART_RATE_RANGE = BloodPressureReading.HEART_RATE_RANGE
         private const val MMOL_L_MIN = 0.5
         private const val MMOL_L_MAX = 40.0
         private const val MG_DL_MIN = 10.0
@@ -72,6 +74,15 @@ class AnthropicApiClient @Inject constructor(
                     putJsonObject("diastolic") {
                         put("type", "integer")
                         put("description", "Diastolic pressure (middle/smaller number)")
+                    }
+                    putJsonObject("heart_rate") {
+                        put("type", "integer")
+                        put(
+                            "description",
+                            "Pulse / heart rate in beats per minute: the third value, shown after systolic " +
+                                "and diastolic (often labelled PULSE or /min, or next to a heart icon). " +
+                                "Omit if the display does not show it.",
+                        )
                     }
                     putJsonObject("error") {
                         put("type", "string")
@@ -139,7 +150,8 @@ class AnthropicApiClient @Inject constructor(
             toolChoice = BP_TOOL_CHOICE,
             prompt = "Extract the blood pressure reading from this monitor display. " +
                 "The systolic value is the larger/topmost number. " +
-                "The diastolic value is the middle number. Ignore pulse/heart rate.",
+                "The diastolic value is the middle number. " +
+                "The pulse/heart rate is the third value, after the other two; omit it if not shown.",
             system = null,
             tag = "parseBloodPressureImage",
         )
@@ -187,7 +199,22 @@ class AnthropicApiClient @Inject constructor(
             return BloodPressureParseResult.Error("Systolic must be greater than diastolic")
         }
 
-        return BloodPressureParseResult.Success(systolic = systolic, diastolic = diastolic)
+        return BloodPressureParseResult.Success(
+            systolic = systolic,
+            diastolic = diastolic,
+            heartRate = parseHeartRate(input),
+        )
+    }
+
+    /** Pulse is optional: a missing or implausible value is dropped instead of failing the scan. */
+    private fun parseHeartRate(input: JsonObject): Int? {
+        val heartRate = (input["heart_rate"] as? JsonPrimitive)?.intOrNull ?: return null
+        if (heartRate !in HEART_RATE_RANGE) {
+            Timber.d("parseBloodPressureImage: heart rate %d out of range, ignoring", heartRate)
+            Timber.w("parseBloodPressureImage: heart rate out of range, ignoring")
+            return null
+        }
+        return heartRate
     }
 
     suspend fun parseGlucoseImage(

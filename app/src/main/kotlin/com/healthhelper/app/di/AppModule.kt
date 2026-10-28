@@ -18,12 +18,14 @@ import com.healthhelper.app.data.repository.FoodScannerFoodLogRepository
 import com.healthhelper.app.data.repository.FoodScannerHealthRepositoryImpl
 import com.healthhelper.app.data.repository.HealthConnectBloodGlucoseRepository
 import com.healthhelper.app.data.repository.HealthConnectBloodPressureRepository
+import com.healthhelper.app.data.repository.HealthConnectHeartRateRepository
 import com.healthhelper.app.data.repository.HealthConnectHydrationRepository
 import com.healthhelper.app.data.repository.HealthConnectNutritionRepository
 import com.healthhelper.app.data.repository.HealthConnectPermissionChecker
 import com.healthhelper.app.data.sync.SyncScheduler
 import com.healthhelper.app.domain.repository.BloodGlucoseRepository
 import com.healthhelper.app.domain.repository.BloodPressureRepository
+import com.healthhelper.app.domain.repository.HeartRateRepository
 import com.healthhelper.app.domain.repository.FoodLogRepository
 import com.healthhelper.app.domain.repository.FoodScannerHealthRepository
 import com.healthhelper.app.domain.repository.HealthPermissionChecker
@@ -107,6 +109,12 @@ object AppModule {
 
     @Provides
     @Singleton
+    fun provideHeartRateRepository(
+        healthConnectClient: HealthConnectClient?,
+    ): HeartRateRepository = HealthConnectHeartRateRepository(healthConnectClient)
+
+    @Provides
+    @Singleton
     fun provideBloodGlucoseRepository(
         healthConnectClient: HealthConnectClient?,
         @ApplicationContext context: Context,
@@ -180,6 +188,10 @@ object AppModule {
     @Provides
     @DefaultDispatcher
     fun provideDefaultDispatcher(): CoroutineDispatcher = Dispatchers.Default
+
+    @Provides
+    @IoDispatcher
+    fun provideIoDispatcher(): CoroutineDispatcher = Dispatchers.IO
 
     internal fun createEncryptedSharedPreferences(context: Context): SharedPreferences? =
         createEncryptedSharedPreferences(context) { ctx ->

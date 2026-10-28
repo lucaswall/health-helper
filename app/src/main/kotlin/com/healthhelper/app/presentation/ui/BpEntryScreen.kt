@@ -39,22 +39,28 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.healthhelper.app.domain.model.BodyPosition
 import com.healthhelper.app.domain.model.MeasurementLocation
-import com.healthhelper.app.presentation.viewmodel.BpConfirmationViewModel
+import com.healthhelper.app.presentation.viewmodel.BpEntryViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun BpConfirmationScreen(
+fun BpEntryScreen(
     onNavigateHome: (String) -> Unit,
     onCancel: () -> Unit,
-    viewModel: BpConfirmationViewModel = hiltViewModel(),
+    viewModel: BpEntryViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val capturePhoto = rememberPhotoCapture(
+        cacheSubDir = "bp_images",
+        onPhoto = viewModel::onPhotoCaptured,
+        onError = viewModel::onCaptureError,
+    )
 
     LaunchedEffect(Unit) {
         viewModel.navigateHome.collect { message ->
@@ -65,7 +71,7 @@ fun BpConfirmationScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Confirm Reading") },
+                title = { Text("Blood Pressure") },
                 navigationIcon = {
                     IconButton(onClick = onCancel) {
                         Icon(
@@ -88,12 +94,21 @@ fun BpConfirmationScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            ScanFromPhotoSection(
+                isScanning = uiState.isScanning,
+                filledFromPhoto = uiState.filledFromPhoto,
+                scanError = uiState.scanError,
+                enabled = !uiState.isSaving,
+                onScan = capturePhoto,
+            )
+
             OutlinedTextField(
                 value = uiState.systolic,
                 onValueChange = viewModel::updateSystolic,
+                enabled = !uiState.isScanning,
                 isError = uiState.validationError != null,
                 label = { Text("Systolic (mmHg)") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
             )
@@ -101,9 +116,21 @@ fun BpConfirmationScreen(
             OutlinedTextField(
                 value = uiState.diastolic,
                 onValueChange = viewModel::updateDiastolic,
+                enabled = !uiState.isScanning,
                 isError = uiState.validationError != null,
                 label = { Text("Diastolic (mmHg)") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+            )
+
+            OutlinedTextField(
+                value = uiState.heartRate,
+                onValueChange = viewModel::updateHeartRate,
+                enabled = !uiState.isScanning,
+                isError = uiState.validationError != null,
+                label = { Text("Heart rate (bpm, optional)") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
             )
@@ -150,7 +177,7 @@ fun BpConfirmationScreen(
                 }
                 Button(
                     onClick = viewModel::save,
-                    enabled = uiState.isSaveEnabled && !uiState.isSaving,
+                    enabled = uiState.isSaveEnabled && !uiState.isSaving && !uiState.isScanning,
                     modifier = Modifier.weight(1f),
                 ) {
                     Text(if (uiState.isSaving) "Saving..." else "Save")

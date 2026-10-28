@@ -69,6 +69,7 @@ private fun humanReadablePermissionLabel(permission: String): String = when (per
     "android.permission.health.WRITE_BLOOD_GLUCOSE" -> "Write blood glucose"
     "android.permission.health.READ_BLOOD_PRESSURE" -> "Read blood pressure"
     "android.permission.health.WRITE_BLOOD_PRESSURE" -> "Write blood pressure"
+    "android.permission.health.WRITE_HEART_RATE" -> "Write heart rate"
     "android.permission.health.READ_HYDRATION" -> "Read hydration"
     "android.permission.health.WRITE_NUTRITION" -> "Write nutrition"
     "android.permission.health.READ_HEALTH_DATA_HISTORY" -> "Read history > 30 days"
@@ -120,14 +121,10 @@ private fun SectionTitle(text: String) {
 @Composable
 fun SyncScreen(
     onNavigateToSettings: () -> Unit,
-    onNavigateToCamera: () -> Unit = {},
-    onNavigateToGlucoseCamera: () -> Unit = {},
+    onLogBloodPressure: () -> Unit = {},
+    onLogGlucose: () -> Unit = {},
     snackbarMessage: String? = null,
     onSnackbarShown: () -> Unit = {},
-    bpScanError: String? = null,
-    onBpScanErrorShown: () -> Unit = {},
-    glucoseScanError: String? = null,
-    onGlucoseScanErrorShown: () -> Unit = {},
     viewModel: SyncViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -294,7 +291,7 @@ fun SyncScreen(
                             text = if (coreMissing) {
                                 "Health Connect permissions needed:"
                             } else {
-                                "Optional: background hydration sync and full history need:"
+                                "Optional: background hydration sync, full history and heart rate need:"
                             },
                             color = if (coreMissing) {
                                 MaterialTheme.colorScheme.error
@@ -437,15 +434,6 @@ fun SyncScreen(
                 ) {
                     SectionTitle("Blood Pressure")
 
-                    if (bpScanError != null) {
-                        Text(
-                            text = bpScanError,
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-                        )
-                    }
-
                     if (uiState.lastBpReadingDisplay.isNotEmpty()) {
                         val timeLabel = if (uiState.lastBpReadingTime.isNotEmpty()) " · ${uiState.lastBpReadingTime}" else ""
                         Text(
@@ -470,9 +458,8 @@ fun SyncScreen(
 
                     Button(
                         onClick = {
-                            onBpScanErrorShown()
                             viewModel.refreshLastBpReading()
-                            onNavigateToCamera()
+                            onLogBloodPressure()
                         },
                         enabled = uiState.permissionGranted,
                         modifier = Modifier.fillMaxWidth(),
@@ -491,15 +478,6 @@ fun SyncScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     SectionTitle("Blood Glucose")
-
-                    if (glucoseScanError != null) {
-                        Text(
-                            text = glucoseScanError,
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-                        )
-                    }
 
                     if (uiState.lastGlucoseReadingDisplay.isNotEmpty()) {
                         val timeLabel = if (uiState.lastGlucoseReadingTime.isNotEmpty()) " · ${uiState.lastGlucoseReadingTime}" else ""
@@ -525,9 +503,8 @@ fun SyncScreen(
 
                     Button(
                         onClick = {
-                            onGlucoseScanErrorShown()
                             viewModel.refreshLastGlucoseReading()
-                            onNavigateToGlucoseCamera()
+                            onLogGlucose()
                         },
                         enabled = uiState.permissionGranted,
                         modifier = Modifier.fillMaxWidth(),

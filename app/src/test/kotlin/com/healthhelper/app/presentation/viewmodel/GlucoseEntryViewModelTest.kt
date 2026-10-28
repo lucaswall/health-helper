@@ -10,6 +10,10 @@ import com.healthhelper.app.domain.model.GlucoseMealType
 import com.healthhelper.app.domain.model.SpecimenSource
 import com.healthhelper.app.domain.usecase.InferGlucoseDefaultsUseCase
 import com.healthhelper.app.domain.usecase.WriteGlucoseReadingUseCase
+import com.healthhelper.app.domain.model.GlucoseParseResult
+import com.healthhelper.app.presentation.image.ReadingImageScanner
+import com.healthhelper.app.presentation.image.ScanOutcome
+import kotlinx.coroutines.CompletableDeferred
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
@@ -31,12 +35,13 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
-class GlucoseConfirmationViewModelTest {
+class GlucoseEntryViewModelTest {
 
     private val testDispatcher = StandardTestDispatcher()
     private lateinit var writeUseCase: WriteGlucoseReadingUseCase
     private lateinit var inferDefaultsUseCase: InferGlucoseDefaultsUseCase
-    private lateinit var viewModel: GlucoseConfirmationViewModel
+    private lateinit var scanner: ReadingImageScanner
+    private lateinit var viewModel: GlucoseEntryViewModel
 
     private val unknownDefaults = GlucoseDefaults(
         relationToMeal = RelationToMeal.UNKNOWN,
@@ -44,17 +49,13 @@ class GlucoseConfirmationViewModelTest {
         specimenSource = SpecimenSource.CAPILLARY_BLOOD,
     )
 
-    private fun createSavedStateHandle(
-        value: Double = 5.6,
-        unit: GlucoseUnit = GlucoseUnit.MMOL_L,
-    ) = SavedStateHandle(mapOf("value" to value.toString(), "unit" to unit.name))
-
     @BeforeEach
     fun setUp() {
         Dispatchers.setMain(testDispatcher)
         writeUseCase = mockk()
         inferDefaultsUseCase = mockk()
         coEvery { inferDefaultsUseCase.invoke(any()) } returns unknownDefaults
+        scanner = mockk()
     }
 
     @AfterEach
@@ -62,55 +63,16 @@ class GlucoseConfirmationViewModelTest {
         Dispatchers.resetMain()
     }
 
+    /** Creates the ViewModel and, unless [initialMgDl] is null, types that value as the user would. */
     private fun createViewModel(
-        value: Double = 5.6,
-        unit: GlucoseUnit = GlucoseUnit.MMOL_L,
-        savedStateHandle: SavedStateHandle = createSavedStateHandle(value, unit),
-    ) = GlucoseConfirmationViewModel(
+        initialMgDl: String? = "101",
+        savedStateHandle: SavedStateHandle = SavedStateHandle(),
+    ) = GlucoseEntryViewModel(
         savedStateHandle,
         writeUseCase,
         inferDefaultsUseCase,
-    )
-
-    @Test
-    fun `initial state populated from SavedStateHandle in mmol_L`() = runTest {
-        viewModel = createViewModel(5.6, GlucoseUnit.MMOL_L)
-        advanceTimeBy(1_000)
-
-        viewModel.uiState.test {
-            val state = awaitItem()
-            assertEquals("101", state.valueMgDl)
-            assertEquals("5.6", state.displayMmolL)
-            assertEquals(GlucoseUnit.MMOL_L, state.detectedUnit)
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
-    fun `initial state with mg_dL input uses value directly`() = runTest {
-        viewModel = createViewModel(101.0, GlucoseUnit.MG_DL)
-        advanceTimeBy(1_000)
-
-        viewModel.uiState.test {
-            val state = awaitItem()
-            assertEquals("101", state.valueMgDl)
-            assertEquals("5.6", state.displayMmolL)
-            assertEquals(GlucoseUnit.MG_DL, state.detectedUnit)
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
-    fun `initial state displays correct mmol_L for 5_6 mmol_L input`() = runTest {
-        viewModel = createViewModel(5.6, GlucoseUnit.MMOL_L)
-        advanceTimeBy(1_000)
-
-        viewModel.uiState.test {
-            val state = awaitItem()
-            assertEquals("5.6", state.displayMmolL)
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
+        scanner,
+    ).also { vm -> initialMgDl?.let(vm::updateValue) }
 
     @Test
     fun `updateValue updates both mg_dL and mmol_L displays`() = runTest {
@@ -275,7 +237,7 @@ class GlucoseConfirmationViewModelTest {
             healthConnectSuccess = true,
             foodScannerResult = Result.success(Unit),
         )
-        viewModel = createViewModel(5.6, GlucoseUnit.MMOL_L)
+        viewModel = createViewModel()
         advanceTimeBy(1_000)
 
         viewModel.navigateHome.test {
@@ -314,7 +276,7 @@ class GlucoseConfirmationViewModelTest {
             healthConnectSuccess = false,
             foodScannerResult = Result.success(Unit),
         )
-        viewModel = createViewModel(5.6, GlucoseUnit.MMOL_L)
+        viewModel = createViewModel()
         advanceTimeBy(1_000)
 
         viewModel.navigateHome.test {
@@ -339,7 +301,7 @@ class GlucoseConfirmationViewModelTest {
             healthConnectSuccess = true,
             foodScannerResult = Result.failure(RuntimeException("sync failed")),
         )
-        viewModel = createViewModel(5.6, GlucoseUnit.MMOL_L)
+        viewModel = createViewModel()
         advanceTimeBy(1_000)
 
         viewModel.navigateHome.test {
@@ -443,7 +405,7 @@ class GlucoseConfirmationViewModelTest {
             healthConnectSuccess = true,
             foodScannerResult = Result.success(Unit),
         )
-        viewModel = createViewModel(5.6, GlucoseUnit.MMOL_L)
+        viewModel = createViewModel()
         advanceTimeBy(1_000)
 
         viewModel.save()
@@ -551,24 +513,8 @@ class GlucoseConfirmationViewModelTest {
     }
 
     @Test
-    fun `mmol_L reading shows original mmol_L value as conversion source`() = runTest {
-        viewModel = createViewModel(5.6, GlucoseUnit.MMOL_L)
-        advanceTimeBy(1_000)
-
-        assertEquals("5.6", viewModel.uiState.value.originalMmolL)
-    }
-
-    @Test
-    fun `mg_dL reading has no conversion note`() = runTest {
-        viewModel = createViewModel(101.0, GlucoseUnit.MG_DL)
-        advanceTimeBy(1_000)
-
-        assertEquals("", viewModel.uiState.value.originalMmolL)
-    }
-
-    @Test
-    fun `out-of-range initial value shows validation error immediately`() = runTest {
-        viewModel = createViewModel(1000.0, GlucoseUnit.MG_DL)
+    fun `out-of-range value shows validation error`() = runTest {
+        viewModel = createViewModel("1000")
         advanceTimeBy(1_000)
 
         val state = viewModel.uiState.value
@@ -583,9 +529,10 @@ class GlucoseConfirmationViewModelTest {
 
         viewModel.updateValue("NaN")
 
+        // Letters are stripped, leaving a blank field: Save is disabled without an error message.
         val state = viewModel.uiState.value
+        assertEquals("", state.valueMgDl)
         assertFalse(state.isSaveEnabled)
-        assertNotNull(state.validationError)
     }
 
     @Test
@@ -649,7 +596,7 @@ class GlucoseConfirmationViewModelTest {
     @Test
     fun `edits survive process death via SavedStateHandle`() = runTest {
         coEvery { inferDefaultsUseCase.invoke(any()) } returns unknownDefaults
-        val handle = createSavedStateHandle(5.6, GlucoseUnit.MMOL_L)
+        val handle = SavedStateHandle()
         viewModel = createViewModel(savedStateHandle = handle)
         advanceTimeBy(1_000)
 
@@ -664,7 +611,7 @@ class GlucoseConfirmationViewModelTest {
             glucoseMealType = GlucoseMealType.UNKNOWN,
             specimenSource = SpecimenSource.CAPILLARY_BLOOD,
         )
-        val restored = createViewModel(savedStateHandle = handle)
+        val restored = createViewModel(initialMgDl = null, savedStateHandle = handle)
         advanceTimeBy(1_000)
 
         val state = restored.uiState.value
@@ -691,5 +638,171 @@ class GlucoseConfirmationViewModelTest {
             assertEquals("101 mg/dL saved", awaitItem())
             cancelAndIgnoreRemainingEvents()
         }
+    }
+
+    // --- entry screen / scanning ---
+
+    @Test
+    fun `opens with an empty value, Save disabled and no validation error`() = runTest {
+        viewModel = createViewModel(initialMgDl = null)
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertEquals("", state.valueMgDl)
+        assertEquals("", state.displayMmolL)
+        assertFalse(state.isSaveEnabled)
+        assertNull(state.validationError)
+        assertNull(state.conversionNote)
+    }
+
+    @Test
+    fun `typed mg_dL value shows the mmol_L equivalent`() = runTest {
+        viewModel = createViewModel("101")
+
+        assertEquals("5.6", viewModel.uiState.value.displayMmolL)
+        assertTrue(viewModel.uiState.value.isSaveEnabled)
+    }
+
+    @Test
+    fun `scanned mmol_L reading is converted to mg_dL with a conversion note`() = runTest {
+        coEvery { scanner.scanGlucose(any()) } returns
+            ScanOutcome.Success(GlucoseParseResult.Success(value = 5.6, detectedUnit = GlucoseUnit.MMOL_L))
+        viewModel = createViewModel(initialMgDl = null)
+
+        viewModel.onPhotoCaptured(byteArrayOf(1))
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertEquals("101", state.valueMgDl)
+        assertEquals("Converted from 5.6 mmol/L", state.conversionNote)
+        assertTrue(state.filledFromPhoto)
+        assertTrue(state.isSaveEnabled)
+        assertFalse(state.isScanning)
+    }
+
+    @Test
+    fun `scanned mg_dL reading has no conversion note`() = runTest {
+        coEvery { scanner.scanGlucose(any()) } returns
+            ScanOutcome.Success(GlucoseParseResult.Success(value = 98.0, detectedUnit = GlucoseUnit.MG_DL))
+        viewModel = createViewModel(initialMgDl = null)
+
+        viewModel.onPhotoCaptured(byteArrayOf(1))
+        advanceUntilIdle()
+
+        assertEquals("98", viewModel.uiState.value.valueMgDl)
+        assertNull(viewModel.uiState.value.conversionNote)
+    }
+
+    @Test
+    fun `editing the scanned value clears the conversion note`() = runTest {
+        coEvery { scanner.scanGlucose(any()) } returns
+            ScanOutcome.Success(GlucoseParseResult.Success(value = 5.6, detectedUnit = GlucoseUnit.MMOL_L))
+        viewModel = createViewModel(initialMgDl = null)
+        viewModel.onPhotoCaptured(byteArrayOf(1))
+        advanceUntilIdle()
+
+        viewModel.updateValue("105")
+
+        assertNull(viewModel.uiState.value.conversionNote)
+    }
+
+    @Test
+    fun `conversion note survives process death`() = runTest {
+        coEvery { scanner.scanGlucose(any()) } returns
+            ScanOutcome.Success(GlucoseParseResult.Success(value = 5.6, detectedUnit = GlucoseUnit.MMOL_L))
+        val handle = SavedStateHandle()
+        viewModel = createViewModel(initialMgDl = null, savedStateHandle = handle)
+        viewModel.onPhotoCaptured(byteArrayOf(1))
+        advanceUntilIdle()
+
+        val restored = createViewModel(initialMgDl = null, savedStateHandle = handle)
+        advanceUntilIdle()
+
+        assertEquals("101", restored.uiState.value.valueMgDl)
+        assertEquals("Converted from 5.6 mmol/L", restored.uiState.value.conversionNote)
+    }
+
+    @Test
+    fun `scan failure shows the message and keeps the typed value`() = runTest {
+        coEvery { scanner.scanGlucose(any()) } returns ScanOutcome.Failure("Service busy, try again shortly.")
+        viewModel = createViewModel("110")
+
+        viewModel.onPhotoCaptured(byteArrayOf(1))
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertEquals("Service busy, try again shortly.", state.scanError)
+        assertEquals("110", state.valueMgDl)
+        assertFalse(state.isScanning)
+    }
+
+    @Test
+    fun `Save is blocked while a scan is running`() = runTest {
+        val gate = CompletableDeferred<ScanOutcome<GlucoseParseResult.Success>>()
+        coEvery { scanner.scanGlucose(any()) } coAnswers { gate.await() }
+        viewModel = createViewModel("110")
+
+        viewModel.onPhotoCaptured(byteArrayOf(1))
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.isScanning)
+        viewModel.save()
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { writeUseCase.invoke(any()) }
+        gate.complete(ScanOutcome.Failure("x"))
+        advanceUntilIdle()
+        assertFalse(viewModel.uiState.value.isScanning)
+    }
+
+    @Test
+    fun `onCaptureError shows the camera error`() = runTest {
+        viewModel = createViewModel()
+
+        viewModel.onCaptureError("Could not open camera.")
+
+        assertEquals("Could not open camera.", viewModel.uiState.value.scanError)
+    }
+
+    @Test
+    fun `shared image is read and scanned once on open`() = runTest {
+        coEvery { scanner.readSharedImage("/cache/shared.jpg") } returns byteArrayOf(9)
+        coEvery { scanner.scanGlucose(any()) } returns
+            ScanOutcome.Success(GlucoseParseResult.Success(value = 120.0, detectedUnit = GlucoseUnit.MG_DL))
+        val handle = SavedStateHandle(mapOf(GlucoseEntryViewModel.ARG_SHARED_PATH to "/cache/shared.jpg"))
+
+        viewModel = createViewModel(initialMgDl = null, savedStateHandle = handle)
+        advanceUntilIdle()
+        createViewModel(initialMgDl = null, savedStateHandle = handle)
+        advanceUntilIdle()
+
+        assertEquals("120", viewModel.uiState.value.valueMgDl)
+        coVerify(exactly = 1) { scanner.readSharedImage(any()) }
+    }
+
+    @Test
+    fun `unreadable shared image shows a scan error`() = runTest {
+        coEvery { scanner.readSharedImage(any()) } throws java.io.FileNotFoundException("gone")
+        val handle = SavedStateHandle(mapOf(GlucoseEntryViewModel.ARG_SHARED_PATH to "/cache/gone.jpg"))
+
+        viewModel = createViewModel(initialMgDl = null, savedStateHandle = handle)
+        advanceUntilIdle()
+
+        assertEquals("Could not read shared image.", viewModel.uiState.value.scanError)
+        coVerify(exactly = 0) { scanner.scanGlucose(any()) }
+    }
+
+    @Test
+    fun `typing while a scan runs is ignored`() = runTest {
+        val gate = CompletableDeferred<ScanOutcome<GlucoseParseResult.Success>>()
+        coEvery { scanner.scanGlucose(any()) } coAnswers { gate.await() }
+        viewModel = createViewModel(initialMgDl = null)
+
+        viewModel.onPhotoCaptured(byteArrayOf(1))
+        advanceUntilIdle()
+        viewModel.updateValue("130")
+
+        assertEquals("", viewModel.uiState.value.valueMgDl)
+        gate.complete(ScanOutcome.Failure("x"))
+        advanceUntilIdle()
     }
 }

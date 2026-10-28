@@ -11,8 +11,11 @@ const val MAX_IMAGE_BYTES: Int = 20 * 1024 * 1024 // 20MB
 /** Long-edge size the image is scaled to before being sent to the Anthropic API. */
 const val API_MAX_IMAGE_DIMENSION: Int = 1568
 
+/** Cache sub-directory MainActivity copies share-intent images into. */
+const val SHARED_IMAGES_DIR: String = "shared_images"
+
 /** Cache sub-directories that hold transient capture images. */
-val CAPTURE_IMAGE_CACHE_DIRS: List<String> = listOf("shared_images", "bp_images", "glucose_images")
+val CAPTURE_IMAGE_CACHE_DIRS: List<String> = listOf(SHARED_IMAGES_DIR, "bp_images", "glucose_images")
 
 /** Capture images older than this are considered abandoned and swept at startup. */
 const val STALE_CAPTURE_FILE_AGE_MS: Long = 60 * 60 * 1000L // 1 hour
@@ -90,6 +93,12 @@ fun exifTransformFor(orientation: Int): ExifTransform = when (orientation) {
     ORIENTATION_TRANSVERSE -> ExifTransform(-90f, true)
     ORIENTATION_ROTATE_270 -> ExifTransform(-90f, false)
     else -> ExifTransform(0f, false)
+}
+
+/** True when [file] resolves (following `..` and symlinks) to a path strictly inside [dir]. */
+fun isInsideDirectory(file: File, dir: File): Boolean {
+    val dirPath = dir.canonicalPath + File.separator
+    return file.canonicalPath.startsWith(dirPath)
 }
 
 /**

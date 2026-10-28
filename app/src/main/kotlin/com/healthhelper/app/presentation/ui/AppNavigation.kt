@@ -11,16 +11,24 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import com.healthhelper.app.presentation.viewmodel.GlucoseConfirmationViewModel
+import com.healthhelper.app.presentation.viewmodel.BpEntryViewModel
 import com.healthhelper.app.presentation.viewmodel.SyncViewModel
 
 private const val ROUTE_SYNC = "sync"
-private const val ROUTE_CAMERA_BP = "camera-bp?sharedPath={sharedPath}"
-private const val ROUTE_CAMERA_GLUCOSE = "camera-glucose?sharedPath={sharedPath}"
+private const val ARG_SHARED_PATH = BpEntryViewModel.ARG_SHARED_PATH
+private const val ROUTE_BP_ENTRY_BASE = "bp-entry"
+private const val ROUTE_GLUCOSE_ENTRY_BASE = "glucose-entry"
+private const val ROUTE_BP_ENTRY = "$ROUTE_BP_ENTRY_BASE?$ARG_SHARED_PATH={$ARG_SHARED_PATH}"
+private const val ROUTE_GLUCOSE_ENTRY = "$ROUTE_GLUCOSE_ENTRY_BASE?$ARG_SHARED_PATH={$ARG_SHARED_PATH}"
 
 private const val KEY_SNACKBAR_MSG = "snackbar_msg"
-private const val KEY_BP_SCAN_ERROR = "bp_scan_error"
-private const val KEY_GLUCOSE_SCAN_ERROR = "glucose_scan_error"
+
+/** Optional path of a shared image to scan as soon as the entry screen opens. */
+private fun sharedPathArgument() = navArgument(ARG_SHARED_PATH) {
+    type = NavType.StringType
+    nullable = true
+    defaultValue = null
+}
 
 /** Pops only if [route] is the current destination, so double taps can never pop the start destination. */
 private fun NavController.popIfCurrent(route: String) {
@@ -45,13 +53,6 @@ private fun NavController.returnToSync(key: String? = null, message: String? = n
     popBackStack(ROUTE_SYNC, inclusive = false)
 }
 
-/** Like [returnToSync], but only when [route] is the current destination (guards duplicate callbacks). */
-private fun NavController.returnToSyncFrom(route: String, key: String, message: String) {
-    if (currentBackStackEntry?.destination?.route == route) {
-        returnToSync(key, message)
-    }
-}
-
 @Composable
 fun AppNavigation(
     sharedImagePath: String? = null,
@@ -59,14 +60,15 @@ fun AppNavigation(
 ) {
     val navController = rememberNavController()
 
-    // If launched via share intent, navigate directly to the correct camera screen
+    // If launched via share intent, open the matching entry screen, which scans the image right away.
     LaunchedEffect(sharedImagePath, shareTarget) {
         if (sharedImagePath != null && shareTarget != null) {
             val encodedPath = java.net.URLEncoder.encode(sharedImagePath, "UTF-8")
-            val route = when (shareTarget) {
-                "glucose" -> "camera-glucose?sharedPath=$encodedPath"
-                else -> "camera-bp?sharedPath=$encodedPath"
+            val base = when (shareTarget) {
+                "glucose" -> ROUTE_GLUCOSE_ENTRY_BASE
+                else -> ROUTE_BP_ENTRY_BASE
             }
+            val route = "$base?$ARG_SHARED_PATH=$encodedPath"
             navController.navigate(route) {
                 popUpTo(ROUTE_SYNC) { inclusive = false }
             }
@@ -94,14 +96,10 @@ fun AppNavigation(
             }
             SyncScreen(
                 onNavigateToSettings = { navController.navigate("settings") },
-                onNavigateToCamera = { navController.navigate("camera-bp") },
-                onNavigateToGlucoseCamera = { navController.navigate("camera-glucose") },
+                onLogBloodPressure = { navController.navigate(ROUTE_BP_ENTRY_BASE) { launchSingleTop = true } },
+                onLogGlucose = { navController.navigate(ROUTE_GLUCOSE_ENTRY_BASE) { launchSingleTop = true } },
                 snackbarMessage = snackbarMessage,
                 onSnackbarShown = { backStackEntry.savedStateHandle.remove<String>(KEY_SNACKBAR_MSG) },
-                bpScanError = backStackEntry.savedStateHandle.get<String>(KEY_BP_SCAN_ERROR),
-                onBpScanErrorShown = { backStackEntry.savedStateHandle.remove<String>(KEY_BP_SCAN_ERROR) },
-                glucoseScanError = backStackEntry.savedStateHandle.get<String>(KEY_GLUCOSE_SCAN_ERROR),
-                onGlucoseScanErrorShown = { backStackEntry.savedStateHandle.remove<String>(KEY_GLUCOSE_SCAN_ERROR) },
                 viewModel = syncViewModel,
             )
         }
@@ -111,41 +109,10 @@ fun AppNavigation(
             )
         }
         composable(
-            route = ROUTE_CAMERA_BP,
-            arguments = listOf(
-                navArgument("sharedPath") {
-                    type = NavType.StringType
-                    nullable = true
-                    defaultValue = null
-                },
-            ),
-        ) { backStackEntry ->
-            val encodedPath = backStackEntry.arguments?.getString("sharedPath")
-            val decodedPath = encodedPath?.let {
-                java.net.URLDecoder.decode(it, "UTF-8")
-            }
-            CameraCaptureScreen(
-                onNavigateToConfirmation = { sys, dia ->
-                    // Drop the capture entry so system Back from confirmation goes home, not to a blank capture screen.
-                    navController.navigate("bp-confirm/$sys/$dia") {
-                        popUpTo(ROUTE_CAMERA_BP) { inclusive = true }
-                    }
-                },
-                onNavigateBack = { navController.popIfCurrent(ROUTE_CAMERA_BP) },
-                onNavigateBackWithError = { error ->
-                    navController.returnToSyncFrom(ROUTE_CAMERA_BP, KEY_BP_SCAN_ERROR, error)
-                },
-                sharedImagePath = decodedPath,
-            )
-        }
-        composable(
-            route = "bp-confirm/{systolic}/{diastolic}",
-            arguments = listOf(
-                navArgument("systolic") { type = NavType.IntType },
-                navArgument("diastolic") { type = NavType.IntType },
-            ),
+            route = ROUTE_BP_ENTRY,
+            arguments = listOf(sharedPathArgument()),
         ) {
-            BpConfirmationScreen(
+            BpEntryScreen(
                 onNavigateHome = { snackbarMsg ->
                     navController.returnToSync(KEY_SNACKBAR_MSG, snackbarMsg)
                 },
@@ -153,42 +120,10 @@ fun AppNavigation(
             )
         }
         composable(
-            route = ROUTE_CAMERA_GLUCOSE,
-            arguments = listOf(
-                navArgument("sharedPath") {
-                    type = NavType.StringType
-                    nullable = true
-                    defaultValue = null
-                },
-            ),
-        ) { backStackEntry ->
-            val encodedPath = backStackEntry.arguments?.getString("sharedPath")
-            val decodedPath = encodedPath?.let {
-                java.net.URLDecoder.decode(it, "UTF-8")
-            }
-            GlucoseCaptureScreen(
-                onNavigateToConfirmation = { value, unit ->
-                    val encodedValue = java.net.URLEncoder.encode(value.toString(), "UTF-8")
-                    // Drop the capture entry so system Back from confirmation goes home, not to a blank capture screen.
-                    navController.navigate("glucose-confirm/$encodedValue/${unit.name}") {
-                        popUpTo(ROUTE_CAMERA_GLUCOSE) { inclusive = true }
-                    }
-                },
-                onNavigateBack = { navController.popIfCurrent(ROUTE_CAMERA_GLUCOSE) },
-                onNavigateBackWithError = { error ->
-                    navController.returnToSyncFrom(ROUTE_CAMERA_GLUCOSE, KEY_GLUCOSE_SCAN_ERROR, error)
-                },
-                sharedImagePath = decodedPath,
-            )
-        }
-        composable(
-            route = "glucose-confirm/{${GlucoseConfirmationViewModel.ARG_VALUE}}/{${GlucoseConfirmationViewModel.ARG_UNIT}}",
-            arguments = listOf(
-                navArgument(GlucoseConfirmationViewModel.ARG_VALUE) { type = NavType.StringType },
-                navArgument(GlucoseConfirmationViewModel.ARG_UNIT) { type = NavType.StringType },
-            ),
+            route = ROUTE_GLUCOSE_ENTRY,
+            arguments = listOf(sharedPathArgument()),
         ) {
-            GlucoseConfirmationScreen(
+            GlucoseEntryScreen(
                 onNavigateHome = { snackbarMsg ->
                     navController.returnToSync(KEY_SNACKBAR_MSG, snackbarMsg)
                 },

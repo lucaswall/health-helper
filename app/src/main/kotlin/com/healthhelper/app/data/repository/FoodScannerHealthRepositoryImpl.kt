@@ -107,6 +107,7 @@ class FoodScannerHealthRepositoryImpl @Inject constructor(
             zoneOffset = zoneOffsetString(reading.zoneOffset, reading.timestamp),
             bodyPosition = reading.bodyPosition.name.lowercase(),
             measurementLocation = reading.measurementLocation.name.lowercase(),
+            heartRate = reading.heartRate,
         )
 
     private fun toHydrationReadingDto(reading: HydrationReading): HydrationReadingDto =

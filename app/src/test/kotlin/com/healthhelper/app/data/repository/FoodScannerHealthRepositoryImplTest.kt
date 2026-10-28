@@ -229,6 +229,19 @@ class FoodScannerHealthRepositoryImplTest {
     }
 
     @Test
+    @DisplayName("pushBloodPressureReading maps heart rate, and leaves it null when absent")
+    fun pushBloodPressureReadingMapsHeartRate() = runTest {
+        val slot = slot<BloodPressureReadingRequest>()
+        coEvery { apiClient.postBloodPressureReadings(any(), any(), capture(slot)) } returns Result.success(1)
+
+        repository.pushBloodPressureReading(testBpReading.copy(heartRate = 66))
+        assertEquals(66, slot.captured.readings[0].heartRate)
+
+        repository.pushBloodPressureReading(testBpReading)
+        assertEquals(null, slot.captured.readings[0].heartRate)
+    }
+
+    @Test
     @DisplayName("pushBloodPressureReading maps bodyPosition as snake_case")
     fun pushBloodPressureReadingMapsBodyPosition() = runTest {
         val slot = slot<BloodPressureReadingRequest>()

@@ -102,4 +102,13 @@ class CaptureImageUtilsTest {
         assertFalse(old.exists())
         assertTrue(fresh.exists())
     }
+
+    @Test
+    fun `isInsideDirectory accepts files under the directory only`() {
+        val dir = java.io.File("/cache/shared_images")
+        kotlin.test.assertTrue(isInsideDirectory(java.io.File("/cache/shared_images/a.jpg"), dir))
+        kotlin.test.assertFalse(isInsideDirectory(java.io.File("/cache/shared_images/../secret.db"), dir))
+        kotlin.test.assertFalse(isInsideDirectory(java.io.File("/cache/shared_images_evil/a.jpg"), dir))
+        kotlin.test.assertFalse(isInsideDirectory(dir, dir))
+    }
 }

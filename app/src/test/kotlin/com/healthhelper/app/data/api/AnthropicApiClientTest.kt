@@ -16,6 +16,9 @@ import io.ktor.serialization.kotlinx.json.json
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
@@ -56,6 +59,12 @@ class AnthropicApiClientTest {
             "usage": {"input_tokens": 100, "output_tokens": 20}
         }
     """.trimIndent()
+
+    private fun successResponseWithHeartRate(systolic: Int, diastolic: Int, heartRate: Int): String =
+        successResponse(systolic, diastolic).replace(
+            "\"diastolic\": $diastolic}",
+            "\"diastolic\": $diastolic, \"heart_rate\": $heartRate}",
+        )
 
     private fun errorResponse(reason: String): String = """
         {
@@ -777,5 +786,58 @@ class AnthropicApiClientTest {
 
         assertIs<BloodPressureParseResult.Success>(result)
         assertEquals(testApiKey, capturedApiKey)
+    }
+
+    // --- heart rate ---
+
+    @Test
+    @DisplayName("heart_rate from the tool input is returned with the reading")
+    fun returnsHeartRate() = runTest {
+        val engine = MockEngine { respond(content = successResponseWithHeartRate(120, 80, 72), headers = jsonHeaders) }
+
+        val result = createClient(engine).parseBloodPressureImage(testApiKey, testImageBytes)
+
+        assertIs<BloodPressureParseResult.Success>(result)
+        assertEquals(72, result.heartRate)
+    }
+
+    @Test
+    @DisplayName("missing heart_rate yields a null heart rate")
+    fun missingHeartRateIsNull() = runTest {
+        val engine = MockEngine { respond(content = successResponse(120, 80), headers = jsonHeaders) }
+
+        val result = createClient(engine).parseBloodPressureImage(testApiKey, testImageBytes)
+
+        assertIs<BloodPressureParseResult.Success>(result)
+        assertEquals(null, result.heartRate)
+    }
+
+    @Test
+    @DisplayName("implausible heart_rate is dropped without failing the scan")
+    fun implausibleHeartRateDropped() = runTest {
+        val engine = MockEngine { respond(content = successResponseWithHeartRate(120, 80, 400), headers = jsonHeaders) }
+
+        val result = createClient(engine).parseBloodPressureImage(testApiKey, testImageBytes)
+
+        assertIs<BloodPressureParseResult.Success>(result)
+        assertEquals(120, result.systolic)
+        assertEquals(null, result.heartRate)
+    }
+
+    @Test
+    @DisplayName("BP tool schema asks for the optional heart_rate")
+    fun toolSchemaIncludesHeartRate() = runTest {
+        var capturedBody: String? = null
+        val engine = MockEngine { request ->
+            capturedBody = (request.body as io.ktor.http.content.TextContent).text
+            respond(content = successResponse(120, 80), headers = jsonHeaders)
+        }
+
+        createClient(engine).parseBloodPressureImage(testApiKey, testImageBytes)
+
+        val tool = Json.parseToJsonElement(capturedBody!!).jsonObject["tools"]!!.jsonArray[0].jsonObject
+        val schema = tool["input_schema"]!!.jsonObject
+        assertTrue("heart_rate" in schema["properties"]!!.jsonObject)
+        assertTrue(schema["required"]!!.jsonArray.none { it.jsonPrimitive.content == "heart_rate" })
     }
 }

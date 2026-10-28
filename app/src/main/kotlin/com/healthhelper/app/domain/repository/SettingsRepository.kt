@@ -78,6 +78,11 @@ interface SettingsRepository {
     suspend fun addDirectPushedGlucoseTimestamp(timestampMs: Long)
     suspend fun getDirectPushedBpTimestamps(): Set<Long>
     suspend fun addDirectPushedBpTimestamp(timestampMs: Long)
+    /** Also prunes pending BP heart rates older than [bpBeforeMs] (their readings have been synced). */
     suspend fun pruneDirectPushedTimestamps(glucoseBeforeMs: Long, bpBeforeMs: Long)
+
+    /** Heart rates of BP readings whose direct push failed, keyed by reading epoch millis. */
+    suspend fun getPendingBpHeartRates(): Map<Long, Int>
+    suspend fun addPendingBpHeartRate(timestampMs: Long, beatsPerMinute: Int)
     suspend fun resetHydrationWatermarkIfNeeded()
 }

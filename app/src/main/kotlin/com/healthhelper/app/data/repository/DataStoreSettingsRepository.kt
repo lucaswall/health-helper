@@ -74,6 +74,7 @@ class DataStoreSettingsRepository @Inject constructor(
         val LEGACY_FOOD_LOG_ETAGS = stringPreferencesKey("food_log_etags")
         val DIRECT_PUSHED_GLUCOSE_TIMESTAMPS = stringPreferencesKey("direct_pushed_glucose_timestamps")
         val DIRECT_PUSHED_BP_TIMESTAMPS = stringPreferencesKey("direct_pushed_bp_timestamps")
+        val PENDING_BP_HEART_RATES = stringPreferencesKey("pending_bp_heart_rates")
         val HYDRATION_WATERMARK_RESET_V1 = booleanPreferencesKey("hydration_watermark_reset_v1")
         val LAST_PERMISSION_NOTIFICATION_TIMESTAMP = longPreferencesKey("last_permission_notification_timestamp")
         val MISSING_PERMISSIONS_AT_LAST_NOTIFICATION = stringPreferencesKey("missing_permissions_at_last_notification")
@@ -520,9 +521,40 @@ class DataStoreSettingsRepository @Inject constructor(
                 } ?: emptySet()
                 val pruned = existing.filter { it >= bpBeforeMs }.toSet()
                 prefs[DIRECT_PUSHED_BP_TIMESTAMPS] = Json.encodeToString(pruned)
+
+                val pendingHeartRates = decodePendingHeartRates(prefs[PENDING_BP_HEART_RATES])
+                prefs[PENDING_BP_HEART_RATES] = encodePendingHeartRates(
+                    pendingHeartRates.filterKeys { it >= bpBeforeMs },
+                )
             }
         }
     }
+
+    override suspend fun getPendingBpHeartRates(): Map<Long, Int> =
+        decodePendingHeartRates(dataStore.data.first()[PENDING_BP_HEART_RATES])
+
+    override suspend fun addPendingBpHeartRate(timestampMs: Long, beatsPerMinute: Int) {
+        dataStore.edit { prefs ->
+            val existing = decodePendingHeartRates(prefs[PENDING_BP_HEART_RATES])
+            prefs[PENDING_BP_HEART_RATES] = encodePendingHeartRates(existing + (timestampMs to beatsPerMinute))
+        }
+    }
+
+    // JSON object keys must be strings, so epoch millis are stored as their decimal text.
+    private fun decodePendingHeartRates(json: String?): Map<Long, Int> {
+        if (json == null) return emptyMap()
+        return try {
+            Json.decodeFromString<Map<String, Int>>(json)
+                .mapNotNull { (key, bpm) -> key.toLongOrNull()?.let { it to bpm } }
+                .toMap()
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to deserialize pending BP heart rates, starting fresh")
+            emptyMap()
+        }
+    }
+
+    private fun encodePendingHeartRates(map: Map<Long, Int>): String =
+        Json.encodeToString(map.mapKeys { (key, _) -> key.toString() })
 
     override suspend fun resetHydrationWatermarkIfNeeded() {
         dataStore.edit { prefs ->
