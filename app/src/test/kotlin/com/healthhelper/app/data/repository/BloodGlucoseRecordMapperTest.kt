@@ -20,12 +20,29 @@ class BloodGlucoseRecordMapperTest {
     private val testTimestamp = Instant.parse("2026-02-28T10:00:00Z")
 
     @Test
-    @DisplayName("mapToBloodGlucoseRecord stores the exact mg/dL value, marked with the mg/dL record version")
+    @DisplayName("mapToBloodGlucoseRecord stores physically accurate mmol/L (mg/dL / 18.018) with the current record version")
     fun mapsValueCorrectly() {
-        val reading = GlucoseReading(valueMgDl = 100, timestamp = testTimestamp)
+        val reading = GlucoseReading(valueMgDl = 101, timestamp = testTimestamp)
         val record = mapToBloodGlucoseRecord(reading)
-        assertEquals(100.0, record.level.inMilligramsPerDeciliter, 1e-9)
-        assertEquals(GLUCOSE_MG_DL_RECORD_VERSION, record.metadata.clientRecordVersion)
+        assertEquals(101 / 18.018, record.level.inMillimolesPerLiter, 1e-9)
+        assertEquals(GLUCOSE_RECORD_VERSION, record.metadata.clientRecordVersion)
+    }
+
+    @Test
+    @DisplayName("version-1 records (encoded with HC's 18.0 factor) still read back exactly")
+    fun hcFactorRecordsReadBackExactly() {
+        (18..720).forEach { mgDl ->
+            val record = BloodGlucoseRecord(
+                time = testTimestamp,
+                zoneOffset = ZoneOffset.UTC,
+                level = BloodGlucose.milligramsPerDeciliter(mgDl.toDouble()),
+                metadata = Metadata.manualEntry(
+                    clientRecordId = "bloodglucose-${testTimestamp.toEpochMilli()}",
+                    clientRecordVersion = 1L,
+                ),
+            )
+            assertEquals(mgDl, mapToGlucoseReading(record).valueMgDl, "mgDl=$mgDl")
+        }
     }
 
     @Test
