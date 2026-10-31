@@ -30,6 +30,7 @@ import java.time.format.DateTimeFormatter
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class SyncNutritionUseCaseTest {
@@ -219,6 +220,42 @@ class SyncNutritionUseCaseTest {
         val result = useCase.invoke()
 
         assertTrue(result is SyncResult.Error)
+        assertFalse(result.isNetworkError)
+    }
+
+    @Test
+    @DisplayName("all days failing with a network error returns Error flagged as a network error")
+    fun allDaysNetworkFailureFlagsNetworkError() = runTest {
+        configureSettings(lastSyncedDate = LocalDate.now(clock).format(DateTimeFormatter.ISO_LOCAL_DATE))
+        coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } returns
+            Result.failure(java.io.IOException("Network unavailable"))
+
+        val result = useCase.invoke()
+
+        assertTrue(result is SyncResult.Error)
+        assertEquals("Network unavailable", result.message)
+        assertTrue(result.isNetworkError)
+    }
+
+    @Test
+    @DisplayName("Health Connect write failure is not a network error even after an earlier network failure")
+    fun hcWriteFailureIsNotNetworkError() = runTest {
+        configureSettings(lastSyncedDate = LocalDate.now(clock).format(DateTimeFormatter.ISO_LOCAL_DATE))
+        var calls = 0
+        coEvery { foodLogRepository.getFoodLog(any(), any(), any()) } answers {
+            calls++
+            if (calls == 1) {
+                Result.failure(java.io.IOException("Network unavailable"))
+            } else {
+                Result.success(FoodLogResult.Data(listOf(testEntry)))
+            }
+        }
+        coEvery { nutritionRepository.writeNutritionRecords(any(), any()) } returns false
+
+        val result = useCase.invoke()
+
+        assertTrue(result is SyncResult.Error)
+        assertFalse(result.isNetworkError)
     }
 
     @Test

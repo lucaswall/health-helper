@@ -4,15 +4,19 @@ import com.healthhelper.app.domain.model.BloodPressureParseResult
 import com.healthhelper.app.domain.model.GlucoseParseResult
 import com.healthhelper.app.domain.model.GlucoseUnit
 import com.healthhelper.app.domain.model.ImageParseErrorKind
+import com.healthhelper.app.testutil.RecordingTree
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.engine.mock.respondError
+import io.ktor.client.network.sockets.ConnectTimeoutException
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import io.ktor.serialization.kotlinx.json.json
+import java.security.cert.CertPathValidatorException
+import javax.net.ssl.SSLHandshakeException
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
@@ -747,6 +751,48 @@ class AnthropicApiClientTest {
         assertEquals("Request timed out", result.message)
         assertEquals(1, calls)
     }
+
+    @Test
+    @DisplayName("connect timeout is a non-retried NETWORK error logged below ERROR (HEALTH-HELPER-F)")
+    fun connectTimeoutIsNetworkErrorNotReported() = runTest {
+        var calls = 0
+        val engine = MockEngine {
+            calls++
+            throw ConnectTimeoutException(
+                "Connect timeout has expired [url=https://api.anthropic.com/v1/messages, connect_timeout=unknown ms]",
+            )
+        }
+
+        val result = RecordingTree.recording { tree ->
+            createClient(engine).parseBloodPressureImage(testApiKey, testImageBytes).also {
+                assertEquals(0, tree.errorCount, "a connect timeout must not reach Sentry as an error")
+            }
+        }
+
+        assertIs<BloodPressureParseResult.Error>(result)
+        assertEquals("Request timed out", result.message)
+        assertEquals(ImageParseErrorKind.NETWORK, result.kind)
+        assertEquals(1, calls)
+    }
+
+    @Test
+    @DisplayName("TLS handshake failure is a NETWORK error logged below ERROR")
+    fun tlsFailureIsNetworkErrorNotReported() = runTest {
+        val engine = MockEngine { throw trustAnchorFailure() }
+
+        val result = RecordingTree.recording { tree ->
+            createClient(engine).parseGlucoseImage(testApiKey, testImageBytes).also {
+                assertEquals(0, tree.errorCount, "a TLS failure must not reach Sentry as an error")
+            }
+        }
+
+        assertIs<GlucoseParseResult.Error>(result)
+        assertEquals(ImageParseErrorKind.NETWORK, result.kind)
+    }
+
+    private fun trustAnchorFailure() = SSLHandshakeException(
+        "java.security.cert.CertPathValidatorException: Trust anchor for certification path not found.",
+    ).apply { initCause(CertPathValidatorException("Trust anchor for certification path not found.")) }
 
     @Test
     @DisplayName("retry-after header is honored but capped")

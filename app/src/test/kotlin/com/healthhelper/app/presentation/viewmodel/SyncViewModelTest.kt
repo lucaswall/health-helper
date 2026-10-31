@@ -1,5 +1,6 @@
 package com.healthhelper.app.presentation.viewmodel
 
+import android.util.Log
 import app.cash.turbine.test
 import androidx.health.connect.client.HealthConnectClient
 import androidx.lifecycle.viewModelScope
@@ -8,6 +9,7 @@ import androidx.health.connect.client.records.BloodPressureRecord
 import androidx.health.connect.client.records.NutritionRecord
 import com.healthhelper.app.data.sync.SyncCoordinator
 import com.healthhelper.app.data.sync.SyncScheduler
+import com.healthhelper.app.testutil.RecordingTree
 import com.healthhelper.app.domain.model.BloodPressureReading
 import com.healthhelper.app.domain.model.HealthPermissions
 import com.healthhelper.app.domain.model.MealType
@@ -284,6 +286,38 @@ class SyncViewModelTest {
             val state = awaitItem()
             assertEquals("Network failure", state.lastSyncResult)
             cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `network sync error is logged as a warning, not an error`() = viewModelTest {
+        coEvery { syncNutritionUseCase.invoke(any()) } returns
+            SyncResult.Error("Network unavailable", isNetworkError = true)
+        coEvery { settingsRepository.isConfigured() } returns true
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        RecordingTree.recording { tree ->
+            viewModel.triggerSync()
+            advanceTimeBy(1_000)
+            assertEquals(Log.WARN, tree.priorityOf("Network unavailable"))
+        }
+        assertTrue(viewModel.uiState.value.lastSyncResultIsError)
+    }
+
+    @Test
+    fun `non-network sync error is logged as an error`() = viewModelTest {
+        coEvery { syncNutritionUseCase.invoke(any()) } returns SyncResult.Error("Failed to write records to Health Connect")
+        coEvery { settingsRepository.isConfigured() } returns true
+
+        viewModel = createViewModel()
+        advanceTimeBy(1_000)
+
+        RecordingTree.recording { tree ->
+            viewModel.triggerSync()
+            advanceTimeBy(1_000)
+            assertEquals(Log.ERROR, tree.priorityOf("Failed to write records to Health Connect"))
         }
     }
 

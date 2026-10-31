@@ -597,7 +597,13 @@ class SyncViewModel @Inject constructor(
                         msg
                     }
                     is SyncResult.Error -> {
-                        Timber.e("SyncViewModel: sync error — %s", result.message)
+                        // Network failures are expected on a phone and retryable; only the rest are
+                        // bugs worth a Sentry event (SentryTimberTree reports ERROR and above).
+                        if (result.isNetworkError) {
+                            Timber.w("SyncViewModel: sync network error — %s", result.message)
+                        } else {
+                            Timber.e("SyncViewModel: sync error — %s", result.message)
+                        }
                         result.message
                     }
                     is SyncResult.NeedsConfiguration -> {

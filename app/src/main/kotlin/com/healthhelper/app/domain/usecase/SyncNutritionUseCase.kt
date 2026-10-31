@@ -14,6 +14,7 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import timber.log.Timber
+import java.io.IOException
 import java.time.Clock
 import java.time.LocalDate
 import java.time.LocalTime
@@ -93,6 +94,7 @@ class SyncNutritionUseCase internal constructor(
         var consecutiveFailures = 0
         var currentDelay = INITIAL_DELAY_MS
         var lastErrorMessage: String? = null
+        var lastErrorIsNetwork = false
 
         for (date in dates) {
             val dateStr = date.format(DateTimeFormatter.ISO_LOCAL_DATE)
@@ -128,6 +130,7 @@ class SyncNutritionUseCase internal constructor(
                             true
                         } else {
                             lastErrorMessage = HC_WRITE_FAILED_MESSAGE
+                            lastErrorIsNetwork = false
                             Timber.w("SyncNutrition: %s → HC write failed for %d entries", dateStr, entries.size)
                             false
                         }
@@ -139,6 +142,7 @@ class SyncNutritionUseCase internal constructor(
                 }
             } else {
                 lastErrorMessage = result.exceptionOrNull()?.message
+                lastErrorIsNetwork = result.exceptionOrNull() is IOException
                 Timber.w("SyncNutrition: %s → API error: %s", dateStr, lastErrorMessage)
                 false
             }
@@ -188,7 +192,7 @@ class SyncNutritionUseCase internal constructor(
         }
 
         val syncResult = when {
-            successfulDays == 0 -> SyncResult.Error(lastErrorMessage ?: "Sync failed")
+            successfulDays == 0 -> SyncResult.Error(lastErrorMessage ?: "Sync failed", isNetworkError = lastErrorIsNetwork)
             totalEntriesFetched > 0 && totalRecordsSynced == 0 ->
                 SyncResult.Error(HC_WRITE_FAILED_MESSAGE)
             else -> SyncResult.Success(totalRecordsSynced, successfulDays)

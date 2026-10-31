@@ -2,15 +2,28 @@ package com.healthhelper.app.di
 
 import android.content.Context
 import android.content.SharedPreferences
+import io.ktor.client.engine.okhttp.OkHttpEngine
+import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.plugins.pluginOrNull
 import io.mockk.mockk
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 
 class AppModuleTest {
+
+    @Test
+    fun `provideHttpClient uses the OkHttp engine with HttpTimeout installed`() {
+        // Platform TLS via OkHttp (Ktor CIO runs its own TLS handshake) and explicit timeouts.
+        AppModule.provideHttpClient().use { client ->
+            assertIs<OkHttpEngine>(client.engine)
+            assertNotNull(client.pluginOrNull(HttpTimeout))
+        }
+    }
 
     @Test
     fun `createEncryptedSharedPreferences returns SharedPreferences when creation succeeds`() {

@@ -7,6 +7,7 @@ import com.healthhelper.app.data.api.dto.GlucoseReadingRequest
 import com.healthhelper.app.data.api.dto.HydrationReadingDto
 import com.healthhelper.app.data.api.dto.HydrationReadingRequest
 import com.healthhelper.app.domain.model.MealType
+import com.healthhelper.app.testutil.RecordingTree
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -18,6 +19,8 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.OutgoingContent
 import io.ktor.http.headersOf
 import io.ktor.serialization.kotlinx.json.json
+import java.security.cert.CertPathValidatorException
+import javax.net.ssl.SSLHandshakeException
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
@@ -1090,6 +1093,28 @@ class FoodScannerApiClientTest {
             assertTrue(ex.cause is java.io.IOException)
             assertEquals(original.message, ex.cause?.message)
         }
+    }
+
+    @Test
+    @DisplayName("TLS trust failure maps to NetworkException and is logged below ERROR (HEALTH-HELPER-E)")
+    fun tlsTrustFailureMapsToNetworkException() = runTest {
+        val engine = MockEngine {
+            throw SSLHandshakeException(
+                "java.security.cert.CertPathValidatorException: Trust anchor for certification path not found.",
+            ).apply { initCause(CertPathValidatorException("Trust anchor for certification path not found.")) }
+        }
+        val client = createClient(engine)
+
+        val result = RecordingTree.recording { tree ->
+            client.getFoodLog("https://food.example.com", "fsk_test", "2026-10-08").also {
+                assertEquals(0, tree.errorCount, "a TLS failure must not reach Sentry as an error")
+                assertEquals(1, tree.warnCount)
+            }
+        }
+
+        val ex = result.exceptionOrNull()
+        assertTrue(ex is NetworkException)
+        assertEquals("Network unavailable", ex.message)
     }
 
     @Test
