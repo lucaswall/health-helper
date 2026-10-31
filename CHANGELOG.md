@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-10-31
+
+### Added
+
+- Log your waist circumference, with measuring instructions; readings sync to Food Scanner and a home-screen card shows the latest one
+- Blood pressure readings now include your heart rate, read from the monitor's pulse or typed in, and saved to Health Connect and Food Scanner
+
+### Changed
+
+- Log Blood Pressure and Log Glucose open the entry form directly; "Scan from photo" is an optional button that fills it in
+- Photo scans read monitor and meter displays far more reliably, and when a digit is unclear they tell you what to fix (glare, angle) instead of filling in a wrong number
+- Logging and Sync Now only need the core Health Connect permissions, optional ones appear as a hint, and the camera permission is no longer requested
+
+### Fixed
+
+- Glucose values now match exactly between the app, Health Connect and Food Scanner
+- Hydration sync picks up readings added late or edited afterwards, and today's total no longer shows 0 when Health Connect can't be read
+- Minor bug fixes, better handling of slow or dropped connections, and accessibility improvements
+
 ## [1.8.6] - 2026-04-23
 
 ### Fixed
@@ -198,7 +217,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Settings screen for API configuration and sync interval
 - Adaptive launcher icon with health cross design
 
-[Unreleased]: https://github.com/lucaswall/health-helper/compare/v1.8.6...HEAD
+[Unreleased]: https://github.com/lucaswall/health-helper/compare/v1.9.0...HEAD
+[1.9.0]: https://github.com/lucaswall/health-helper/compare/v1.8.6...v1.9.0
 [1.8.6]: https://github.com/lucaswall/health-helper/compare/v1.8.5...v1.8.6
 [1.8.5]: https://github.com/lucaswall/health-helper/compare/v1.8.4...v1.8.5
 [1.8.4]: https://github.com/lucaswall/health-helper/compare/v1.8.3...v1.8.4
