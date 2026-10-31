@@ -5,8 +5,8 @@ import com.healthhelper.app.data.api.dto.AnthropicImageSource
 import com.healthhelper.app.data.api.dto.AnthropicMessage
 import com.healthhelper.app.data.api.dto.AnthropicMessageRequest
 import com.healthhelper.app.data.api.dto.AnthropicMessageResponse
-import com.healthhelper.app.data.api.dto.AnthropicToolChoice
-import com.healthhelper.app.data.api.dto.AnthropicToolDefinition
+import com.healthhelper.app.data.api.dto.AnthropicOutputConfig
+import com.healthhelper.app.data.api.dto.AnthropicOutputFormat
 import com.healthhelper.app.domain.model.BloodPressureParseResult
 import com.healthhelper.app.domain.model.BloodPressureReading
 import com.healthhelper.app.domain.model.GlucoseParseResult
@@ -14,6 +14,7 @@ import com.healthhelper.app.domain.model.GlucoseUnit
 import com.healthhelper.app.domain.model.ImageParseErrorKind
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
+import io.ktor.client.plugins.timeout
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -26,10 +27,11 @@ import kotlin.random.Random
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
@@ -43,8 +45,22 @@ class AnthropicApiClient @Inject constructor(
     companion object {
         private const val API_URL = "https://api.anthropic.com/v1/messages"
         private const val API_VERSION = "2023-06-01"
-        private const val MODEL = "claude-haiku-4-5-20251001"
-        private const val MAX_TOKENS = 256
+        private const val MODEL = "claude-opus-5-5"
+
+        // Thinking is always on for this model; effort sets how much it reasons before answering. On
+        // test photos low read as accurately as medium and declined fewer legible ones.
+        private const val EFFORT = "low"
+
+        // Room for the reasoning plus the short JSON answer; thinking counts toward this cap.
+        private const val MAX_TOKENS = 8_000
+
+        // On a safety-classifier decline the API re-runs the same request on a fallback model.
+        private const val FALLBACK_BETA = "server-side-fallback-2026-07-01"
+        private const val FALLBACKS = "default"
+
+        // A reasoned answer about a full-resolution image takes longer than the shared 30s client timeout.
+        private const val REQUEST_TIMEOUT_MS = 60_000L
+
         private const val SYSTOLIC_MIN = 60
         private const val SYSTOLIC_MAX = 300
         private const val DIASTOLIC_MIN = 30
@@ -59,117 +75,154 @@ class AnthropicApiClient @Inject constructor(
         private const val RETRY_JITTER_MS = 250L
         private const val MAX_RETRY_DELAY_MS = 4_000L
         private val RETRYABLE_STATUSES = setOf(429, 500, 502, 503, 504, 529)
-        private const val TOOL_NAME = "blood_pressure_reading"
 
-        private val BP_TOOL = AnthropicToolDefinition(
-            name = TOOL_NAME,
-            description = "Extract a blood pressure reading from a monitor display image.",
-            inputSchema = buildJsonObject {
-                put("type", "object")
-                putJsonObject("properties") {
-                    putJsonObject("systolic") {
-                        put("type", "integer")
-                        put("description", "Systolic pressure (top/larger number)")
-                    }
-                    putJsonObject("diastolic") {
-                        put("type", "integer")
-                        put("description", "Diastolic pressure (middle/smaller number)")
-                    }
-                    putJsonObject("heart_rate") {
-                        put("type", "integer")
-                        put(
-                            "description",
-                            "Pulse / heart rate in beats per minute: the third value, shown after systolic " +
-                                "and diastolic (often labelled PULSE or /min, or next to a heart icon). " +
-                                "Omit if the display does not show it.",
+        /** A glucose result as displayed: whole mg/dL, or mmol/L with a decimal point. */
+        private val GLUCOSE_READING_PATTERN = Regex("""\d{1,3}(\.\d{1,2})?""")
+
+        private const val SEVEN_SEGMENT_NOTES =
+            "Seven-segment digits are easy to misread when a segment is faint, washed out by glare or a " +
+                "reflection, or seen at an angle. The usual confusions are 1/7, 3/9, 5/6, 6/8, 8/9 and 0/8, " +
+                "and a leading 1 (just two short vertical segments) is easy to overlook in values of 100 and " +
+                "above. Many LCDs also show unlit segments faintly; those are not lit. Read each digit from " +
+                "the segments that are actually dark."
+
+        private const val DOUBT_RULE =
+            "Set readable to true only when you are sure of every digit you return. If any digit could be " +
+                "a different one, set readable to false rather than picking the likelier digit, and say in " +
+                "problem which digit is in doubt and how to get a clearer photo; the app shows that text to " +
+                "the user."
+
+        private val BP_SYSTEM = "You read blood pressure monitor displays from photos. The user has just " +
+            "taken a measurement and photographed the monitor. The app fills in the values you return and " +
+            "the user confirms them before saving, so a plausible-looking wrong number is the worst outcome; " +
+            "an unread photo only costs the user a retake or typing the values in. $DOUBT_RULE If only the " +
+            "pulse is unclear, return null for pulse and keep the rest.\n\n" +
+            "Home monitors usually show the result on a segmented LCD with three numbers stacked top to " +
+            "bottom: systolic (the largest, labelled SYS or mmHg), diastolic (DIA) and pulse (PUL, PULSE, " +
+            "/min, or next to a heart symbol). Some models show pulse in a smaller font or beside the other " +
+            "two. The screen can also show the date, time, a memory number, an average marker or status " +
+            "icons (irregular heartbeat, cuff fit, battery); none of those are part of the reading.\n\n" +
+            "$SEVEN_SEGMENT_NOTES\n\n" +
+            "If the photo shows something other than a finished reading (an error code, a measurement in " +
+            "progress, a blank screen, or a different kind of device), set readable to false and say what " +
+            "you see in problem."
+
+        private val GLUCOSE_SYSTEM = "You read blood glucose meter displays from photos. The user has just " +
+            "measured and photographed the meter. The app fills in the value you return and the user " +
+            "confirms it before saving, so a plausible-looking wrong number is the worst outcome; an unread " +
+            "photo only costs the user a retake or typing the value in. $DOUBT_RULE\n\n" +
+            "The result is the largest number on the screen, usually with its unit beside it. mg/dL results " +
+            "are whole numbers (98, 142); mmol/L results have one decimal place (5.6, 12.0). The decimal " +
+            "point is a small dot between digits that is easy to miss, and missing it turns 5.6 mmol/L into " +
+            "56, so look for it and report the result exactly as displayed, dot included. The screen can " +
+            "also show the date, time, a memory number, meal markers (before/after-meal icons, an apple), a " +
+            "ketone or temperature warning and a battery icon; none of those are the result. HI or LO means " +
+            "the result is outside the meter's range: set readable to false.\n\n" +
+            "$SEVEN_SEGMENT_NOTES\n\n" +
+            "If the photo shows something other than a finished result (an error code such as E-3, a " +
+            "test-strip prompt, a blank screen, or a different kind of device), set readable to false and " +
+            "say what you see in problem."
+
+        private const val PROBLEM_DESCRIPTION =
+            "When readable is false: what you see and how to get a readable photo, in one or two short " +
+                "sentences addressed to the user. Null when readable is true."
+
+        private val BP_SCHEMA = buildJsonObject {
+            put("type", "object")
+            putJsonObject("properties") {
+                putJsonObject("readable") {
+                    put("type", "boolean")
+                    put("description", "True only when you are sure of every digit of systolic and diastolic.")
+                }
+                nullable("systolic", "integer", "Systolic pressure in mmHg, the top and largest number.")
+                nullable("diastolic", "integer", "Diastolic pressure in mmHg, the second number.")
+                nullable(
+                    "pulse",
+                    "integer",
+                    "Pulse in beats per minute, the third value. Null when the display does not show it.",
+                )
+                nullable("problem", "string", PROBLEM_DESCRIPTION)
+            }
+            requireAll("readable", "systolic", "diastolic", "pulse", "problem")
+        }
+
+        private val GLUCOSE_SCHEMA = buildJsonObject {
+            put("type", "object")
+            putJsonObject("properties") {
+                putJsonObject("readable") {
+                    put("type", "boolean")
+                    put("description", "True only when you are sure of every digit of the result.")
+                }
+                nullable(
+                    "reading",
+                    "string",
+                    "The result exactly as displayed, digits and decimal point only (\"142\", \"5.6\").",
+                )
+                putJsonObject("unit") {
+                    putJsonArray("anyOf") {
+                        add(
+                            buildJsonObject {
+                                put("type", "string")
+                                putJsonArray("enum") {
+                                    add(JsonPrimitive("mg/dL"))
+                                    add(JsonPrimitive("mmol/L"))
+                                }
+                            },
                         )
+                        add(buildJsonObject { put("type", "null") })
                     }
-                    putJsonObject("error") {
-                        put("type", "string")
-                        put("description", "Error message if the reading cannot be determined")
-                    }
+                    put("description", "The unit label shown on the screen. Null when no unit label is visible.")
                 }
-                putJsonArray("required") {
-                    add(JsonPrimitive("systolic"))
-                    add(JsonPrimitive("diastolic"))
+                nullable("problem", "string", PROBLEM_DESCRIPTION)
+            }
+            requireAll("readable", "reading", "unit", "problem")
+        }
+
+        /** A property that holds [type] or null, so every property can be required and the shape stays fixed. */
+        private fun JsonObjectBuilder.nullable(name: String, type: String, description: String) {
+            putJsonObject(name) {
+                putJsonArray("anyOf") {
+                    add(buildJsonObject { put("type", type) })
+                    add(buildJsonObject { put("type", "null") })
                 }
-            },
-        )
+                put("description", description)
+            }
+        }
 
-        private val BP_TOOL_CHOICE = AnthropicToolChoice(
-            type = "tool",
-            name = TOOL_NAME,
-        )
-
-        private const val GLUCOSE_TOOL_NAME = "glucose_reading"
-
-        private val GLUCOSE_TOOL = AnthropicToolDefinition(
-            name = GLUCOSE_TOOL_NAME,
-            description = "Extract a glucose reading from a glucometer display image.",
-            inputSchema = buildJsonObject {
-                put("type", "object")
-                putJsonObject("properties") {
-                    putJsonObject("value") {
-                        put("type", "number")
-                        put("description", "The numeric glucose value shown on the display")
-                    }
-                    putJsonObject("unit") {
-                        put("type", "string")
-                        putJsonArray("enum") {
-                            add(JsonPrimitive("mmol/L"))
-                            add(JsonPrimitive("mg/dL"))
-                        }
-                        put("description", "The unit of measurement: mmol/L or mg/dL")
-                    }
-                    putJsonObject("error") {
-                        put("type", "string")
-                        put("description", "Error message if the reading cannot be determined")
-                    }
-                }
-                putJsonArray("required") {
-                    add(JsonPrimitive("value"))
-                    add(JsonPrimitive("unit"))
-                }
-            },
-        )
-
-        private val GLUCOSE_TOOL_CHOICE = AnthropicToolChoice(
-            type = "tool",
-            name = GLUCOSE_TOOL_NAME,
-        )
+        private fun JsonObjectBuilder.requireAll(vararg names: String) {
+            putJsonArray("required") { names.forEach { add(JsonPrimitive(it)) } }
+            put("additionalProperties", false)
+        }
     }
 
     suspend fun parseBloodPressureImage(
         apiKey: String,
         imageBytes: ByteArray,
     ): BloodPressureParseResult {
-        val outcome = callTool(
+        val outcome = callModel(
             apiKey = apiKey,
             imageBytes = imageBytes,
-            tool = BP_TOOL,
-            toolChoice = BP_TOOL_CHOICE,
-            prompt = "Extract the blood pressure reading from this monitor display. " +
-                "The systolic value is the larger/topmost number. " +
-                "The diastolic value is the middle number. " +
-                "The pulse/heart rate is the third value, after the other two; omit it if not shown.",
-            system = null,
+            system = BP_SYSTEM,
+            prompt = "Read the blood pressure result on this monitor.",
+            schema = BP_SCHEMA,
             tag = "parseBloodPressureImage",
         )
         return when (outcome) {
-            is ToolCallOutcome.Failure -> BloodPressureParseResult.Error(outcome.message, outcome.kind)
-            is ToolCallOutcome.Success -> parseToolInput(outcome.input)
+            is ModelCallOutcome.Failure -> BloodPressureParseResult.Error(outcome.message, outcome.kind)
+            is ModelCallOutcome.Success -> parseBloodPressureAnswer(outcome.answer)
         }
     }
 
-    private fun parseToolInput(input: JsonObject): BloodPressureParseResult {
-        val errorField = (input["error"] as? JsonPrimitive)?.contentOrNull
-        if (!errorField.isNullOrBlank()) {
-            Timber.d("parseBloodPressureImage: model returned error: %s", errorField)
-            return BloodPressureParseResult.Error("Unable to read blood pressure display")
+    private fun parseBloodPressureAnswer(answer: JsonObject): BloodPressureParseResult {
+        if (answer.boolean("readable") == false) {
+            // The problem text can quote digits off the display, so it stays at DEBUG.
+            val problem = answer.userDetail()
+            Timber.d("parseBloodPressureImage: unreadable: %s", problem)
+            return BloodPressureParseResult.Error("Unable to read blood pressure display", detail = problem)
         }
 
-        val systolic = (input["systolic"] as? JsonPrimitive)?.intOrNull
-        val diastolic = (input["diastolic"] as? JsonPrimitive)?.intOrNull
+        val systolic = answer.int("systolic")
+        val diastolic = answer.int("diastolic")
 
         if (systolic == null || diastolic == null) {
             Timber.w("parseBloodPressureImage: missing systolic or diastolic in response")
@@ -202,13 +255,13 @@ class AnthropicApiClient @Inject constructor(
         return BloodPressureParseResult.Success(
             systolic = systolic,
             diastolic = diastolic,
-            heartRate = parseHeartRate(input),
+            heartRate = parseHeartRate(answer),
         )
     }
 
     /** Pulse is optional: a missing or implausible value is dropped instead of failing the scan. */
-    private fun parseHeartRate(input: JsonObject): Int? {
-        val heartRate = (input["heart_rate"] as? JsonPrimitive)?.intOrNull ?: return null
+    private fun parseHeartRate(answer: JsonObject): Int? {
+        val heartRate = answer.int("pulse") ?: return null
         if (heartRate !in HEART_RATE_RANGE) {
             Timber.d("parseBloodPressureImage: heart rate %d out of range, ignoring", heartRate)
             Timber.w("parseBloodPressureImage: heart rate out of range, ignoring")
@@ -221,38 +274,41 @@ class AnthropicApiClient @Inject constructor(
         apiKey: String,
         imageBytes: ByteArray,
     ): GlucoseParseResult {
-        val outcome = callTool(
+        val outcome = callModel(
             apiKey = apiKey,
             imageBytes = imageBytes,
-            tool = GLUCOSE_TOOL,
-            toolChoice = GLUCOSE_TOOL_CHOICE,
-            prompt = "Extract the glucose reading from this glucometer display.",
-            system = "Extract the glucose reading from this glucometer display. " +
-                "Return the numeric value shown and the unit displayed (mmol/L or mg/dL). " +
-                "If the unit is not visible, infer from the numeric range: " +
-                "values above 30 are likely mg/dL, below 30 are likely mmol/L.",
+            system = GLUCOSE_SYSTEM,
+            prompt = "Read the glucose result on this meter.",
+            schema = GLUCOSE_SCHEMA,
             tag = "parseGlucoseImage",
         )
         return when (outcome) {
-            is ToolCallOutcome.Failure -> GlucoseParseResult.Error(outcome.message, outcome.kind)
-            is ToolCallOutcome.Success -> parseGlucoseToolInput(outcome.input)
+            is ModelCallOutcome.Failure -> GlucoseParseResult.Error(outcome.message, outcome.kind)
+            is ModelCallOutcome.Success -> parseGlucoseAnswer(outcome.answer)
         }
     }
 
-    private fun parseGlucoseToolInput(input: JsonObject): GlucoseParseResult {
-        val errorField = (input["error"] as? JsonPrimitive)?.contentOrNull
-        if (!errorField.isNullOrBlank()) {
-            Timber.d("parseGlucoseImage: model returned error: %s", errorField)
-            return GlucoseParseResult.Error("Unable to read glucose display")
+    private fun parseGlucoseAnswer(answer: JsonObject): GlucoseParseResult {
+        if (answer.boolean("readable") == false) {
+            // The problem text can quote digits off the display, so it stays at DEBUG.
+            val problem = answer.userDetail()
+            Timber.d("parseGlucoseImage: unreadable: %s", problem)
+            return GlucoseParseResult.Error("Unable to read glucose display", detail = problem)
         }
 
-        val value = (input["value"] as? JsonPrimitive)?.doubleOrNull
-        val unitStr = (input["unit"] as? JsonPrimitive)?.contentOrNull
-
-        if (value == null || unitStr.isNullOrBlank()) {
-            Timber.w("parseGlucoseImage: missing value or unit in response")
+        // The reading comes back as displayed text so the decimal point survives: 12.0 mmol/L and
+        // 12 would be the same JSON number, and the dot is what tells the two units apart.
+        val reading = answer.string("reading")?.trim()?.replace(',', '.')
+        if (reading.isNullOrEmpty()) {
+            Timber.w("parseGlucoseImage: missing reading in response")
             return GlucoseParseResult.Error("Missing glucose values in response")
         }
+        if (!GLUCOSE_READING_PATTERN.matches(reading)) {
+            Timber.d("parseGlucoseImage: reading %s is not a number", reading)
+            Timber.w("parseGlucoseImage: reading is not a number")
+            return GlucoseParseResult.Error("Unrecognized glucose reading")
+        }
+        val value = reading.toDouble()
 
         if (value <= 0) {
             Timber.d("parseGlucoseImage: value %f is not positive", value)
@@ -260,9 +316,12 @@ class AnthropicApiClient @Inject constructor(
             return GlucoseParseResult.Error("Glucose value must be positive")
         }
 
-        val detectedUnit = when (unitStr.trim().lowercase().replace(" ", "")) {
+        val unitStr = answer.string("unit")
+        val detectedUnit = when (unitStr?.trim()?.lowercase()?.replace(" ", "")) {
             "mmol/l" -> GlucoseUnit.MMOL_L
             "mg/dl" -> GlucoseUnit.MG_DL
+            // No unit label on screen: mmol/L results carry a decimal place, mg/dL results don't.
+            null -> if ('.' in reading) GlucoseUnit.MMOL_L else GlucoseUnit.MG_DL
             else -> {
                 Timber.w("parseGlucoseImage: unrecognized unit: %s", unitStr)
                 return GlucoseParseResult.Error("Unrecognized glucose unit: $unitStr")
@@ -284,16 +343,16 @@ class AnthropicApiClient @Inject constructor(
         return GlucoseParseResult.Success(value = value, detectedUnit = detectedUnit)
     }
 
-    private sealed interface ToolCallOutcome {
-        data class Success(val input: JsonObject) : ToolCallOutcome
+    private sealed interface ModelCallOutcome {
+        data class Success(val answer: JsonObject) : ModelCallOutcome
         data class Failure(
             val message: String,
             val kind: ImageParseErrorKind = ImageParseErrorKind.UNREADABLE,
-        ) : ToolCallOutcome
+        ) : ModelCallOutcome
     }
 
     private sealed interface AttemptOutcome {
-        data class Done(val outcome: ToolCallOutcome) : AttemptOutcome
+        data class Done(val outcome: ModelCallOutcome) : AttemptOutcome
         data class Retryable(
             val message: String,
             val kind: ImageParseErrorKind,
@@ -302,20 +361,20 @@ class AnthropicApiClient @Inject constructor(
     }
 
     /**
-     * Sends a forced tool-use request with the image and returns the tool input. Transient failures
+     * Sends the image and returns the model's answer, a JSON object that structured outputs guarantee
+     * matches [schema]; the model reasons about the display before it answers. Transient failures
      * (429/5xx/529 and network errors) are retried a small, bounded number of times, since the user
      * is waiting and every attempt re-uploads the image. Retries live here rather than on the shared
      * HttpClient so they do not stack with FoodScanner's own retry logic.
      */
-    private suspend fun callTool(
+    private suspend fun callModel(
         apiKey: String,
         imageBytes: ByteArray,
-        tool: AnthropicToolDefinition,
-        toolChoice: AnthropicToolChoice,
+        system: String,
         prompt: String,
-        system: String?,
+        schema: JsonObject,
         tag: String,
-    ): ToolCallOutcome {
+    ): ModelCallOutcome {
         val request = AnthropicMessageRequest(
             model = MODEL,
             maxTokens = MAX_TOKENS,
@@ -338,8 +397,11 @@ class AnthropicApiClient @Inject constructor(
                     ),
                 ),
             ),
-            tools = listOf(tool),
-            toolChoice = toolChoice,
+            outputConfig = AnthropicOutputConfig(
+                effort = EFFORT,
+                format = AnthropicOutputFormat(type = "json_schema", schema = schema),
+            ),
+            fallbacks = FALLBACKS,
         )
         val trimmedKey = apiKey.trim()
 
@@ -348,7 +410,7 @@ class AnthropicApiClient @Inject constructor(
             when (val result = attemptCall(trimmedKey, request, tag)) {
                 is AttemptOutcome.Done -> return result.outcome
                 is AttemptOutcome.Retryable -> {
-                    if (attempt >= MAX_RETRIES) return ToolCallOutcome.Failure(result.message, result.kind)
+                    if (attempt >= MAX_RETRIES) return ModelCallOutcome.Failure(result.message, result.kind)
                     val delayMs = retryDelayMs(attempt, result.retryAfterMs)
                     Timber.w("%s: attempt %d failed, retrying after %dms", tag, attempt + 1, delayMs)
                     delay(delayMs)
@@ -368,7 +430,12 @@ class AnthropicApiClient @Inject constructor(
             val response = httpClient.post(API_URL) {
                 header("x-api-key", apiKey)
                 header("anthropic-version", API_VERSION)
+                header("anthropic-beta", FALLBACK_BETA)
                 contentType(ContentType.Application.Json)
+                timeout {
+                    requestTimeoutMillis = REQUEST_TIMEOUT_MS
+                    socketTimeoutMillis = REQUEST_TIMEOUT_MS
+                }
                 setBody(request)
             }
             val elapsed = System.currentTimeMillis() - startTime
@@ -399,25 +466,40 @@ class AnthropicApiClient @Inject constructor(
                         parseRetryAfterMs(response.headers["retry-after"]),
                     )
                 } else {
-                    AttemptOutcome.Done(ToolCallOutcome.Failure(message, httpStatusErrorKind(status)))
+                    AttemptOutcome.Done(ModelCallOutcome.Failure(message, httpStatusErrorKind(status)))
                 }
             }
 
             val messageResponse: AnthropicMessageResponse = response.body()
-            val toolUseBlock = messageResponse.content
-                .firstOrNull { it.type == "tool_use" }
-                ?: return AttemptOutcome.Done(ToolCallOutcome.Failure("No tool_use content in response"))
+            when (messageResponse.stopReason) {
+                "refusal" -> {
+                    Timber.w("%s: model declined the request", tag)
+                    return AttemptOutcome.Done(ModelCallOutcome.Failure("Model declined to read the image"))
+                }
+                "max_tokens" -> {
+                    Timber.w("%s: response cut off at max_tokens", tag)
+                    return AttemptOutcome.Done(
+                        ModelCallOutcome.Failure("Response was cut off", ImageParseErrorKind.UNKNOWN),
+                    )
+                }
+            }
 
-            val input = toolUseBlock.input
-                ?: return AttemptOutcome.Done(ToolCallOutcome.Failure("No input in tool_use response"))
+            // The answer is the last text block; thinking blocks come before it.
+            val answerText = messageResponse.content.lastOrNull { it.type == "text" }?.text
+                ?: return AttemptOutcome.Done(ModelCallOutcome.Failure("No text content in response"))
 
-            AttemptOutcome.Done(ToolCallOutcome.Success(input))
+            val answer = Json.parseToJsonElement(answerText) as? JsonObject
+                ?: return AttemptOutcome.Done(
+                    ModelCallOutcome.Failure("Failed to parse response", ImageParseErrorKind.SERVER),
+                )
+
+            AttemptOutcome.Done(ModelCallOutcome.Success(answer))
         } catch (e: CancellationException) {
             throw e
         } catch (@Suppress("SwallowedException") e: SecurityException) {
             Timber.e(e, "%s security exception", tag)
             AttemptOutcome.Done(
-                ToolCallOutcome.Failure(
+                ModelCallOutcome.Failure(
                     "Network access denied. Please check app permissions.",
                     ImageParseErrorKind.NETWORK,
                 ),
@@ -429,13 +511,13 @@ class AnthropicApiClient @Inject constructor(
                     // extracted health values), so only the exception type reaches Sentry.
                     Timber.d(e, "%s parse error detail", tag)
                     Timber.e("%s parse error (%s)", tag, e::class.simpleName)
-                    AttemptOutcome.Done(ToolCallOutcome.Failure("Failed to parse response", ImageParseErrorKind.SERVER))
+                    AttemptOutcome.Done(ModelCallOutcome.Failure("Failed to parse response", ImageParseErrorKind.SERVER))
                 }
                 ApiErrors.isNetworkError(e) && ApiErrors.isTimeout(e) -> {
                     // A timeout already cost the user up to the full request timeout; retrying
                     // (and re-uploading the image) would multiply that wait.
                     Timber.w(e, "%s timed out", tag)
-                    AttemptOutcome.Done(ToolCallOutcome.Failure("Request timed out", ImageParseErrorKind.NETWORK))
+                    AttemptOutcome.Done(ModelCallOutcome.Failure("Request timed out", ImageParseErrorKind.NETWORK))
                 }
                 ApiErrors.isNetworkError(e) -> {
                     Timber.w(e, "%s network error", tag)
@@ -447,7 +529,7 @@ class AnthropicApiClient @Inject constructor(
                 }
                 else -> {
                     Timber.e(e, "%s error", tag)
-                    AttemptOutcome.Done(ToolCallOutcome.Failure("Failed to analyze image", ImageParseErrorKind.UNKNOWN))
+                    AttemptOutcome.Done(ModelCallOutcome.Failure("Failed to analyze image", ImageParseErrorKind.UNKNOWN))
                 }
             }
         }
@@ -477,3 +559,18 @@ private fun httpStatusErrorKind(status: Int): ImageParseErrorKind = when {
     status >= 500 -> ImageParseErrorKind.SERVER
     else -> ImageParseErrorKind.UNKNOWN
 }
+
+private fun JsonObject.boolean(name: String): Boolean? = (this[name] as? JsonPrimitive)?.booleanOrNull
+
+private fun JsonObject.int(name: String): Int? = (this[name] as? JsonPrimitive)?.intOrNull
+
+/** String value of [name], or null for a missing property or a JSON null. */
+private fun JsonObject.string(name: String): String? =
+    (this[name] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+
+/** Longest model explanation shown to the user. */
+private const val MAX_DETAIL_CHARS = 300
+
+/** The model's explanation for the user, trimmed and capped; null when it gave none. */
+private fun JsonObject.userDetail(): String? =
+    string("problem")?.trim()?.takeIf { it.isNotEmpty() }?.take(MAX_DETAIL_CHARS)

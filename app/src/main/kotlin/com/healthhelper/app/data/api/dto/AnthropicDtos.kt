@@ -10,21 +10,21 @@ data class AnthropicMessageRequest(
     @SerialName("max_tokens") val maxTokens: Int,
     val system: String? = null,
     val messages: List<AnthropicMessage>,
-    val tools: List<AnthropicToolDefinition>? = null,
-    @SerialName("tool_choice") val toolChoice: AnthropicToolChoice? = null,
+    @SerialName("output_config") val outputConfig: AnthropicOutputConfig? = null,
+    val fallbacks: String? = null,
 )
 
 @Serializable
-data class AnthropicToolDefinition(
-    val name: String,
-    val description: String,
-    @SerialName("input_schema") val inputSchema: JsonObject,
+data class AnthropicOutputConfig(
+    val effort: String? = null,
+    val format: AnthropicOutputFormat? = null,
 )
 
+/** Structured output: the final text block is JSON that validates against [schema]. */
 @Serializable
-data class AnthropicToolChoice(
+data class AnthropicOutputFormat(
     val type: String,
-    val name: String? = null,
+    val schema: JsonObject,
 )
 
 @Serializable
@@ -51,13 +51,11 @@ data class AnthropicImageSource(
 data class AnthropicMessageResponse(
     val id: String = "",
     val content: List<AnthropicResponseContent> = emptyList(),
+    @SerialName("stop_reason") val stopReason: String? = null,
 )
 
 @Serializable
 data class AnthropicResponseContent(
     val type: String = "",
     val text: String? = null,
-    val id: String? = null,
-    val name: String? = null,
-    val input: JsonObject? = null,
 )

@@ -20,6 +20,8 @@ import javax.net.ssl.SSLHandshakeException
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -39,58 +41,64 @@ class AnthropicApiClientTest {
     private fun createClient(mockEngine: MockEngine): AnthropicApiClient {
         val httpClient = HttpClient(mockEngine) {
             install(ContentNegotiation) {
-                json(Json { ignoreUnknownKeys = true })
+                // Same settings as AppModule, so request bodies match what production sends.
+                json(Json {
+                    ignoreUnknownKeys = true
+                    encodeDefaults = true
+                    explicitNulls = false
+                })
             }
         }
         return AnthropicApiClient(httpClient)
     }
 
-    private fun successResponse(systolic: Int, diastolic: Int): String = """
+    /** A message whose structured-output answer is [answerJson], after a thinking block as the API returns it. */
+    private fun answerResponse(answerJson: String, stopReason: String = "end_turn"): String = """
         {
             "id": "msg_test",
             "type": "message",
             "role": "assistant",
             "content": [
-                {
-                    "type": "tool_use",
-                    "id": "toolu_test",
-                    "name": "blood_pressure_reading",
-                    "input": {"systolic": $systolic, "diastolic": $diastolic}
-                }
+                {"type": "thinking", "thinking": "", "signature": "sig"},
+                {"type": "text", "text": ${JsonPrimitive(answerJson)}}
             ],
-            "model": "claude-haiku-4-5-20251001",
-            "stop_reason": "tool_use",
+            "model": "claude-opus-5-5",
+            "stop_reason": "$stopReason",
             "usage": {"input_tokens": 100, "output_tokens": 20}
         }
     """.trimIndent()
 
-    private fun successResponseWithHeartRate(systolic: Int, diastolic: Int, heartRate: Int): String =
-        successResponse(systolic, diastolic).replace(
-            "\"diastolic\": $diastolic}",
-            "\"diastolic\": $diastolic, \"heart_rate\": $heartRate}",
-        )
+    private fun successResponse(systolic: Int, diastolic: Int, pulse: Int? = null): String = answerResponse(
+        """{"readable":true,"systolic":$systolic,"diastolic":$diastolic,"pulse":$pulse,"problem":null}""",
+    )
 
-    private fun errorResponse(reason: String): String = """
-        {
-            "id": "msg_test",
-            "type": "message",
-            "role": "assistant",
-            "content": [
-                {
-                    "type": "tool_use",
-                    "id": "toolu_test",
-                    "name": "blood_pressure_reading",
-                    "input": {"systolic": 0, "diastolic": 0, "error": "$reason"}
-                }
-            ],
-            "model": "claude-haiku-4-5-20251001",
-            "stop_reason": "tool_use",
-            "usage": {"input_tokens": 100, "output_tokens": 10}
+    private fun successResponseWithHeartRate(systolic: Int, diastolic: Int, heartRate: Int): String =
+        successResponse(systolic, diastolic, pulse = heartRate)
+
+    private fun errorResponse(reason: String): String = answerResponse(
+        """{"readable":false,"systolic":null,"diastolic":null,"pulse":null,"problem":"$reason"}""",
+    )
+
+    private suspend fun captureRequest(
+        responseBody: String,
+        parse: suspend (AnthropicApiClient) -> Unit,
+    ): CapturedRequest {
+        var captured: CapturedRequest? = null
+        val engine = MockEngine { request ->
+            captured = CapturedRequest(
+                body = Json.parseToJsonElement((request.body as io.ktor.http.content.TextContent).text).jsonObject,
+                betaHeader = request.headers["anthropic-beta"],
+            )
+            respond(content = responseBody, headers = jsonHeaders)
         }
-    """.trimIndent()
+        parse(createClient(engine))
+        return captured!!
+    }
+
+    private data class CapturedRequest(val body: JsonObject, val betaHeader: String?)
 
     @Test
-    @DisplayName("returns Success with systolic and diastolic when Haiku responds with valid tool_use")
+    @DisplayName("returns Success with systolic and diastolic when the model answers with a valid reading")
     fun returnsSuccessOnValidResponse() = runTest {
         val engine = MockEngine { respond(content = successResponse(120, 80), headers = jsonHeaders) }
         val client = createClient(engine)
@@ -103,7 +111,7 @@ class AnthropicApiClientTest {
     }
 
     @Test
-    @DisplayName("returns Error when Haiku indicates unreadable display via tool_use error field")
+    @DisplayName("returns Error when the model reports the display as unreadable")
     fun returnsErrorOnUnreadableDisplay() = runTest {
         val engine = MockEngine { respond(content = errorResponse("unreadable display"), headers = jsonHeaders) }
         val client = createClient(engine)
@@ -169,11 +177,11 @@ class AnthropicApiClientTest {
     }
 
     @Test
-    @DisplayName("returns Error when no tool_use content in response")
-    fun returnsErrorWhenToolUseContentMissing() = runTest {
+    @DisplayName("returns Error when the response has no text answer")
+    fun returnsErrorWhenTextAnswerMissing() = runTest {
         val engine = MockEngine {
             respond(
-                content = """{"id":"msg","content":[{"type":"text","text":"I cannot read this"}]}""",
+                content = """{"id":"msg","content":[{"type":"thinking","thinking":"","signature":"s"}]}""",
                 headers = jsonHeaders,
             )
         }
@@ -182,6 +190,68 @@ class AnthropicApiClientTest {
         val result = client.parseBloodPressureImage(testApiKey, testImageBytes)
 
         assertIs<BloodPressureParseResult.Error>(result)
+        assertEquals("No text content in response", result.message)
+    }
+
+    @Test
+    @DisplayName("an answer that is not JSON maps to 'Failed to parse response'")
+    fun nonJsonAnswerIsParseError() = runTest {
+        val engine = MockEngine { respond(content = answerResponse("I cannot read this"), headers = jsonHeaders) }
+
+        val result = createClient(engine).parseBloodPressureImage(testApiKey, testImageBytes)
+
+        assertIs<BloodPressureParseResult.Error>(result)
+        assertEquals("Failed to parse response", result.message)
+    }
+
+    @Test
+    @DisplayName("a refusal is an UNREADABLE error and is not retried")
+    fun refusalIsUnreadableAndNotRetried() = runTest {
+        var calls = 0
+        val engine = MockEngine {
+            calls++
+            respond(
+                content = """{"id":"msg","content":[],"stop_reason":"refusal"}""",
+                headers = jsonHeaders,
+            )
+        }
+
+        val result = createClient(engine).parseGlucoseImage(testApiKey, testImageBytes)
+
+        assertIs<GlucoseParseResult.Error>(result)
+        assertEquals(ImageParseErrorKind.UNREADABLE, result.kind)
+        assertEquals(1, calls)
+    }
+
+    @Test
+    @DisplayName("an answer cut off at max_tokens is an UNKNOWN error")
+    fun maxTokensIsUnknownError() = runTest {
+        val engine = MockEngine {
+            respond(content = answerResponse("""{"readable":tr""", stopReason = "max_tokens"), headers = jsonHeaders)
+        }
+
+        val result = createClient(engine).parseBloodPressureImage(testApiKey, testImageBytes)
+
+        assertIs<BloodPressureParseResult.Error>(result)
+        assertEquals(ImageParseErrorKind.UNKNOWN, result.kind)
+    }
+
+    @Test
+    @DisplayName("readable answer without systolic or diastolic reports missing values")
+    fun readableAnswerWithMissingValues() = runTest {
+        val engine = MockEngine {
+            respond(
+                content = answerResponse(
+                    """{"readable":true,"systolic":null,"diastolic":80,"pulse":null,"problem":null}""",
+                ),
+                headers = jsonHeaders,
+            )
+        }
+
+        val result = createClient(engine).parseBloodPressureImage(testApiKey, testImageBytes)
+
+        assertIs<BloodPressureParseResult.Error>(result)
+        assertEquals("Missing blood pressure values in response", result.message)
     }
 
     @Test
@@ -319,78 +389,49 @@ class AnthropicApiClientTest {
     }
 
     @Test
-    @DisplayName("request contains tools array with blood_pressure_reading tool")
-    fun requestContainsToolsArray() = runTest {
-        var capturedBody: String? = null
-        val engine = MockEngine { request ->
-            capturedBody = (request.body as io.ktor.http.content.TextContent).text
-            respond(content = successResponse(120, 80), headers = jsonHeaders)
+    @DisplayName("request asks Claude Opus 5.5 for a structured answer with reasoning effort and fallbacks")
+    fun requestShape() = runTest {
+        val request = captureRequest(successResponse(120, 80)) {
+            it.parseBloodPressureImage(testApiKey, testImageBytes)
         }
-        val client = createClient(engine)
+        val body = request.body
 
-        client.parseBloodPressureImage(testApiKey, testImageBytes)
-
-        val body = capturedBody!!
-        assertTrue(body.contains("\"tools\""))
-        assertTrue(body.contains("\"blood_pressure_reading\""))
+        assertEquals("claude-opus-5-5", body["model"]!!.jsonPrimitive.content)
+        val outputConfig = body["output_config"]!!.jsonObject
+        assertEquals("low", outputConfig["effort"]!!.jsonPrimitive.content)
+        assertEquals("json_schema", outputConfig["format"]!!.jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals("default", body["fallbacks"]!!.jsonPrimitive.content)
+        assertEquals("server-side-fallback-2026-07-01", request.betaHeader)
+        // Forced tool use is rejected by this model, and the old tool-based request must not linger.
+        assertTrue("tools" !in body && "tool_choice" !in body && "thinking" !in body)
+        assertTrue(body["system"]!!.jsonPrimitive.content.contains("SYS"))
     }
 
     @Test
-    @DisplayName("request contains tool_choice forcing blood_pressure_reading")
-    fun requestContainsToolChoice() = runTest {
-        var capturedBody: String? = null
-        val engine = MockEngine { request ->
-            capturedBody = (request.body as io.ktor.http.content.TextContent).text
-            respond(content = successResponse(120, 80), headers = jsonHeaders)
+    @DisplayName("the image comes before the text in the user message")
+    fun imageBeforeText() = runTest {
+        val request = captureRequest(glucoseSuccessResponse("142", "mg/dL")) {
+            it.parseGlucoseImage(testApiKey, testImageBytes)
         }
-        val client = createClient(engine)
+        val content = request.body["messages"]!!.jsonArray[0].jsonObject["content"]!!.jsonArray
 
-        client.parseBloodPressureImage(testApiKey, testImageBytes)
-
-        val body = capturedBody!!
-        assertTrue(body.contains("\"tool_choice\""))
-        assertTrue(body.contains("\"blood_pressure_reading\""))
+        assertEquals("image", content[0].jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals("base64", content[0].jsonObject["source"]!!.jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals("text", content[1].jsonObject["type"]!!.jsonPrimitive.content)
     }
 
     // --- Glucose parsing tests ---
 
-    private fun glucoseSuccessResponse(value: Double, unit: String): String = """
-        {
-            "id": "msg_test",
-            "type": "message",
-            "role": "assistant",
-            "content": [
-                {
-                    "type": "tool_use",
-                    "id": "toolu_test",
-                    "name": "glucose_reading",
-                    "input": {"value": $value, "unit": "$unit"}
-                }
-            ],
-            "model": "claude-haiku-4-5-20251001",
-            "stop_reason": "tool_use",
-            "usage": {"input_tokens": 100, "output_tokens": 20}
-        }
-    """.trimIndent()
+    private fun glucoseSuccessResponse(reading: String, unit: String?): String = answerResponse(
+        """{"readable":true,"reading":"$reading","unit":${unit?.let { "\"$it\"" }},"problem":null}""",
+    )
 
-    private fun glucoseErrorResponse(reason: String): String = """
-        {
-            "id": "msg_test",
-            "type": "message",
-            "role": "assistant",
-            "content": [
-                {
-                    "type": "tool_use",
-                    "id": "toolu_test",
-                    "name": "glucose_reading",
-                    "input": {"value": 0, "unit": "", "error": "$reason"}
-                }
-            ],
-            "model": "claude-haiku-4-5-20251001",
-            "stop_reason": "tool_use",
-            "usage": {"input_tokens": 100, "output_tokens": 10}
-        }
-    """.trimIndent()
+    private fun glucoseSuccessResponse(value: Double, unit: String): String =
+        glucoseSuccessResponse(value.toString(), unit)
+
+    private fun glucoseErrorResponse(reason: String): String = answerResponse(
+        """{"readable":false,"reading":null,"unit":null,"problem":"$reason"}""",
+    )
 
     @Test
     @DisplayName("glucose: returns Success with value and detected unit mmol/L")
@@ -419,7 +460,7 @@ class AnthropicApiClientTest {
     }
 
     @Test
-    @DisplayName("glucose: returns Error when model returns error field")
+    @DisplayName("glucose: returns Error when the model reports the display as unreadable")
     fun glucoseReturnsErrorOnModelError() = runTest {
         val engine = MockEngine { respond(content = glucoseErrorResponse("blurry image"), headers = jsonHeaders) }
         val client = createClient(engine)
@@ -510,27 +551,63 @@ class AnthropicApiClientTest {
         assertTrue(result.message.contains("Network access denied"))
     }
 
-    // --- Tool input helpers ---
-
-    private fun toolUseResponse(toolName: String, inputJson: String): String = """
-        {
-            "id": "msg_test",
-            "type": "message",
-            "role": "assistant",
-            "content": [
-                {"type": "tool_use", "id": "toolu_test", "name": "$toolName", "input": $inputJson}
-            ]
-        }
-    """.trimIndent()
-
-    // --- JSON null in error field ---
+    // --- The model's explanation for an unreadable display ---
 
     @Test
-    @DisplayName("BP: explicit \"error\": null is treated as no error")
-    fun bpErrorNullIsSuccess() = runTest {
+    @DisplayName("an unreadable answer carries the model's explanation as the user-facing detail")
+    fun unreadableAnswerCarriesDetail() = runTest {
+        val bpEngine = MockEngine { respond(content = errorResponse("  Glare hides the middle digit.  "), headers = jsonHeaders) }
+        val glucoseEngine = MockEngine {
+            respond(content = glucoseErrorResponse("The meter shows LO; measure again."), headers = jsonHeaders)
+        }
+
+        val bp = createClient(bpEngine).parseBloodPressureImage(testApiKey, testImageBytes)
+        val glucose = createClient(glucoseEngine).parseGlucoseImage(testApiKey, testImageBytes)
+
+        assertIs<BloodPressureParseResult.Error>(bp)
+        assertEquals("Glare hides the middle digit.", bp.detail)
+        assertEquals("Unable to read blood pressure display", bp.message)
+        assertIs<GlucoseParseResult.Error>(glucose)
+        assertEquals("The meter shows LO; measure again.", glucose.detail)
+    }
+
+    @Test
+    @DisplayName("the explanation is capped, and a blank one is dropped")
+    fun detailIsCappedAndBlankDropped() = runTest {
+        val long = "x".repeat(1000)
+        val longResult = createClient(MockEngine { respond(content = errorResponse(long), headers = jsonHeaders) })
+            .parseBloodPressureImage(testApiKey, testImageBytes)
+        val blankResult = createClient(MockEngine { respond(content = errorResponse("   "), headers = jsonHeaders) })
+            .parseBloodPressureImage(testApiKey, testImageBytes)
+
+        assertIs<BloodPressureParseResult.Error>(longResult)
+        assertEquals(300, longResult.detail!!.length)
+        assertIs<BloodPressureParseResult.Error>(blankResult)
+        assertEquals(null, blankResult.detail)
+    }
+
+    @Test
+    @DisplayName("the explanation never reaches a log at WARN or above")
+    fun detailIsNotLoggedAboveDebug() = runTest {
+        val engine = MockEngine { respond(content = errorResponse("could be 108 or 188"), headers = jsonHeaders) }
+
+        RecordingTree.recording { tree ->
+            createClient(engine).parseBloodPressureImage(testApiKey, testImageBytes)
+            assertTrue(tree.entries.any { it.priority == android.util.Log.DEBUG && "108" in it.message })
+            assertTrue(tree.entries.none { it.priority >= android.util.Log.WARN && "108" in it.message })
+        }
+    }
+
+    // --- Problem notes on readable answers ---
+
+    @Test
+    @DisplayName("BP: a problem note on a readable answer does not fail the scan")
+    fun bpProblemNoteOnReadableAnswer() = runTest {
         val engine = MockEngine {
             respond(
-                content = toolUseResponse("blood_pressure_reading", """{"systolic":120,"diastolic":80,"error":null}"""),
+                content = answerResponse(
+                    """{"readable":true,"systolic":120,"diastolic":80,"pulse":null,"problem":"slight glare"}""",
+                ),
                 headers = jsonHeaders,
             )
         }
@@ -540,27 +617,53 @@ class AnthropicApiClientTest {
         assertEquals(120, result.systolic)
     }
 
+    // --- Glucose reading text and unit inference ---
+
     @Test
-    @DisplayName("glucose: explicit \"error\": null is treated as no error")
-    fun glucoseErrorNullIsSuccess() = runTest {
-        val engine = MockEngine {
-            respond(
-                content = toolUseResponse("glucose_reading", """{"value":5.6,"unit":"mmol/L","error":null}"""),
-                headers = jsonHeaders,
-            )
+    @DisplayName("glucose: without a unit label, a decimal point means mmol/L and a whole number mg/dL")
+    fun glucoseUnitInferredFromDecimalPoint() = runTest {
+        val cases = listOf(
+            "5.6" to (5.6 to GlucoseUnit.MMOL_L),
+            "12.0" to (12.0 to GlucoseUnit.MMOL_L),
+            "142" to (142.0 to GlucoseUnit.MG_DL),
+            "56" to (56.0 to GlucoseUnit.MG_DL),
+        )
+        cases.forEach { (reading, expected) ->
+            val engine = MockEngine { respond(content = glucoseSuccessResponse(reading, null), headers = jsonHeaders) }
+            val result = createClient(engine).parseGlucoseImage(testApiKey, testImageBytes)
+            assertIs<GlucoseParseResult.Success>(result, "reading '$reading'")
+            assertEquals(expected.first, result.value)
+            assertEquals(expected.second, result.detectedUnit)
         }
+    }
+
+    @Test
+    @DisplayName("glucose: a decimal comma is read as a decimal point")
+    fun glucoseDecimalComma() = runTest {
+        val engine = MockEngine { respond(content = glucoseSuccessResponse("5,6", null), headers = jsonHeaders) }
         val result = createClient(engine).parseGlucoseImage(testApiKey, testImageBytes)
 
         assertIs<GlucoseParseResult.Success>(result)
         assertEquals(5.6, result.value)
+        assertEquals(GlucoseUnit.MMOL_L, result.detectedUnit)
     }
 
     @Test
-    @DisplayName("glucose: JSON null unit is reported as missing, not as unit \"null\"")
-    fun glucoseNullUnitIsMissing() = runTest {
+    @DisplayName("glucose: a reading that is not a number is rejected")
+    fun glucoseNonNumericReadingRejected() = runTest {
+        listOf("HI", "1O2", "12.3.4", "-5").forEach { reading ->
+            val engine = MockEngine { respond(content = glucoseSuccessResponse(reading, "mg/dL"), headers = jsonHeaders) }
+            val result = createClient(engine).parseGlucoseImage(testApiKey, testImageBytes)
+            assertIs<GlucoseParseResult.Error>(result, "reading '$reading'")
+        }
+    }
+
+    @Test
+    @DisplayName("glucose: a readable answer with a null reading reports missing values")
+    fun glucoseNullReadingIsMissing() = runTest {
         val engine = MockEngine {
             respond(
-                content = toolUseResponse("glucose_reading", """{"value":5.6,"unit":null}"""),
+                content = answerResponse("""{"readable":true,"reading":null,"unit":"mg/dL","problem":null}"""),
                 headers = jsonHeaders,
             )
         }
@@ -592,17 +695,25 @@ class AnthropicApiClientTest {
     }
 
     @Test
-    @DisplayName("glucose: tool schema constrains unit with an enum")
-    fun glucoseSchemaHasUnitEnum() = runTest {
-        var capturedBody: String? = null
-        val engine = MockEngine { request ->
-            capturedBody = (request.body as io.ktor.http.content.TextContent).text
-            respond(content = glucoseSuccessResponse(5.6, "mmol/L"), headers = jsonHeaders)
+    @DisplayName("glucose: schema asks for the reading as text and constrains the unit with an enum")
+    fun glucoseSchemaShape() = runTest {
+        val request = captureRequest(glucoseSuccessResponse(5.6, "mmol/L")) {
+            it.parseGlucoseImage(testApiKey, testImageBytes)
         }
-        createClient(engine).parseGlucoseImage(testApiKey, testImageBytes)
+        val schema = request.body["output_config"]!!.jsonObject["format"]!!.jsonObject["schema"]!!.jsonObject
+        val properties = schema["properties"]!!.jsonObject
 
-        assertTrue(capturedBody!!.contains("\"enum\":[\"mmol/L\",\"mg/dL\"]"))
+        assertEquals(
+            "string",
+            properties["reading"]!!.jsonObject["anyOf"]!!.jsonArray[0].jsonObject["type"]!!.jsonPrimitive.content,
+        )
+        assertTrue(properties["unit"].toString().contains("\"enum\":[\"mg/dL\",\"mmol/L\"]"))
+        assertEquals(setOf("readable", "reading", "unit", "problem"), schema.requiredNames())
+        assertEquals(false, schema["additionalProperties"]!!.jsonPrimitive.content.toBooleanStrict())
     }
+
+    private fun JsonObject.requiredNames(): Set<String> =
+        this["required"]!!.jsonArray.map { it.jsonPrimitive.content }.toSet()
 
     // --- Glucose plausible range ---
 
@@ -837,7 +948,7 @@ class AnthropicApiClientTest {
     // --- heart rate ---
 
     @Test
-    @DisplayName("heart_rate from the tool input is returned with the reading")
+    @DisplayName("pulse from the answer is returned as the heart rate")
     fun returnsHeartRate() = runTest {
         val engine = MockEngine { respond(content = successResponseWithHeartRate(120, 80, 72), headers = jsonHeaders) }
 
@@ -848,7 +959,7 @@ class AnthropicApiClientTest {
     }
 
     @Test
-    @DisplayName("missing heart_rate yields a null heart rate")
+    @DisplayName("null pulse yields a null heart rate")
     fun missingHeartRateIsNull() = runTest {
         val engine = MockEngine { respond(content = successResponse(120, 80), headers = jsonHeaders) }
 
@@ -859,7 +970,7 @@ class AnthropicApiClientTest {
     }
 
     @Test
-    @DisplayName("implausible heart_rate is dropped without failing the scan")
+    @DisplayName("implausible pulse is dropped without failing the scan")
     fun implausibleHeartRateDropped() = runTest {
         val engine = MockEngine { respond(content = successResponseWithHeartRate(120, 80, 400), headers = jsonHeaders) }
 
@@ -871,19 +982,17 @@ class AnthropicApiClientTest {
     }
 
     @Test
-    @DisplayName("BP tool schema asks for the optional heart_rate")
-    fun toolSchemaIncludesHeartRate() = runTest {
-        var capturedBody: String? = null
-        val engine = MockEngine { request ->
-            capturedBody = (request.body as io.ktor.http.content.TextContent).text
-            respond(content = successResponse(120, 80), headers = jsonHeaders)
+    @DisplayName("BP schema asks for a nullable pulse and pins every property")
+    fun bpSchemaShape() = runTest {
+        val request = captureRequest(successResponse(120, 80)) {
+            it.parseBloodPressureImage(testApiKey, testImageBytes)
         }
+        val schema = request.body["output_config"]!!.jsonObject["format"]!!.jsonObject["schema"]!!.jsonObject
+        val pulseTypes = schema["properties"]!!.jsonObject["pulse"]!!.jsonObject["anyOf"]!!.jsonArray
+            .map { it.jsonObject["type"]!!.jsonPrimitive.content }
 
-        createClient(engine).parseBloodPressureImage(testApiKey, testImageBytes)
-
-        val tool = Json.parseToJsonElement(capturedBody!!).jsonObject["tools"]!!.jsonArray[0].jsonObject
-        val schema = tool["input_schema"]!!.jsonObject
-        assertTrue("heart_rate" in schema["properties"]!!.jsonObject)
-        assertTrue(schema["required"]!!.jsonArray.none { it.jsonPrimitive.content == "heart_rate" })
+        assertEquals(listOf("integer", "null"), pulseTypes)
+        assertEquals(setOf("readable", "systolic", "diastolic", "pulse", "problem"), schema.requiredNames())
+        assertEquals(false, schema["additionalProperties"]!!.jsonPrimitive.content.toBooleanStrict())
     }
 }

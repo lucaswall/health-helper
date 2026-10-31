@@ -45,7 +45,8 @@ class ReadingImageScanner @Inject constructor(
                     ScanOutcome.Failure(
                         imageParseErrorMessage(
                             result.kind,
-                            "Could not read blood pressure from the photo. Try again or enter it manually.",
+                            result.detail
+                                ?: "Could not read blood pressure from the photo. Try again or enter it manually.",
                         ),
                     )
                 }
@@ -61,7 +62,7 @@ class ReadingImageScanner @Inject constructor(
                     ScanOutcome.Failure(
                         imageParseErrorMessage(
                             result.kind,
-                            "Could not read glucose from the photo. Try again or enter it manually.",
+                            result.detail ?: "Could not read glucose from the photo. Try again or enter it manually.",
                         ),
                     )
                 }

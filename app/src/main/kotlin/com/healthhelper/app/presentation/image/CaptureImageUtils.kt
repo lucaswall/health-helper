@@ -4,12 +4,23 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
+import kotlin.math.ceil
+import kotlin.math.sqrt
 
 /** Maximum size of a captured or shared image accepted by the capture flows. */
 const val MAX_IMAGE_BYTES: Int = 20 * 1024 * 1024 // 20MB
 
-/** Long-edge size the image is scaled to before being sent to the Anthropic API. */
-const val API_MAX_IMAGE_DIMENSION: Int = 1568
+/**
+ * Vision limits of the model reading the displays (high-resolution tier, Claude 4.7 and later). The API
+ * downscales any image whose long edge exceeds [API_MAX_IMAGE_DIMENSION] or that needs more than
+ * [API_MAX_VISUAL_TOKENS] 28×28 px patches, so images are fitted to both here instead.
+ */
+const val API_MAX_IMAGE_DIMENSION: Int = 2576
+const val API_MAX_VISUAL_TOKENS: Int = 4784
+private const val VISUAL_TOKEN_PATCH_PX = 28
+
+/** JPEG quality for API images; heavier compression blurs the thin segments of LCD digits. */
+const val API_JPEG_QUALITY: Int = 92
 
 /** Cache sub-directory MainActivity copies share-intent images into. */
 const val SHARED_IMAGES_DIR: String = "shared_images"
@@ -62,6 +73,41 @@ fun computeInSampleSize(width: Int, height: Int, maxDimension: Int): Int {
     }
     return sample
 }
+
+/** Visual tokens the API counts for an image: one per started 28×28 px patch. */
+fun visualTokens(width: Int, height: Int): Int =
+    ceilDiv(width, VISUAL_TOKEN_PATCH_PX) * ceilDiv(height, VISUAL_TOKEN_PATCH_PX)
+
+/**
+ * Largest scale factor (at most 1) at which a [width]×[height] image fits within [maxDimension] on the
+ * long edge and [maxVisualTokens], measured on the [scaledDimension] size.
+ */
+fun fitScale(
+    width: Int,
+    height: Int,
+    maxDimension: Int = API_MAX_IMAGE_DIMENSION,
+    maxVisualTokens: Int = API_MAX_VISUAL_TOKENS,
+): Float {
+    if (width <= 0 || height <= 0) return 1f
+    val patchArea = (VISUAL_TOKEN_PATCH_PX * VISUAL_TOKEN_PATCH_PX).toDouble()
+    var scale = minOf(
+        1.0,
+        maxDimension.toDouble() / maxOf(width, height),
+        sqrt(maxVisualTokens * patchArea / (width.toDouble() * height)),
+    ).toFloat()
+    // Patches are counted on whole pixels, so step down until the scaled size fits both limits.
+    while (true) {
+        val w = scaledDimension(width, scale)
+        val h = scaledDimension(height, scale)
+        if (maxOf(w, h) <= maxDimension && visualTokens(w, h) <= maxVisualTokens) return scale
+        scale *= 0.995f
+    }
+}
+
+/** [px] scaled by [scale], rounded up; the small allowance keeps float error from adding a pixel. */
+fun scaledDimension(px: Int, scale: Float): Int = ceil(px * scale.toDouble() - 1e-3).toInt()
+
+private fun ceilDiv(value: Int, divisor: Int): Int = (value + divisor - 1) / divisor
 
 /** Rotation (degrees, clockwise) plus optional horizontal mirror needed to display an image upright. */
 data class ExifTransform(

@@ -37,6 +37,48 @@ class CaptureImageUtilsTest {
     }
 
     @Test
+    fun `visualTokens counts started 28px patches`() {
+        assertEquals(64, visualTokens(200, 200))
+        assertEquals(1296, visualTokens(1000, 1000))
+        assertEquals(2691, visualTokens(1920, 1080))
+        assertEquals(1, visualTokens(1, 1))
+    }
+
+    @Test
+    fun `fitScale keeps images that already fit at full size`() {
+        assertEquals(1f, fitScale(1000, 1000))
+        assertEquals(1f, fitScale(1920, 1080))
+    }
+
+    @Test
+    fun `fitScale fits phone photos within both the long edge and the visual-token limit`() {
+        // 4:3 and 16:9 camera photos, portrait and landscape, including 50 MP sensors.
+        listOf(4032 to 3024, 3024 to 4032, 4000 to 2250, 8160 to 6120, 3840 to 2160).forEach { (w, h) ->
+            val scale = fitScale(w, h)
+            val sw = scaledDimension(w, scale)
+            val sh = scaledDimension(h, scale)
+            assertTrue(maxOf(sw, sh) <= API_MAX_IMAGE_DIMENSION, "$w x $h -> $sw x $sh long edge")
+            assertTrue(visualTokens(sw, sh) <= API_MAX_VISUAL_TOKENS, "$w x $h -> $sw x $sh tokens")
+            // Close to the limit, not needlessly small.
+            assertTrue(visualTokens(sw, sh) > API_MAX_VISUAL_TOKENS * 0.95, "$w x $h -> $sw x $sh too small")
+        }
+    }
+
+    @Test
+    fun `fitScale caps a wide image by its long edge`() {
+        // 4K 16:9 hits the 2576 px long edge before the token limit, as in the API's own table.
+        val scale = fitScale(3840, 2160)
+        assertEquals(2576, scaledDimension(3840, scale))
+        assertEquals(1449, scaledDimension(2160, scale))
+    }
+
+    @Test
+    fun `fitScale handles invalid dimensions`() {
+        assertEquals(1f, fitScale(0, 0))
+        assertEquals(1f, fitScale(-1, 100))
+    }
+
+    @Test
     fun `exifTransformFor maps all EXIF orientations`() {
         assertTrue(exifTransformFor(1).isIdentity)
         assertTrue(exifTransformFor(0).isIdentity)

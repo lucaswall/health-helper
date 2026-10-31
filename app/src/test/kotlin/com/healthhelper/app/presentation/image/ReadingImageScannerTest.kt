@@ -104,6 +104,23 @@ class ReadingImageScannerTest {
     }
 
     @Test
+    fun `unreadable display shows the model's explanation when it gave one`() = runTest(dispatcher) {
+        val detail = "The middle digit could be 0 or 8. Retake the photo straight on, without glare."
+        coEvery { apiClient.parseGlucoseImage(any(), any()) } returns
+            GlucoseParseResult.Error("no reading", ImageParseErrorKind.UNREADABLE, detail = detail)
+
+        assertEquals(ScanOutcome.Failure(detail), scanner.scanGlucose(rawBytes))
+    }
+
+    @Test
+    fun `an explanation never replaces the message for a non-photo failure`() = runTest(dispatcher) {
+        coEvery { apiClient.parseBloodPressureImage(any(), any()) } returns
+            BloodPressureParseResult.Error("Rate limited", ImageParseErrorKind.RATE_LIMITED, detail = "ignored")
+
+        assertEquals(ScanOutcome.Failure("Service busy, try again shortly."), scanner.scanBloodPressure(rawBytes))
+    }
+
+    @Test
     fun `typed API failures map to specific messages`() = runTest(dispatcher) {
         val expected = mapOf(
             ImageParseErrorKind.AUTH to "Anthropic API key rejected — check Settings.",

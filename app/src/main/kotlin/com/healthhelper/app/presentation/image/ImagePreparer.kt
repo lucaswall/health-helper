@@ -11,9 +11,9 @@ import javax.inject.Inject
 
 /**
  * Prepares a captured or shared photo for the Anthropic API: decodes with an inSampleSize so large
- * photos never hit full-resolution allocation, applies the EXIF orientation, scales the long edge
- * down to [API_MAX_IMAGE_DIMENSION] and re-encodes as JPEG. Returns null when the image cannot be
- * processed (including when decoding runs out of memory).
+ * photos never hit full-resolution allocation, applies the EXIF orientation, scales it down to fit the
+ * API's vision limits ([API_MAX_IMAGE_DIMENSION] long edge, [API_MAX_VISUAL_TOKENS]) and re-encodes as
+ * JPEG. Returns null when the image cannot be processed (including when decoding runs out of memory).
  */
 class ImagePreparer @Inject constructor() {
 
@@ -28,8 +28,12 @@ class ImagePreparer @Inject constructor() {
                 return null
             }
 
+            val targetLongEdge = scaledDimension(
+                maxOf(bounds.outWidth, bounds.outHeight),
+                fitScale(bounds.outWidth, bounds.outHeight, maxDimension),
+            )
             val decodeOptions = BitmapFactory.Options().apply {
-                inSampleSize = computeInSampleSize(bounds.outWidth, bounds.outHeight, maxDimension)
+                inSampleSize = computeInSampleSize(bounds.outWidth, bounds.outHeight, targetLongEdge)
             }
             val bitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size, decodeOptions)
             if (bitmap == null) {
@@ -38,8 +42,7 @@ class ImagePreparer @Inject constructor() {
             }
             decoded = bitmap
 
-            val longEdge = maxOf(bitmap.width, bitmap.height)
-            val scale = if (longEdge > maxDimension) maxDimension.toFloat() / longEdge else 1f
+            val scale = fitScale(bitmap.width, bitmap.height, maxDimension)
             val exif = exifTransformFor(readExifOrientation(imageBytes))
 
             val result = if (scale == 1f && exif.isIdentity) {
@@ -55,7 +58,7 @@ class ImagePreparer @Inject constructor() {
             transformed = result
 
             val outputStream = ByteArrayOutputStream()
-            result.compress(Bitmap.CompressFormat.JPEG, 85, outputStream)
+            result.compress(Bitmap.CompressFormat.JPEG, API_JPEG_QUALITY, outputStream)
             outputStream.toByteArray()
         } catch (e: OutOfMemoryError) {
             Timber.w(e, "ImagePreparer: out of memory while processing image")
